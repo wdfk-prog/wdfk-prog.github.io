@@ -1,0 +1,890 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>hdiffpatch | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC] hdiffi.cpphdiffi &amp; hdiffi_in_mem 内存模式下的补丁生成这是 HDiffPatch 工具集中负责制作补丁的核心业务逻辑。hdiffi 是一个上层封装，而 hdiffi_in_mem 实现了将整个文件加载到内存中进行差分的核心流程。 原理与设计思路解析这部分代码的 overarching goal 是协调整个补丁制作过程，它是一个高层次的控制器，调用">
+<meta property="og:type" content="article">
+<meta property="og:title" content="hdiffpatch">
+<meta property="og:url" content="https://wdfk-prog.github.io/posts/fd53b379/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC] hdiffi.cpphdiffi &amp; hdiffi_in_mem 内存模式下的补丁生成这是 HDiffPatch 工具集中负责制作补丁的核心业务逻辑。hdiffi 是一个上层封装，而 hdiffi_in_mem 实现了将整个文件加载到内存中进行差分的核心流程。 原理与设计思路解析这部分代码的 overarching goal 是协调整个补丁制作过程，它是一个高层次的控制器，调用">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.github.io/images/covers/08.jpg">
+<meta property="article:published_time" content="2025-10-03T01:12:19.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:27.765Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="hpatch">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.github.io/images/covers/08.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "hdiffpatch",
+  "url": "https://wdfk-prog.github.io/posts/fd53b379/",
+  "image": "https://wdfk-prog.github.io/images/covers/08.jpg",
+  "datePublished": "2025-10-03T01:12:19.000Z",
+  "dateModified": "2025-10-03T09:23:27.765Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.github.io/posts/fd53b379/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'hdiffpatch',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">394</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">46</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">50</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/08.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">hdiffpatch</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">hdiffpatch<a class="post-edit-link" href="null_posts/hpatch/hdiffpatch.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:12:19.000Z" title="发表于 2025-10-03 09:12:19">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:27.765Z" title="更新于 2025-10-03 17:23:27">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/hpatch/">hpatch</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">9k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>32分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/fd53b379/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:27&quot;}" hidden></div><p>[TOC]</p>
+<h1 id="hdiffi-cpp"><a href="#hdiffi-cpp" class="headerlink" title="hdiffi.cpp"></a>hdiffi.cpp</h1><h2 id="hdiffi-hdiffi-in-mem-内存模式下的补丁生成"><a href="#hdiffi-hdiffi-in-mem-内存模式下的补丁生成" class="headerlink" title="hdiffi &amp; hdiffi_in_mem 内存模式下的补丁生成"></a>hdiffi &amp; hdiffi_in_mem <strong>内存模式下的补丁生成</strong></h2><p>这是 HDiffPatch 工具集中负责<strong>制作补丁</strong>的核心业务逻辑。<code>hdiffi</code> 是一个上层封装，而 <code>hdiffi_in_mem</code> 实现了将整个文件加载到内存中进行差分的核心流程。</p>
+<h3 id="原理与设计思路解析"><a href="#原理与设计思路解析" class="headerlink" title="原理与设计思路解析"></a><strong>原理与设计思路解析</strong></h3><p>这部分代码的 overarching goal 是协调整个补丁制作过程，它是一个高层次的控制器，调用底层的差分算法和压缩库来完成任务。</p>
+<ul>
+<li><p><strong>核心策略：内存模式 (In-Memory)</strong></p>
+<ul>
+<li>函数名 <code>hdiffi_in_mem</code> 明确指出了其核心设计：<strong>将旧文件和新文件完全读入内存</strong>中，然后再进行比较和差分。</li>
+<li><strong>优点：</strong> 差分算法（特别是基于后缀数组的算法）需要对数据进行大量的、非线性的随机访问。在内存中操作可以极大地提升算法的执行速度，避免了缓慢的磁盘I&#x2F;O。</li>
+<li><strong>缺点：</strong> 这种模式的<strong>内存消耗巨大</strong>，它要求系统的可用RAM必须能同时容纳整个旧文件和新文件。因此，它不适用于超出内存容量的超大文件。</li>
+</ul>
+</li>
+<li><p><strong>模块化与可配置性</strong></p>
+<ul>
+<li>代码通过 <code>TDiffiSets</code> 结构体和 <code>compressPlugin</code> 接口，实现了高度的模块化和可配置性。</li>
+<li><strong><code>TDiffiSets</code></strong>: 这个结构体像一个“配置单”，它告诉 <code>hdiffi_in_mem</code> 要执行哪些操作（<code>isDoDiff</code>），是否要生成用于原地更新的补丁（<code>isDiffForInplacePatch</code>），以及差分算法的一些内部参数（<code>matchScore</code>, <code>threadNum</code> 等）。</li>
+<li><strong><code>compressPlugin</code></strong>: 差分过程和压缩过程是<strong>解耦</strong>的。核心算法生成原始的、未压缩的差分数据，然后将这些数据交给 <code>compressPlugin</code> 进行压缩。这种设计使得替换或添加新的压缩算法（如zlib, lzma, zstd）变得非常容易，而无需改动核心差分逻辑。</li>
+</ul>
+</li>
+<li><p><strong>两种差分模式的调用</strong></p>
+<ul>
+<li>函数根据配置 <code>diffSets.isDiffForInplacePatch</code> 来决定调用两个不同的底层差分函数之一：<ol>
+<li><code>create_lite_diff</code>: 生成标准的 <code>lite</code> 格式补丁。</li>
+<li><code>create_inplace_lite_diff</code>: 生成为 In-place（原地更新）模式设计的补丁。这个函数会执行更复杂的分析，计算出安全更新所需的核心参数 <code>extraSafeSize</code> 并将其写入补丁头部。</li>
+</ol>
+</li>
+</ul>
+</li>
+<li><p><strong>健壮性设计：补丁自校验 (<code>isDoPatchCheck</code>)</strong></p>
+<ul>
+<li>这是一个非常出色的健壮性设计。在生成补丁文件后，代码并<strong>不</strong>假定生成的补丁是完美的。</li>
+<li>如果 <code>isDoPatchCheck</code> 为真，程序会立刻<strong>加载刚刚生成的补丁文件</strong>，并<strong>模拟一次打补丁的过程</strong>，将内存中的 <code>oldMem</code> 应用补丁，然后将结果与内存中的 <code>newMem</code> 进行比对。</li>
+<li>这个<strong>自测试</strong>步骤可以立即验证补丁的正确性，极大地增加了可靠性，确保分发出去的补丁文件是有效的。</li>
+</ul>
+</li>
+<li><p><strong>错误处理 (<code>check</code> 宏和 <code>goto clear</code>)</strong></p>
+<ul>
+<li>代码使用了 <code>check(condition, error_code, message)</code> 宏和 <code>goto clear</code> 语句，这是一种在C&#x2F;C++中管理复杂流程和资源清理的经典模式。</li>
+<li>无论在哪一步操作（如读文件、写文件、差分）失败，<code>check</code> 宏都会将 <code>result</code> 设置为相应的错误码，并立即 <code>goto clear</code>。</li>
+<li><code>clear:</code> 标签后的代码块是<strong>唯一的退出路径</strong>，它负责统一执行资源释放操作（比如关闭文件流 <code>hpatch_TFileStreamOutput_close</code>），从而避免了在多个错误分支中重复编写清理代码，保证了资源的正确释放。</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码解析"><a href="#代码解析" class="headerlink" title="代码解析"></a><strong>代码解析</strong></h3><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 在内存中执行差分操作的核心函数。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="type">static</span> <span class="type">int</span> <span class="title">hdiffi_in_mem</span><span class="params">(<span class="type">const</span> <span class="type">char</span>* oldFileName,<span class="type">const</span> <span class="type">char</span>* newFileName,<span class="type">const</span> <span class="type">char</span>* outDiffFileName,</span></span></span><br><span class="line"><span class="params"><span class="function">                         <span class="type">const</span> hdiffi_TCompress* compressPlugin,<span class="type">const</span> TDiffiSets&amp; diffSets)</span></span>&#123;</span><br><span class="line">    <span class="type">double</span> diff_time0=<span class="built_in">clock_s</span>(); <span class="comment">// 开始计时</span></span><br><span class="line">    <span class="type">int</span>    result=HDIFFI_SUCCESS; <span class="comment">// 初始化返回结果为成功</span></span><br><span class="line">    <span class="type">int</span>    _isInClear=hpi_FALSE; <span class="comment">// 用于防止在清理阶段重复关闭文件的标志</span></span><br><span class="line">    hpatch_TFileStreamOutput diffData_out; <span class="comment">// 文件输出流对象</span></span><br><span class="line">    <span class="built_in">hpatch_TFileStreamOutput_init</span>(&amp;diffData_out);</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// TAutoMem 是一个RAII封装，用于自动管理内存，确保在函数退出时内存被释放。</span></span><br><span class="line">    <span class="function">hdiff_private::TAutoMem <span class="title">oldMem</span><span class="params">(<span class="number">0</span>)</span></span>;</span><br><span class="line">    <span class="function">hdiff_private::TAutoMem <span class="title">newMem</span><span class="params">(<span class="number">0</span>)</span></span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// --- 1. 加载文件到内存 ---</span></span><br><span class="line">    <span class="keyword">if</span> (oldFileName&amp;&amp;(<span class="built_in">strlen</span>(oldFileName)&gt;<span class="number">0</span>))</span><br><span class="line">        <span class="comment">// check宏：如果readFileAll失败，则设置result为HDIFFI_OPENREAD_ERROR，打印消息，并goto clear。</span></span><br><span class="line">        <span class="built_in">check</span>(<span class="built_in">readFileAll</span>(oldMem,oldFileName),HDIFFI_OPENREAD_ERROR,<span class="string">&quot;open oldFile&quot;</span>);</span><br><span class="line">    <span class="built_in">check</span>(<span class="built_in">readFileAll</span>(newMem,newFileName),HDIFFI_OPENREAD_ERROR,<span class="string">&quot;open newFile&quot;</span>);</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">&quot;oldDataSize : %&quot;</span> PRIu64 <span class="string">&quot;\nnewDataSize : %&quot;</span> PRIu64 <span class="string">&quot;\n&quot;</span>,</span><br><span class="line">           (hpatch_StreamPos_t)oldMem.<span class="built_in">size</span>(),(hpatch_StreamPos_t)newMem.<span class="built_in">size</span>());</span><br><span class="line"></span><br><span class="line">    <span class="comment">// --- 2. 执行差分 ---</span></span><br><span class="line">    <span class="keyword">if</span> (diffSets.isDoDiff)&#123;</span><br><span class="line">        <span class="keyword">if</span> (diffSets.isDoDiff&amp;&amp;diffSets.isDiffForInplacePatch)&#123;</span><br><span class="line">            <span class="comment">// 如果是为原地更新生成补丁，打印额外信息。</span></span><br><span class="line">            <span class="built_in">printf</span>(<span class="string">&quot;\nhdiffi created outDiffFile is &quot;</span>);</span><br><span class="line">            <span class="keyword">if</span> (<span class="built_in">isInplaceASets</span>(diffSets.inplaceSets))</span><br><span class="line">                <span class="built_in">printf</span>(<span class="string">&quot;inplaceA&quot;</span>);</span><br><span class="line">            <span class="keyword">else</span> <span class="comment">//if (isInplaceBSets(diffSets.inplaceSets))</span></span><br><span class="line">                <span class="built_in">printf</span>(<span class="string">&quot;inplaceB&quot;</span>);</span><br><span class="line">            <span class="built_in">printf</span>(<span class="string">&quot; format for inpalce-patch!\n&quot;</span>);</span><br><span class="line">            <span class="built_in">printf</span>(<span class="string">&quot;  extraSafeSize     : %&quot;</span> PRIu64 <span class="string">&quot;\n&quot;</span>,(hpatch_StreamPos_t)diffSets.inplaceSets.extraSafeSize);</span><br><span class="line">            <span class="built_in">printf</span>(<span class="string">&quot;\n&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        std::vector&lt;hpi_byte&gt; outDiffData; <span class="comment">// 存储生成的补丁数据。</span></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (diffSets.isDiffForInplacePatch)&#123;</span><br><span class="line">                <span class="comment">// 调用 in-place 模式的差分函数。</span></span><br><span class="line">                <span class="built_in">create_inplace_lite_diff</span>(newMem.<span class="built_in">data</span>(),newMem.<span class="built_in">data_end</span>(),oldMem.<span class="built_in">data</span>(),oldMem.<span class="built_in">data_end</span>(),</span><br><span class="line">                                         outDiffData,diffSets.inplaceSets,compressPlugin,(<span class="type">int</span>)diffSets.matchScore,</span><br><span class="line">                                         diffSets.isUseBigCacheMatch?<span class="literal">true</span>:<span class="literal">false</span>,diffSets.threadNum);</span><br><span class="line">            &#125;<span class="keyword">else</span>&#123;</span><br><span class="line">                <span class="comment">// 调用标准 lite 模式的差分函数。</span></span><br><span class="line">                <span class="built_in">create_lite_diff</span>(newMem.<span class="built_in">data</span>(),newMem.<span class="built_in">data_end</span>(),oldMem.<span class="built_in">data</span>(),oldMem.<span class="built_in">data_end</span>(),</span><br><span class="line">                                 outDiffData,compressPlugin,(<span class="type">int</span>)diffSets.matchScore,</span><br><span class="line">                                 diffSets.isUseBigCacheMatch?<span class="literal">true</span>:<span class="literal">false</span>,<span class="number">0</span>,diffSets.threadNum);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;<span class="built_in">catch</span>(<span class="type">const</span> std::exception&amp; e)&#123;</span><br><span class="line">            <span class="comment">// 捕获C++异常，转换为hdiffi的错误处理流程。</span></span><br><span class="line">            <span class="built_in">check</span>(<span class="literal">false</span>,HDIFFI_DIFF_ERROR,<span class="string">&quot;diff run error: &quot;</span>+e.<span class="built_in">what</span>());</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// --- 3. 写入补丁文件 ---</span></span><br><span class="line">        &#123;</span><br><span class="line">            <span class="built_in">check</span>(<span class="built_in">hpatch_TFileStreamOutput_open</span>(&amp;diffData_out,outDiffFileName,outDiffData.<span class="built_in">size</span>()),</span><br><span class="line">                HDIFFI_OPENWRITE_ERROR,<span class="string">&quot;open out diffFile&quot;</span>);</span><br><span class="line">            <span class="built_in">check</span>(diffData_out.base.<span class="built_in">write</span>(&amp;diffData_out.base,<span class="number">0</span>,outDiffData.<span class="built_in">data</span>(),outDiffData.<span class="built_in">data</span>()+outDiffData.<span class="built_in">size</span>()),</span><br><span class="line">                HDIFFI_OPENWRITE_ERROR,<span class="string">&quot;write diffFile&quot;</span>);</span><br><span class="line">            <span class="built_in">check</span>(<span class="built_in">hpatch_TFileStreamOutput_close</span>(&amp;diffData_out),HDIFFI_FILECLOSE_ERROR,<span class="string">&quot;out diffFile close&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;diffDataSize: %&quot;</span> PRIu64 <span class="string">&quot;\n&quot;</span>,(hpatch_StreamPos_t)outDiffData.<span class="built_in">size</span>());</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;hdiffi  time: %.3f s\n&quot;</span>,(<span class="built_in">clock_s</span>()-diff_time0));</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;  out diff file ok!\n&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// --- 4. (可选) 补丁自校验 ---</span></span><br><span class="line">    <span class="keyword">if</span> (diffSets.isDoPatchCheck)&#123;</span><br><span class="line">        <span class="type">double</span> patch_time0=<span class="built_in">clock_s</span>();</span><br><span class="line">        <span class="function">hdiff_private::TAutoMem <span class="title">diffMem</span><span class="params">(<span class="number">0</span>)</span></span>;</span><br><span class="line">        &#123;</span><br><span class="line">            <span class="built_in">printf</span>(<span class="string">&quot;\nload diffFile for test by patch:\n&quot;</span>);</span><br><span class="line">            <span class="built_in">check</span>(<span class="built_in">readFileAll</span>(diffMem,outDiffFileName),</span><br><span class="line">                HDIFFI_OPENREAD_ERROR,<span class="string">&quot;open diffFile for test&quot;</span>);</span><br><span class="line">            <span class="built_in">printf</span>(<span class="string">&quot;diffDataSize: %&quot;</span> PRIu64 <span class="string">&quot;\n&quot;</span>,(hpatch_StreamPos_t)diffMem.<span class="built_in">size</span>());</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// <span class="doctag">NOTE:</span> if(0) 块中的代码是禁用的，说明默认使用 hpatchi 的实现来做校验。</span></span><br><span class="line">        <span class="keyword">if</span> (<span class="number">0</span>)&#123; </span><br><span class="line">            <span class="comment">// ... (disabled code)</span></span><br><span class="line">        &#125;<span class="keyword">else</span>&#123; <span class="comment">// 使用 HPatchLite 库进行校验。</span></span><br><span class="line">            <span class="built_in">check</span>(<span class="built_in">check_lite_diff_by_hpatchi</span>(newMem.<span class="built_in">data</span>(),newMem.<span class="built_in">data_end</span>(),oldMem.<span class="built_in">data</span>(),oldMem.<span class="built_in">data_end</span>(),</span><br><span class="line">                                             diffMem.<span class="built_in">data</span>(),diffMem.<span class="built_in">data_end</span>()),</span><br><span class="line">                  HDIFFI_PATCH_ERROR,<span class="string">&quot;check_lite_diff_by_hpatchi()&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;hpatchi time: %.3f s\n&quot;</span>,(<span class="built_in">clock_s</span>()-patch_time0));</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;  patch check diff data ok!\n&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">clear: <span class="comment">// 统一的清理代码块</span></span><br><span class="line">    _isInClear=hpi_TRUE;</span><br><span class="line">    <span class="built_in">check</span>(<span class="built_in">hpatch_TFileStreamOutput_close</span>(&amp;diffData_out),HDIFFI_FILECLOSE_ERROR,<span class="string">&quot;out diffFile close&quot;</span>);</span><br><span class="line">    <span class="keyword">return</span> result;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief hdiffi 工具的顶层入口函数，主要负责打印信息和调用核心函数。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="type">int</span> <span class="title">hdiffi</span><span class="params">(<span class="type">const</span> <span class="type">char</span>* oldFileName,<span class="type">const</span> <span class="type">char</span>* newFileName,<span class="type">const</span> <span class="type">char</span>* outDiffFileName,</span></span></span><br><span class="line"><span class="params"><span class="function">           <span class="type">const</span> hdiffi_TCompress* compressPlugin,<span class="type">const</span> TDiffiSets&amp; diffSets)</span></span>&#123;</span><br><span class="line">    <span class="type">double</span> time0=<span class="built_in">clock_s</span>(); <span class="comment">// 开始总计时</span></span><br><span class="line">    <span class="comment">// 打印输入输出文件信息。</span></span><br><span class="line">    std::string fnameInfo=std::<span class="built_in">string</span>(<span class="string">&quot;old : \&quot;&quot;</span>)+oldFileName+<span class="string">&quot;\&quot;\n&quot;</span></span><br><span class="line">                                     +<span class="string">&quot;new : \&quot;&quot;</span>+newFileName+<span class="string">&quot;\&quot;\n&quot;</span></span><br><span class="line">                             +(diffSets.isDoDiff?<span class="string">&quot;out : \&quot;&quot;</span>:<span class="string">&quot;test: \&quot;&quot;</span>)+outDiffFileName+<span class="string">&quot;\&quot;\n&quot;</span>;</span><br><span class="line">    <span class="built_in">hpatch_printPath_utf8</span>(fnameInfo.<span class="built_in">c_str</span>());</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">if</span> (diffSets.isDoDiff) &#123;</span><br><span class="line">        <span class="comment">// 打印使用的压缩插件类型。</span></span><br><span class="line">        <span class="type">const</span> <span class="type">char</span>* compressType=<span class="string">&quot;&quot;</span>;</span><br><span class="line">        <span class="keyword">if</span> (compressPlugin-&gt;compress) compressType=compressPlugin-&gt;compress-&gt;<span class="built_in">compressType</span>();</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;hdiffi run with compress plugin: \&quot;%s\&quot;\n&quot;</span>,compressType);</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="type">int</span> exitCode;</span><br><span class="line">    <span class="comment">// 确认配置为内存模式。</span></span><br><span class="line">    <span class="built_in">assert</span>(diffSets.isDiffInMem);</span><br><span class="line">    <span class="comment">// 调用核心处理函数。</span></span><br><span class="line">    exitCode=<span class="built_in">hdiffi_in_mem</span>(oldFileName,newFileName,outDiffFileName,compressPlugin,diffSets);</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 如果执行了差分和校验，打印总耗时。</span></span><br><span class="line">    <span class="keyword">if</span> (diffSets.isDoDiff &amp;&amp; diffSets.isDoPatchCheck)</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;\nall   time: %.3f s\n&quot;</span>,(<span class="built_in">clock_s</span>()-time0));</span><br><span class="line">    <span class="keyword">return</span> exitCode;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="HDiffPatch-libHDiffPatch-HDiff-diff-cpp"><a href="#HDiffPatch-libHDiffPatch-HDiff-diff-cpp" class="headerlink" title="HDiffPatch\libHDiffPatch\HDiff\diff.cpp"></a>HDiffPatch\libHDiffPatch\HDiff\diff.cpp</h1><h2 id="getBestMatch-后缀数组邻域搜索"><a href="#getBestMatch-后缀数组邻域搜索" class="headerlink" title="getBestMatch 后缀数组邻域搜索"></a>getBestMatch <strong>后缀数组邻域搜索</strong></h2><p>这是 <code>_search_cover</code> 调用的底层核心工作函数。它的职责非常专一：对于<strong>新文件中的一个特定位置</strong>，在整个旧文件（由 <code>TSuffixString</code> 代表）中，找到<strong>一个最长的匹配串</strong>，并返回其在旧文件中的位置和匹配长度。</p>
+<h3 id="原理与设计思路解析-1"><a href="#原理与设计思路解析-1" class="headerlink" title="原理与设计思路解析"></a><strong>原理与设计思路解析</strong></h3><p>这个函数是 HDiffPatch 性能的关键。它并没有天真地扫描整个旧文件，而是使用了一套基于后缀数组的高度优化的<strong>启发式搜索策略</strong>。</p>
+<ul>
+<li><p><strong>核心策略：局部邻域搜索 (Local Neighborhood Search)</strong></p>
+<ol>
+<li><strong>初始命中 (<code>lower_bound</code>):</strong> 算法的第一步不是线性扫描，而是利用后缀数组的有序性，通过 <code>sstring.lower_bound()</code> 进行<strong>二分查找</strong>。这能以对数时间复杂度 (<code>O(logN)</code>) 快速定位到新文件当前位置的字符串在旧文件所有后缀的排序列表中的<strong>第一个匹配位置</strong> (<code>sai</code>)。</li>
+<li><strong>螺旋式探索 (Spiral Search):</strong> 找到初始命中点 <code>sai</code> 后，算法并不会停止。它基于一个关键的洞察：<strong>在排序的后缀数组中，字符串内容相似的后缀会聚集在一起</strong>。因此，与 <code>sai</code> 位置的后缀最相似、最有可能产生更长匹配的，就是它在数组中的<strong>紧邻邻居</strong>。<ul>
+<li>代码中的 <code>for</code> 循环和 <code>i = sai + ...</code> 的计算，实现了一个“螺旋式”或“向外扩展式”的搜索。它会依次检查 <code>sai</code>、<code>sai-1</code>、<code>sai+1</code>、<code>sai-2</code>、<code>sai+2</code>… 这些 <code>sai</code> 周边的位置。</li>
+<li><code>matchDeep</code> 参数控制了这个邻域搜索的<strong>半径</strong>或“深度”，即算法愿意从初始命中点向外探索多远。这是一个重要的调优参数，用于在搜索的彻底性和速度之间做权衡。</li>
+</ul>
+</li>
+</ol>
+</li>
+<li><p><strong>受限搜索 (<code>diffLimit</code>)</strong><br>这个函数可以通过 <code>diffLimit</code> 参数进入一种“受限模式”，这通常在 <code>research_cover</code> 阶段被使用，目的是寻找满足特定约束的<strong>替代匹配</strong>。</p>
+<ul>
+<li><strong>范围限制:</strong> <code>kLimitOldPos</code> 和 <code>kLimitOldEnd</code> 可以限制只在旧文件的某个特定范围内寻找匹配。</li>
+<li><strong>回调干预 (<code>listener-&gt;limitCover</code>):</strong> 这是最强大的功能。在找到一个潜在的匹配后，代码会通过回调函数将这个 <code>cover</code> 交给 <code>listener</code> 进行审查。<code>listener</code> 可以根据自己复杂的规则（例如，是否与现有 <code>covers</code> 冲突，是否满足 <code>in-place</code> 模式的安全距离等）来<strong>否决</strong>这个匹配或<strong>缩短</strong>其有效长度。这给予了上层逻辑对底层匹配结果的最终控制权。</li>
+</ul>
+</li>
+<li><p><strong>性能优化</strong></p>
+<ul>
+<li><strong>有限长度比较 (<code>getEqualLengthLimit</code>)</strong>: 在受限模式下，代码首先调用一个只比较有限长度（<code>kTryEqLenLimit</code>）的函数。这是一个<strong>短路优化</strong>：如果一个匹配连一个较短的长度都无法满足，就没必要进行完整、可能很慢的比较。只有当它通过了初步检查，或者长度可能超过限制时，才会调用完整的 <code>getEqualLength</code>。</li>
+<li><strong>提前退出 (<code>leftOk</code>, <code>rightOk</code>):</strong> 螺旋搜索一旦在 <code>sai</code> 的左侧和右侧都找到了有效的匹配，就会提前 <code>break</code> 循环。这避免了在已经找到不错的候选者后，还继续向更远、更不可能的位置进行无效的探索。</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码解析-1"><a href="#代码解析-1" class="headerlink" title="代码解析"></a><strong>代码解析</strong></h3><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 在旧文件中，为新文件当前位置的数据寻找最佳匹配的长度和位置。</span></span><br><span class="line"><span class="function"><span class="type">static</span> TInt <span class="title">getBestMatch</span><span class="params">(TInt* out_pos,<span class="type">const</span> TSuffixString&amp; sstring,</span></span></span><br><span class="line"><span class="params"><span class="function">                         <span class="type">const</span> TByte* newData,<span class="type">const</span> TByte* newData_end,</span></span></span><br><span class="line"><span class="params"><span class="function">                         TInt curNewPos,TDiffLimit* diffLimit=<span class="number">0</span>,<span class="type">size_t</span>* out_limitSkip=<span class="number">0</span>)</span></span>&#123;</span><br><span class="line">    <span class="comment">// 1. 初始命中：使用二分查找，快速定位到第一个匹配项在后缀数组中的索引(sai)。</span></span><br><span class="line">    TInt sai=sstring.<span class="built_in">lower_bound</span>(newData,newData_end);</span><br><span class="line">    <span class="keyword">if</span> (sai&lt;<span class="number">0</span>) <span class="keyword">return</span> <span class="number">0</span>; <span class="comment">// 未找到任何匹配。</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 设置搜索参数：</span></span><br><span class="line">    <span class="comment">// matchDeep 控制邻域搜索的深度（半径）。</span></span><br><span class="line">    <span class="type">const</span> TInt matchDeep = diffLimit?diffLimit-&gt;kMaxMatchDeep:<span class="number">2</span>;</span><br><span class="line">    <span class="comment">// kLimitOld... 定义了在旧文件中的有效搜索范围（仅在受限模式下使用）。</span></span><br><span class="line">    <span class="type">const</span> TInt kLimitOldPos=(TInt)(diffLimit?diffLimit-&gt;recoverOldPos:<span class="number">0</span>);</span><br><span class="line">    <span class="type">const</span> TInt kLimitOldEnd=(TInt)(diffLimit?diffLimit-&gt;recoverOldEnd:sstring.<span class="built_in">SASize</span>());</span><br><span class="line">    </span><br><span class="line">    <span class="type">const</span> TByte* src_begin=sstring.<span class="built_in">src_begin</span>();</span><br><span class="line">    <span class="type">const</span> TByte* src_end=sstring.<span class="built_in">src_end</span>();</span><br><span class="line">    TInt bestLength= kMinMatchLen <span class="number">-1</span>; <span class="comment">// 初始化最佳长度为一个无效值。</span></span><br><span class="line">    TInt bestOldPos=<span class="number">-1</span>;</span><br><span class="line">    <span class="type">bool</span> leftOk = <span class="literal">false</span>; <span class="comment">// 标记是否已在sai左侧找到匹配。</span></span><br><span class="line">    <span class="type">bool</span> rightOk = <span class="literal">false</span>; <span class="comment">// 标记是否已在sai右侧找到匹配。</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 3. 螺旋式邻域搜索：</span></span><br><span class="line">    <span class="keyword">for</span> (TInt mdi= <span class="number">0</span>; mdi&lt; matchDeep; ++mdi) &#123;</span><br><span class="line">        <span class="comment">// 提前退出优化</span></span><br><span class="line">        <span class="keyword">if</span> (mdi&amp;<span class="number">1</span>)&#123; <span class="keyword">if</span> (rightOk) <span class="keyword">continue</span>; &#125; </span><br><span class="line">        <span class="keyword">else</span> &#123; <span class="keyword">if</span> (leftOk) <span class="keyword">continue</span>; &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 计算要检查的邻居索引 i: mdi=0-&gt;sai, mdi=1-&gt;sai-1, mdi=2-&gt;sai+1, ...</span></span><br><span class="line">        TInt i = sai + (<span class="number">1</span>-(mdi&amp;<span class="number">1</span>)*<span class="number">2</span>) * ((mdi<span class="number">+1</span>)/<span class="number">2</span>);</span><br><span class="line">        <span class="keyword">if</span> ((i&lt;<span class="number">0</span>)|(i&gt;=(src_end-src_begin))) <span class="keyword">continue</span>; <span class="comment">// 边界检查</span></span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 从后缀数组获取该邻居在旧文件中的实际起始位置。</span></span><br><span class="line">        TInt curOldPos=sstring.<span class="built_in">SA</span>(i);</span><br><span class="line">        TInt curLength;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 4. 计算并评估匹配长度</span></span><br><span class="line">        <span class="meta">#<span class="keyword">define</span> kTryEqLenLimit (1024*1+17) <span class="comment">// 短路优化的比较长度限制</span></span></span><br><span class="line">        <span class="keyword">if</span> (<span class="number">0</span>==diffLimit)&#123; <span class="comment">// 标准模式</span></span><br><span class="line">            curLength=<span class="built_in">getEqualLength</span>(newData,newData_end,src_begin+curOldPos,src_end);</span><br><span class="line">        &#125;<span class="keyword">else</span>&#123; <span class="comment">// 受限模式</span></span><br><span class="line">            <span class="comment">// 先进行有限长度的快速比较。</span></span><br><span class="line">            curLength=<span class="built_in">getEqualLengthLimit</span>&lt;kTryEqLenLimit&gt;(newData,newData_end,src_begin+curOldPos,src_end);</span><br><span class="line">            <span class="keyword">if</span> ((kLimitOldPos&lt;=curOldPos)&amp;&amp;(curOldPos&lt;kLimitOldEnd))&#123;</span><br><span class="line">                <span class="comment">// 如果这个匹配落在了一个“禁区”内，则跳过它。</span></span><br><span class="line">                <span class="keyword">if</span> (curLength==kTryEqLenLimit)</span><br><span class="line">                    *out_limitSkip=kTryEqLenLimit/<span class="number">2</span>; <span class="comment">// 提示上层可以安全跳过的距离</span></span><br><span class="line">                <span class="keyword">continue</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">         </span><br><span class="line">        <span class="comment">// 如果当前匹配比已知的最佳匹配要长...</span></span><br><span class="line">        <span class="keyword">if</span> (curLength&gt;bestLength)&#123;</span><br><span class="line">            <span class="keyword">if</span> (diffLimit)&#123; <span class="comment">// 在受限模式下，需要通过回调让上层listener审查。</span></span><br><span class="line">                hpatch_TCover cover=&#123;(<span class="type">size_t</span>)curOldPos,(<span class="type">size_t</span>)curNewPos,(<span class="type">size_t</span>)curLength&#125;;</span><br><span class="line">                hpatch_StreamPos_t hitPos;</span><br><span class="line">                diffLimit-&gt;listener-&gt;<span class="built_in">limitCover</span>(diffLimit-&gt;listener,&amp;cover,&amp;hitPos);</span><br><span class="line">                <span class="keyword">if</span> (hitPos&lt;=(<span class="type">size_t</span>)bestLength) <span class="comment">// 如果listener否决或缩短了它...</span></span><br><span class="line">                    <span class="keyword">continue</span>; <span class="comment">// ...则放弃。</span></span><br><span class="line">                </span><br><span class="line">                <span class="comment">// 如果初步匹配长度达到了短路限制，可能实际匹配更长。</span></span><br><span class="line">                <span class="keyword">if</span> (hitPos==kTryEqLenLimit)&#123;</span><br><span class="line">                    <span class="comment">// 进行一次完整的长度比较。</span></span><br><span class="line">                    curLength=<span class="built_in">getEqualLength</span>(newData,newData_end,src_begin+curOldPos,src_end);</span><br><span class="line">                    hpatch_TCover cover=&#123;(<span class="type">size_t</span>)curOldPos,(<span class="type">size_t</span>)curNewPos,(<span class="type">size_t</span>)curLength&#125;;</span><br><span class="line">                    <span class="comment">// 再次让listener审查完整长度的匹配。</span></span><br><span class="line">                    diffLimit-&gt;listener-&gt;<span class="built_in">limitCover</span>(diffLimit-&gt;listener,&amp;cover,&amp;hitPos);</span><br><span class="line">                &#125;</span><br><span class="line">                curLength=(TInt)hitPos; <span class="comment">// 使用listener最终确认的长度。</span></span><br><span class="line">            &#125;</span><br><span class="line">            <span class="comment">// 更新最佳匹配</span></span><br><span class="line">            bestLength = curLength;</span><br><span class="line">            bestOldPos= curOldPos;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 提前退出优化</span></span><br><span class="line">        <span class="keyword">if</span> (mdi&amp;<span class="number">1</span>)&#123; rightOk=<span class="literal">true</span>; <span class="keyword">if</span> (leftOk) <span class="keyword">break</span>; &#125; </span><br><span class="line">        <span class="keyword">else</span> &#123; leftOk=<span class="literal">true</span>; <span class="keyword">if</span> (rightOk) <span class="keyword">break</span>; &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 5. 返回结果</span></span><br><span class="line">    *out_pos=bestOldPos;</span><br><span class="line">    <span class="keyword">return</span>  bestLength;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="search-cover-贪心算法驱动的原始匹配搜索"><a href="#search-cover-贪心算法驱动的原始匹配搜索" class="headerlink" title="_search_cover 贪心算法驱动的原始匹配搜索"></a>_search_cover <strong>贪心算法驱动的原始匹配搜索</strong></h2><p>这是 <code>search_and_dispose_cover</code> 的第一阶段，也是 HDiffPatch 差异发现算法的“勘探”阶段。它的核心任务是利用后缀字符串，在给定的数据范围内，<strong>贪心地</strong>搜索出所有有价值的原始匹配块（<code>covers</code>）。</p>
+<h3 id="原理与设计思路解析-2"><a href="#原理与设计思路解析-2" class="headerlink" title="原理与设计思路解析"></a><strong>原理与设计思路解析</strong></h3><p>这个函数是整个差分引擎的“主力军”，它通过一个循环迭代新文件，并在每个位置尝试寻找最佳匹配。其核心是一个<strong>贪心算法 (Greedy Algorithm)</strong>，并辅以多种复杂的启发式优化。</p>
+<ul>
+<li><p><strong>核心算法：贪心选择</strong></p>
+<ul>
+<li>函数从左到右线性扫描新文件 (<code>while (newPos &lt;= maxSearchNewPos)</code>).</li>
+<li>在当前的 <code>newPos</code> 位置，它调用 <code>getBestMatch</code> 来寻找一个在旧文件中能找到的、<strong>最长的</strong>匹配串。</li>
+<li>一旦找到一个匹配，它并<strong>不</strong>立即接受，而是进行一次<strong>成本效益分析</strong>。</li>
+</ul>
+</li>
+<li><p><strong>启发式决策：净收益评分 (Net Score Heuristic)</strong></p>
+<ul>
+<li>这是算法最智能的部分。一个匹配的价值并不仅仅是它的长度。Hpatch 还需要为存储这个匹配的指令（cover的元数据）付出成本。</li>
+<li>代码中的 <code>matchEqLength - getCoverCtrlCost(matchCover, lastCover) &lt; kMinMatchScore</code> 正是这个决策的核心。<ul>
+<li><code>matchEqLength</code>: 代表了匹配带来的<strong>收益</strong>（即省去了多少需要直接存储的新数据）。</li>
+<li><code>getCoverCtrlCost(...)</code>: 代表了记录这个匹配指令的<strong>成本</strong>。这个成本是动态的，它会考虑当前匹配与上一个匹配 (<code>lastCover</code>) 的关系。例如，如果两个匹配在旧文件中的位置相近，编码成本可能就更低。</li>
+<li><code>kMinMatchScore</code>: 是一个阈值，只有当<strong>净收益</strong>（收益 - 成本）大于这个阈值时，这个匹配才被认为是“划算的”，才会被接受。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><strong>高级优化 (<code>isCanExtendCover</code>)</strong><br>当找到一个划算的匹配后，算法并不会简单地将其加入列表，而是会尝试两种高级优化来生成更优的 <code>cover</code>：</p>
+<ol>
+<li><p><strong><code>tryLinkExtend</code> (Cover 链接&#x2F;合并):</strong></p>
+<ul>
+<li>这是最激进的优化。它会检查新找到的 <code>matchCover</code> 是否能与上一个 <code>lastCover</code> <strong>合并</strong>成一个更长的、连续的 <code>cover</code>。</li>
+<li>这种情况通常发生在两个匹配块在旧文件和新文件中都靠得很近，中间只有少量不匹配的字节。<code>tryLinkExtend</code> 会尝试将这两个匹配以及中间的差异“缝合”成一个单一的、更长的 <code>cover</code>。这能显著减少需要存储的 <code>cover</code> 指令数量，从而减小补丁体积。</li>
+</ul>
+</li>
+<li><p><strong><code>tryCollinear</code> (Cover 共线性调整):</strong></p>
+<ul>
+<li>如果无法合并，算法会尝试这个次级优化。它检查新旧两个 <code>cover</code> 是否“共线”（即它们在新旧文件中的相对顺序和间隔都比较规律）。</li>
+<li>如果是，它可能会微调 <code>matchCover</code> 的边界，使其与前一个 <code>cover</code> 的关系更“规整”，以便后续的编码和压缩能更高效。</li>
+</ul>
+</li>
+</ol>
+</li>
+<li><p><strong>贪心策略的体现：跳跃式前进</strong></p>
+<ul>
+<li>在接受一个 <code>cover</code> 后，扫描指针 <code>newPos</code> 会被立即<strong>跳跃</strong>到这个 <code>cover</code> 的末尾 (<code>lastCover.newPos + lastCover.length</code>)。</li>
+<li>这意味着算法<strong>不会</strong>再回头去寻找可能与当前 <code>cover</code> 重叠的其他匹配方案。它总是做出“局部最优”的选择，然后继续前进。</li>
+<li>函数末尾的注释 <code>//The selected cover does not allow overlap, which may not be the optimal strategy;</code> 非常精辟地指出了这一点：这种贪心策略速度极快，但在极少数情况下可能无法找到全局最优解。然而在实践中，它通常能产生非常接近最优解的高质量结果。</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码解析-2"><a href="#代码解析-2" class="headerlink" title="代码解析"></a><strong>代码解析</strong></h3><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 在新旧文件之间，寻找合适的匹配块(cover)。</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> _search_cover(std::vector&lt;TOldCover&gt;&amp; covers,<span class="type">const</span> TDiffData&amp; diff,</span><br><span class="line">                          <span class="type">const</span> TSuffixString&amp; sstring,TDiffLimit* diffLimit,<span class="type">bool</span> isCanExtendCover)&#123;</span><br><span class="line">    <span class="comment">// 如果旧文件为空（后缀字符串为空），则不可能有匹配。</span></span><br><span class="line">    <span class="keyword">if</span> (sstring.<span class="built_in">SASize</span>()&lt;=<span class="number">0</span>) <span class="keyword">return</span>;</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 确定本次搜索在新文件中的范围 [newPos, newEnd)。</span></span><br><span class="line">    TInt newPos=diffLimit?diffLimit-&gt;newPos:<span class="number">0</span>;</span><br><span class="line">    <span class="type">const</span> TInt newEnd=diffLimit?diffLimit-&gt;newEnd:(diff.newData_end-diff.newData);</span><br><span class="line">    <span class="comment">// 如果搜索范围太小，直接返回。</span></span><br><span class="line">    <span class="keyword">if</span> (newEnd-newPos&lt;=kMinMatchLen) <span class="keyword">return</span>;</span><br><span class="line">    <span class="type">const</span> TInt maxSearchNewPos=newEnd-kMinMatchLen; <span class="comment">// 预计算循环的最大边界。</span></span><br><span class="line">    <span class="type">const</span> <span class="type">size_t</span> cover_begin=covers.<span class="built_in">size</span>();</span><br><span class="line"></span><br><span class="line">    <span class="function">TOldCover <span class="title">lastCover</span><span class="params">(<span class="number">0</span>,<span class="number">0</span>,<span class="number">0</span>)</span></span>; <span class="comment">// 用于记录上一个被接受的cover。</span></span><br><span class="line">    </span><br><span class="line">    <span class="comment">// --- 贪心搜索主循环 ---</span></span><br><span class="line">    <span class="keyword">while</span> (newPos&lt;=maxSearchNewPos) &#123;</span><br><span class="line">        TInt matchOldPos=<span class="number">0</span>;</span><br><span class="line">        <span class="type">size_t</span> limitSkip=<span class="number">1</span>; <span class="comment">// 用于getBestMatch返回可以安全跳过的字节数。</span></span><br><span class="line">        <span class="comment">// 调用底层函数，利用后缀字符串寻找当前 newPos 处的最长匹配。</span></span><br><span class="line">        TInt matchEqLength=<span class="built_in">getBestMatch</span>(&amp;matchOldPos,sstring,diff.newData+newPos,diff.newData+newEnd,newPos,</span><br><span class="line">                                        diffLimit,&amp;limitSkip);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 如果找到的匹配太短，则跳过。</span></span><br><span class="line">        <span class="keyword">if</span> (matchEqLength&lt;kMinMatchLen)&#123;</span><br><span class="line">            newPos+=limitSkip; <span class="comment">// 跳到安全位置继续搜索。</span></span><br><span class="line">            <span class="keyword">continue</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="function">TOldCover <span class="title">matchCover</span><span class="params">(matchOldPos,newPos,matchEqLength)</span></span>;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// --- 启发式决策：成本效益分析 ---</span></span><br><span class="line">        <span class="comment">// 如果匹配的“净收益”（长度 - 编码成本）小于阈值，则放弃该匹配。</span></span><br><span class="line">        <span class="keyword">if</span> (matchEqLength-<span class="built_in">getCoverCtrlCost</span>(matchCover,lastCover)&lt;kMinMatchScore)&#123;</span><br><span class="line">            ++newPos; <span class="comment">// 只前进一个字节，继续尝试。</span></span><br><span class="line">            <span class="keyword">continue</span>;</span><br><span class="line">        &#125;<span class="comment">//else matched: 这是一个有价值的匹配。</span></span><br><span class="line">        </span><br><span class="line">        <span class="comment">// --- 高级优化：合并与调整 ---</span></span><br><span class="line">        <span class="keyword">if</span> (isCanExtendCover)&#123; <span class="comment">// 如果启用了高级优化...</span></span><br><span class="line">            <span class="comment">// 尝试将当前匹配与上一个匹配合并。</span></span><br><span class="line">            <span class="keyword">if</span> (<span class="built_in">tryLinkExtend</span>(lastCover,matchCover,diff,diffLimit))&#123;<span class="comment">//use link</span></span><br><span class="line">                <span class="comment">// 如果合并成功，lastCover会被更新，我们只需更新covers列表中的最后一个元素。</span></span><br><span class="line">                <span class="keyword">if</span> (covers.<span class="built_in">size</span>()==cover_begin)</span><br><span class="line">                    covers.<span class="built_in">push_back</span>(lastCover);</span><br><span class="line">                <span class="keyword">else</span></span><br><span class="line">                    covers.<span class="built_in">back</span>()=lastCover;</span><br><span class="line">            &#125;<span class="keyword">else</span>&#123; <span class="comment">// 如果无法合并...</span></span><br><span class="line">                <span class="keyword">if</span> (covers.<span class="built_in">size</span>()&gt;cover_begin)</span><br><span class="line">                    <span class="comment">// 尝试对新匹配进行共线性微调。</span></span><br><span class="line">                    <span class="built_in">tryCollinear</span>(covers.<span class="built_in">back</span>(),matchCover,diff,diffLimit);</span><br><span class="line">                <span class="comment">// 将（可能被微调过的）新匹配加入列表。</span></span><br><span class="line">                covers.<span class="built_in">push_back</span>(matchCover);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;<span class="keyword">else</span>&#123; <span class="comment">// 如果禁用高级优化，则直接添加。</span></span><br><span class="line">            covers.<span class="built_in">push_back</span>(matchCover);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// --- 更新状态并前进 ---</span></span><br><span class="line">        lastCover=covers.<span class="built_in">back</span>(); <span class="comment">// 更新 lastCover 状态。</span></span><br><span class="line">        <span class="comment">// 贪心跳跃：将搜索位置 newPos 直接移动到刚接受的 cover 的末尾。</span></span><br><span class="line">        newPos=std::<span class="built_in">max</span>(newPos<span class="number">+1</span>,lastCover.newPos+lastCover.length);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="search-and-dispose-cover-两阶段匹配：原始搜索与最优选择"><a href="#search-and-dispose-cover-两阶段匹配：原始搜索与最优选择" class="headerlink" title="search_and_dispose_cover 两阶段匹配：原始搜索与最优选择"></a>search_and_dispose_cover <strong>两阶段匹配：原始搜索与最优选择</strong></h2><p>这是 <code>first_search_and_dispose_cover</code> 内部调用的、单线程的<strong>核心工作单元</strong>。这个函数的设计完美体现了“关注点分离”的原则，将复杂的匹配过程分解为两个清晰、独立的阶段：<strong>1. 原始搜索</strong> 和 <strong>2. 优化处理</strong>。</p>
+<h3 id="原理与设计思路解析-3"><a href="#原理与设计思路解析-3" class="headerlink" title="原理与设计思路解析"></a><strong>原理与设计思路解析</strong></h3><p>这个函数是整个差异发现算法的“引擎室”。它接收一小块新文件数据（由 <code>diffLimit</code> 定义范围），并为其在整个旧文件中寻找最佳的匹配指令（<code>covers</code>）。</p>
+<ul>
+<li><p><strong>核心策略：两阶段处理 (Two-Phase Processing)</strong><br>这种设计将复杂的任务分解，使得每一阶段的职责都非常单一，易于理解和优化。</p>
+<ol>
+<li><p><strong>第一阶段: <code>_search_cover</code> (原始匹配生成器 - The Prospector)</strong></p>
+<ul>
+<li><strong>职责:</strong> 这是算法的“勘探”阶段。它的任务是利用高效的后缀字符串 (<code>sstring</code>) 结构，<strong>不加选择地</strong>找出所有可能的、有价值的匹配块。</li>
+<li><strong>产出:</strong> 这一步的产出是一系列“原始”或“候选”的 <code>covers</code>。这些 <code>covers</code> 可能存在以下问题：<ul>
+<li><strong>重叠 (Overlapping):</strong> 多个候选 <code>cover</code> 可能覆盖了新文件中的同一区域。</li>
+<li><strong>次优 (Sub-optimal):</strong> 某些短的匹配可能被一个更长的匹配完全包含。</li>
+<li><strong>低质量 (Low-quality):</strong> 某些匹配可能非常短，以至于记录它们的成本（在补丁中的指令大小）高于直接存储新数据的成本。</li>
+</ul>
+</li>
+<li>它将找到的所有候选 <code>covers</code> 直接追加到 <code>covers</code> 向量的末尾。</li>
+</ul>
+</li>
+<li><p><strong>第二阶段: <code>_dispose_cover</code> (最优匹配选择器 - The Jeweler)</strong></p>
+<ul>
+<li><strong>职责:</strong> 这是算法的“精炼”和“决策”阶段。它接收第一阶段产出的所有原始、混乱的候选 <code>covers</code>，并从中挑选出一组<strong>最优的、不重叠的最终 <code>covers</code></strong>。</li>
+<li><strong>算法:</strong> 这一步通常采用<strong>动态规划 (Dynamic Programming)</strong>。它解决的问题可以类比为“加权区间调度问题”：给定一组带有“分数”（<code>score</code>，通常与匹配长度和数据稀有度相关）的重叠区间（<code>covers</code>），找到一个不重叠的子集，使其总分数最高。</li>
+<li><strong>决策依据 (<code>kMinSingleMatchScore</code>):</strong> 在决策过程中，它会使用 <code>kMinSingleMatchScore</code> 这个阈值来过滤掉所有“分数”过低的、无价值的匹配，确保最终选出的 <code>covers</code> 都是有意义的。</li>
+<li>它将处理过的、最优的 <code>covers</code> 结果<strong>替换掉</strong> <code>covers</code> 向量中原有的那部分原始匹配。</li>
+</ul>
+</li>
+</ol>
+</li>
+<li><p><strong>性能优化</strong></p>
+<ul>
+<li><code>const size_t cover_begin = covers.size();</code> 这一行代码非常关键。它在执行搜索前“标记”了当前 <code>covers</code> 向量的大小。</li>
+<li><code>_dispose_cover</code> 只处理从 <code>cover_begin</code> 开始的、由 <code>_search_cover</code> <strong>新添加</strong>的这部分 <code>covers</code>，而不会影响之前已经处理好的部分。</li>
+<li><code>if (covers.size() &gt; cover_begin)</code> 这个检查是一个重要的短路优化。如果 <code>_search_cover</code> 没有找到任何候选匹配，那么就完全没有必要执行昂贵的动态规划处理阶段，函数可以直接返回。</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码解析-3"><a href="#代码解析-3" class="headerlink" title="代码解析"></a><strong>代码解析</strong></h3><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 对指定范围的数据块执行“搜索”和“处理”两个阶段的匹配发现。</span></span><br><span class="line"><span class="comment"> * @param covers               输出参数，用于存储最终找到的最优covers。</span></span><br><span class="line"><span class="comment"> * @param diff                 包含新旧文件数据的上下文。</span></span><br><span class="line"><span class="comment"> * @param sstring              预处理过的旧文件后缀字符串，用于快速搜索。</span></span><br><span class="line"><span class="comment"> * @param kMinSingleMatchScore 单个匹配的最低有效分数。</span></span><br><span class="line"><span class="comment"> * @param diffLimit            (可选) 定义了本次搜索只在新文件的哪个范围内进行。</span></span><br><span class="line"><span class="comment"> * @param isCanExtendCover     一个标志，指示是否允许扩展匹配的边界。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="type">static</span> <span class="type">void</span> <span class="title">search_and_dispose_cover</span><span class="params">(std::vector&lt;TOldCover&gt;&amp; covers,<span class="type">const</span> TDiffData&amp; diff,</span></span></span><br><span class="line"><span class="params"><span class="function">                                     <span class="type">const</span> TSuffixString&amp; sstring,<span class="type">int</span> kMinSingleMatchScore,</span></span></span><br><span class="line"><span class="params"><span class="function">                                     TDiffLimit* diffLimit,<span class="type">bool</span> isCanExtendCover)</span></span>&#123;</span><br><span class="line">    <span class="comment">// 在搜索前，记录下当前 covers 列表的大小。这是一个“书签”，用于标记新添加内容的起点。</span></span><br><span class="line">    <span class="type">const</span> <span class="type">size_t</span> cover_begin=covers.<span class="built_in">size</span>();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// --- 阶段一：原始搜索 ---</span></span><br><span class="line">    <span class="comment">// 调用底层搜索函数，它会利用后缀字符串找到所有可能的匹配项，</span></span><br><span class="line">    <span class="comment">// 并将它们（可能是重叠和未经优化的）追加到 `covers` 向量的末尾。</span></span><br><span class="line">    _search_cover(covers,diff,sstring,diffLimit,isCanExtendCover);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// --- 阶段二：优化处理 ---</span></span><br><span class="line">    <span class="comment">// 检查 `_search_cover` 是否找到了任何新的候选匹配。</span></span><br><span class="line">    <span class="keyword">if</span> (covers.<span class="built_in">size</span>()&gt;cover_begin)&#123;</span><br><span class="line">        <span class="comment">// 如果找到了，则调用处理函数。</span></span><br><span class="line">        <span class="comment">// `_dispose_cover` 会对从 `cover_begin` 开始的这部分原始匹配进行动态规划，</span></span><br><span class="line">        <span class="comment">// 挑选出最优的、不重叠的组合，并用结果替换掉原始匹配。</span></span><br><span class="line">        _dispose_cover(covers,cover_begin,diff,kMinSingleMatchScore,diffLimit,isCanExtendCover);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="first-search-and-dispose-cover-MT-多线程并行差异发现"><a href="#first-search-and-dispose-cover-MT-多线程并行差异发现" class="headerlink" title="first_search_and_dispose_cover_MT 多线程并行差异发现"></a>first_search_and_dispose_cover_MT <strong>多线程并行差异发现</strong></h2><p>这是 <code>get_diff</code> 内部调用的核心工作函数，专门负责执行<strong>初次</strong>的、计算量最大的匹配搜索。函数名中的 <code>_MT</code> (Multi-Threaded) 表明了它的关键特性：<strong>使用多线程来并行处理，以加速差异发现的过程</strong>。</p>
+<h3 id="原理与设计思路解析-4"><a href="#原理与设计思路解析-4" class="headerlink" title="原理与设计思路解析"></a><strong>原理与设计思路解析</strong></h3><p>这个函数是一个典型的<strong>并行任务分发器 (Parallel Task Dispatcher)</strong>。它本身不执行匹配算法，而是负责将庞大的匹配任务<strong>分解</strong>成多个小任务，并将这些小任务分发给多个线程（包括主线程）去执行，最后再将所有线程的结果<strong>汇总</strong>起来。</p>
+<ul>
+<li><p><strong>核心策略：并行工作划分 (Parallel Work Division)</strong></p>
+<ul>
+<li><strong>并行化的对象：</strong> 算法选择对<strong>新文件 (<code>newData</code>)</strong> 进行数据划分。这是因为搜索过程是在新文件上线性进行的，将其切分成多个独立的块是自然且高效的并行化方式。</li>
+<li><strong>任务粒度控制：</strong> 代码并没有简单地将 <code>newSize / threadNum</code> 作为任务大小。它实现了一套更智能的启发式策略，以平衡并行开销和效率：<ol>
+<li><strong>并行化阈值 (<code>kMinParallelSize</code>)</strong>: 如果新文件太小（小于2MB），则根本不启用多线程，因为创建和管理线程的开销可能会超过并行带来的收益。直接回退到单线程模式。</li>
+<li><strong>线程数限制 (<code>maxThreanNum</code>)</strong>: 即使请求了大量线程，代码也会限制实际创建的线程数，确保每个线程至少能分到一块有意义的数据（1MB），避免了在小文件上创建过多低效的线程。</li>
+<li><strong>最佳块大小 (<code>kBestParallelSize</code>)</strong>: 算法倾向于将新文件切分成大小约为8MB的“工作块”。这种较大的任务粒度可以最大化每个线程的有效计算时间，减少线程间同步的频率。</li>
+</ol>
+</li>
+<li><strong>动态工作队列：</strong> 通过共享的 <code>mt_data</code> 结构体和其中的原子计数器 <code>workIndex</code>（虽然未明示，但其用法暗示了原子性），实现了一个动态的工作队列。每个线程完成自己的一个块后，会再去队列中领取下一个可用的块，直到所有块都被处理完毕。</li>
+</ul>
+</li>
+<li><p><strong>执行模型：主线程参与计算</strong></p>
+<ul>
+<li>该函数采用了高效的 <code>N-1</code> 线程创建模型。如果用户请求 <code>N</code> 个线程，它只会创建 <code>N-1</code> 个新的工作线程。</li>
+<li><strong>主线程</strong>不会闲置等待，而是立即调用工作函数 <code>_fsearch_and_dispose_cover_thread</code>，与新创建的线程一起<strong>参与计算</strong>。这确保了所有CPU核心都能被充分利用。</li>
+</ul>
+</li>
+<li><p><strong>结果聚合：无锁与后处理</strong></p>
+<ul>
+<li><strong>无锁并行 (<code>lock-free</code>)</strong>: 为了最大化性能，每个工作线程都将自己找到的 <code>covers</code> 存放在<strong>各自私有的</strong> <code>threadCovers</code> 向量中。这避免了在多线程环境下对一个共享的 <code>covers</code> 列表进行代价高昂的加锁操作。</li>
+<li><strong>结果合并 (<code>insert</code>)</strong>: 当所有工作线程结束后，主线程会依次 <code>join</code> 它们，然后将每个线程私有的结果向量 <code>threadCovers[i]</code> 中的内容一次性地 <code>insert</code> 到主 <code>covers</code> 向量的末尾。</li>
+<li><strong>排序与整理 (<code>tm_collate_covers</code>)</strong>: 合并后的主 <code>covers</code> 向量是无序的（来自不同块的结果混杂在一起），并且在块的边界处可能存在重叠或次优的匹配。<code>tm_collate_covers</code> 函数在最后被调用，负责对所有 <code>covers</code> 进行排序、去重、以及解决边界冲突，生成一个最终的、干净、有序的匹配列表。</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码解析-4"><a href="#代码解析-4" class="headerlink" title="代码解析"></a><strong>代码解析</strong></h3><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="type">static</span> <span class="type">void</span> <span class="title">first_search_and_dispose_cover_MT</span><span class="params">(std::vector&lt;TOldCover&gt;&amp; covers,<span class="type">const</span> TDiffData&amp; diff,</span></span></span><br><span class="line"><span class="params"><span class="function">                                              <span class="type">const</span> TSuffixString&amp; sstring,<span class="type">int</span> kMinSingleMatchScore,</span></span></span><br><span class="line"><span class="params"><span class="function">                                              ICoverLinesListener* listener,<span class="type">size_t</span> threadNum,<span class="type">bool</span> isCanExtendCover)</span></span>&#123;</span><br><span class="line"><span class="comment">// --- 编译时开关：如果不支持多线程，则整个并行逻辑不存在 ---</span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> (_IS_USED_MULTITHREAD)</span></span><br><span class="line">    <span class="comment">// 定义并行化的启发式参数</span></span><br><span class="line">    <span class="type">const</span> <span class="type">size_t</span> kMinParallelSize=<span class="number">1024</span>*<span class="number">1024</span>*<span class="number">2</span>;  <span class="comment">// 启用多线程的最小文件大小 (2MB)</span></span><br><span class="line">    <span class="type">const</span> <span class="type">size_t</span> kBestParallelSize=<span class="number">1024</span>*<span class="number">1024</span>*<span class="number">8</span>; <span class="comment">// 倾向的工作块大小 (8MB)</span></span><br><span class="line">    <span class="type">size_t</span> newSize=diff.newData_end-diff.newData;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// --- 运行时的并行决策 ---</span></span><br><span class="line">    <span class="comment">// 条件：请求了多线程 &amp; 存在旧数据 &amp; 新文件足够大</span></span><br><span class="line">    <span class="keyword">if</span> ((threadNum&gt;<span class="number">1</span>)&amp;&amp;(diff.oldData!=diff.oldData_end)&amp;&amp;(newSize&gt;=kMinParallelSize))&#123;</span><br><span class="line">        <span class="comment">// --- 任务划分与设置 ---</span></span><br><span class="line">        <span class="comment">// 限制最大线程数，保证每个线程至少有1MB的工作量</span></span><br><span class="line">        <span class="type">const</span> <span class="type">size_t</span> maxThreanNum=newSize/(kMinParallelSize/<span class="number">2</span>);</span><br><span class="line">        threadNum=(threadNum&lt;=maxThreanNum)?threadNum:maxThreanNum;</span><br><span class="line">        <span class="comment">// 根据最佳块大小计算出需要多少个工作块</span></span><br><span class="line">        <span class="type">size_t</span> workCount=(newSize+kBestParallelSize<span class="number">-1</span>)/kBestParallelSize;</span><br><span class="line">        <span class="comment">// 保证工作块数量不少于线程数，让每个线程都有事可做</span></span><br><span class="line">        workCount=(threadNum&gt;workCount)?threadNum:workCount;</span><br><span class="line"></span><br><span class="line">        <span class="type">const</span> <span class="type">size_t</span> threadCount=threadNum<span class="number">-1</span>; <span class="comment">// 实际创建N-1个新线程</span></span><br><span class="line">        <span class="function">std::vector&lt;std::thread&gt; <span class="title">threads</span><span class="params">(threadCount)</span></span>;</span><br><span class="line">        <span class="comment">// 为每个新线程分配一个私有的结果存储区，以避免加锁</span></span><br><span class="line">        std::vector&lt;std::vector&lt;TOldCover&gt; &gt; <span class="built_in">threadCovers</span>(threadCount);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 设置一个共享的上下文，传递给所有线程</span></span><br><span class="line">        <span class="type">mt_data_t</span> mt_data;</span><br><span class="line">        mt_data.diff=&amp;diff;</span><br><span class="line">        mt_data.sstring=&amp;sstring;</span><br><span class="line">        mt_data.listener=(listener&amp;&amp;listener-&gt;next_search_block_MT)?listener:<span class="number">0</span>;</span><br><span class="line">        mt_data.kMinSingleMatchScore=kMinSingleMatchScore;</span><br><span class="line">        <span class="comment">// 计算出每个工作块的实际大小</span></span><br><span class="line">        mt_data.workBlockSize=(newSize+workCount<span class="number">-1</span>)/workCount;</span><br><span class="line">        mt_data.workIndex=<span class="number">0</span>; <span class="comment">// 工作队列的索引，应为原子类型</span></span><br><span class="line">        mt_data.isCanExtendCover=isCanExtendCover;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (mt_data.listener&amp;&amp;listener-&gt;begin_search_block)</span><br><span class="line">            listener-&gt;<span class="built_in">begin_search_block</span>(listener,newSize,mt_data.workBlockSize,kPartPepeatSize);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// --- 线程创建与执行 ---</span></span><br><span class="line">        <span class="keyword">for</span> (<span class="type">size_t</span> i=<span class="number">0</span>;i&lt;threadCount;i++)</span><br><span class="line">            <span class="comment">// 创建N-1个工作线程</span></span><br><span class="line">            threads[i]=std::<span class="built_in">thread</span>(_fsearch_and_dispose_cover_thread,&amp;threadCovers[i],&amp;mt_data);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 主线程也参与工作，结果直接写入最终的covers列表</span></span><br><span class="line">        _fsearch_and_dispose_cover_thread(&amp;covers,&amp;mt_data);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// --- 结果聚合 ---</span></span><br><span class="line">        <span class="keyword">for</span> (<span class="type">size_t</span> i=<span class="number">0</span>;i&lt;threadCount;i++)&#123;</span><br><span class="line">            threads[i].<span class="built_in">join</span>(); <span class="comment">// 等待工作线程结束</span></span><br><span class="line">            <span class="comment">// 将工作线程的结果合并到主列表中</span></span><br><span class="line">            covers.<span class="built_in">insert</span>(covers.<span class="built_in">end</span>(),threadCovers[i].<span class="built_in">begin</span>(),threadCovers[i].<span class="built_in">end</span>());</span><br><span class="line">            <span class="comment">// 清理工作线程的内存（swap trick）</span></span><br><span class="line">            &#123; std::vector&lt;TOldCover&gt; tmp; tmp.<span class="built_in">swap</span>(threadCovers[i]); &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 对所有合并后的、无序的covers进行排序和整理</span></span><br><span class="line">        <span class="built_in">tm_collate_covers</span>(covers);</span><br><span class="line">    &#125;<span class="keyword">else</span> <span class="comment">// 如果不满足并行条件...</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">    &#123;</span><br><span class="line">        <span class="comment">// ...则直接调用单线程版本的实现</span></span><br><span class="line">        <span class="built_in">first_search_and_dispose_cover</span>(covers,diff,sstring,kMinSingleMatchScore,isCanExtendCover);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="get-diff-核心差异发现引擎"><a href="#get-diff-核心差异发现引擎" class="headerlink" title="get_diff 核心差异发现引擎"></a>get_diff <strong>核心差异发现引擎</strong></h2><p>这是 HDiffPatch 中负责<strong>发现</strong>两个二进制数据块之间差异的核心算法函数。它不关心最终的补丁格式，只专注于一个目标：找到一组最优的匹配数据块（<code>covers</code>），为后续的序列化步骤提供原始“指令”。</p>
+<h3 id="原理与设计思路解析-5"><a href="#原理与设计思路解析-5" class="headerlink" title="原理与设计思路解析"></a><strong>原理与设计思路解析</strong></h3><p><code>get_diff</code> 是一个高度优化、可扩展且复杂的函数，其核心是基于<strong>后缀字符串（Suffix String）<strong>的匹配算法。整个函数可以看作一个可定制的</strong>差异发现流水线 (Pipeline)</strong>。</p>
+<ul>
+<li><p><strong>核心数据结构：后缀字符串 (<code>TSuffixString</code>)</strong></p>
+<ul>
+<li>这是整个差异发现过程的基石。后缀字符串（通常通过后缀数组或类似结构实现）是一种经过预处理的数据结构，它允许在<code>O(logN)</code>或<code>O(1)</code>的时间复杂度内，极快地找到一个字符串（来自新文件）在另一个巨大字符串（旧文件）中的所有匹配项。</li>
+<li><strong>构建成本高昂：</strong> 为旧文件数据构建后缀字符串是一个计算密集且消耗内存的操作。因此，代码设计了一个优化：<code>get_diff</code> 可以接受一个外部传入的、已经构建好的 <code>sstring</code>。这样，在需要将同一个旧文件与多个不同新文件进行比较的场景下，昂贵的后缀字符串构建过程只需执行一次。如果没有传入，函数会自己创建一个临时的 <code>_sstring_default</code>。</li>
+</ul>
+</li>
+<li><p><strong>差异发现流水线 (Pipeline)</strong><br><code>get_diff</code> 的执行流程不是一步到位，而是分为多个阶段，并且在关键阶段提供了<strong>回调钩子 (Hooks)</strong>，通过 <code>listener</code> 接口允许调用者介入和定制算法行为。</p>
+<ol>
+<li><p><strong>阶段一：后缀字符串准备</strong></p>
+<ul>
+<li>检查是否需要自行构建后缀字符串。如果需要，则调用 <code>_sstring_default.resetSuffixString()</code>，此过程支持多线程以加快速度。</li>
+</ul>
+</li>
+<li><p><strong>阶段二：初次匹配搜索 (<code>first_search_and_dispose_cover_MT</code>)</strong></p>
+<ul>
+<li>这是流水线的主工作阶段。它利用构建好的后缀字符串，在“新数据”中滑动，为每个位置在“旧数据”中寻找最佳匹配。</li>
+<li>它会生成一个初步的 <code>covers</code> 列表。这个过程是多线程的（<code>_MT</code>），以充分利用多核CPU。</li>
+</ul>
+</li>
+<li><p><strong>阶段三：(可选) 重新搜索 (<code>research_cover</code> Hook)</strong></p>
+<ul>
+<li>在初次搜索后，代码提供了一个 <code>research_cover</code> 钩子。</li>
+<li>调用者（<code>listener</code>）可以检查初步的 <code>covers</code> 结果，如果觉得不满意（例如，匹配得不够理想或需要满足某些特殊约束），可以要求算法进行<strong>第二次、更精细的搜索</strong>。</li>
+<li>这提供了一个强大的机制，用于根据特定需求（比如 in-place 补丁对 <code>extraSafeSize</code> 的要求）来调整和优化匹配结果。</li>
+</ul>
+</li>
+<li><p><strong>阶段四：(可选) 手动插入 (<code>insert_cover</code> Hook)</strong></p>
+<ul>
+<li>这个钩子甚至允许 <code>listener</code> <strong>手动向 <code>covers</code> 列表中插入自定义的匹配项</strong>。</li>
+<li>这对于处理一些算法难以发现、但基于领域知识可以确定的匹配非常有用。<code>listener</code> 甚至可以修改有效的新旧文件大小，给予了极大的灵活性。</li>
+</ul>
+</li>
+<li><p><strong>阶段五：(可选) 最终整理 (<code>search_cover_finish</code> Hook)</strong></p>
+<ul>
+<li>在所有搜索和修改结束后，这个最后的钩子允许 <code>listener</code> 对最终的 <code>covers</code> 列表进行审查和最终修改，例如移除某些不想要的匹配项。</li>
+</ul>
+</li>
+</ol>
+</li>
+<li><p><strong>健壮性与约束</strong></p>
+<ul>
+<li><strong><code>_limitCoverLenth</code></strong>: 在流水线的多个阶段后，都会调用此函数，确保所有 <code>cover</code> 的长度不超过 <code>maxCoverLen</code> 限制。</li>
+<li><strong><code>assert_covers_safe</code></strong>: 在每次修改 <code>covers</code> 列表后，都会调用这个断言函数。它会检查 <code>covers</code> 列表的内部一致性（如是否有重叠、是否超出边界），是保证算法正确性的重要调试和安全手段。</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码解析-5"><a href="#代码解析-5" class="headerlink" title="代码解析"></a><strong>代码解析</strong></h3><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="type">static</span> <span class="type">void</span> <span class="title">get_diff</span><span class="params">(TDiffData&amp; diff,std::vector&lt;TOldCover&gt;&amp; covers,</span></span></span><br><span class="line"><span class="params"><span class="function">                     <span class="type">int</span> kMinSingleMatchScore,</span></span></span><br><span class="line"><span class="params"><span class="function">                     <span class="type">bool</span> isUseBigCacheMatch,ICoverLinesListener* listener,</span></span></span><br><span class="line"><span class="params"><span class="function">                     <span class="type">const</span> TSuffixString* sstring,<span class="type">size_t</span> threadNum,</span></span></span><br><span class="line"><span class="params"><span class="function">                     <span class="type">bool</span> isCanExtendCover=<span class="literal">true</span>)</span></span>&#123;</span><br><span class="line">    _out_diff_info(<span class="string">&quot;  match covers by suffix string ...\n&quot;</span>); <span class="comment">// 打印日志</span></span><br><span class="line">    <span class="comment">// 判断 cover 结构体是32位还是64位版本。</span></span><br><span class="line">    <span class="type">const</span> <span class="type">bool</span> isCover32=<span class="built_in">sizeof</span>(*covers.<span class="built_in">data</span>())==<span class="built_in">sizeof</span>(hpatch_TCover32);</span><br><span class="line">    <span class="keyword">if</span> (!isCover32)</span><br><span class="line">        <span class="built_in">assert</span>(<span class="built_in">sizeof</span>(*covers.<span class="built_in">data</span>())==<span class="built_in">sizeof</span>(hpatch_TCover));</span><br><span class="line">    <span class="comment">// 通过 listener 获取对单个 cover 长度的限制。</span></span><br><span class="line">    <span class="type">const</span> hpatch_StreamPos_t maxCoverLen=(listener&amp;&amp;listener-&gt;get_limit_cover_length)?</span><br><span class="line">                                            listener-&gt;<span class="built_in">get_limit_cover_length</span>(listener):kDefaultLimitCoverLen;</span><br><span class="line">    &#123; <span class="comment">// 这个花括号限定了 _sstring_default 的生命周期，确保其内存被及时回收。</span></span><br><span class="line">        TSuffixString _sstring_default(isUseBigCacheMatch);</span><br><span class="line">        <span class="comment">// --- 阶段一：后缀字符串准备 ---</span></span><br><span class="line">        <span class="keyword">if</span> (sstring==<span class="number">0</span>)&#123; <span class="comment">// 如果外部没有提供预先构建好的后缀字符串...</span></span><br><span class="line">            _out_diff_info(<span class="string">&quot;    create suffix string ...\n&quot;</span>);</span><br><span class="line">            <span class="comment">// ...则自己构建一个。支持多线程。</span></span><br><span class="line">            _sstring_default.<span class="built_in">resetSuffixString</span>(diff.oldData,diff.oldData_end,threadNum);</span><br><span class="line">            sstring=&amp;_sstring_default; <span class="comment">// 后续使用这个临时的对象。</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// --- 阶段二：初次匹配搜索 ---</span></span><br><span class="line">        _out_diff_info(<span class="string">&quot;    search covers by suffix string ...\n&quot;</span>);</span><br><span class="line">        <span class="comment">// 调用多线程的初次搜索函数，填充 covers 列表。</span></span><br><span class="line">        <span class="built_in">first_search_and_dispose_cover_MT</span>(covers,diff,*sstring,kMinSingleMatchScore,listener,threadNum,isCanExtendCover);</span><br><span class="line">        _limitCoverLenth(covers,maxCoverLen); <span class="comment">// 应用长度限制。</span></span><br><span class="line">        <span class="built_in">assert_covers_safe</span>(covers,diff.newData_end-diff.newData,diff.oldData_end-diff.oldData); <span class="comment">// 检查结果的合法性。</span></span><br><span class="line"></span><br><span class="line">        <span class="comment">// --- 阶段三：(可选) 重新搜索 ---</span></span><br><span class="line">        <span class="comment">// Hook点：如果 listener 存在并请求重新搜索...</span></span><br><span class="line">        <span class="keyword">if</span> (listener&amp;&amp;listener-&gt;search_cover_limit&amp;&amp;</span><br><span class="line">            listener-&gt;<span class="built_in">search_cover_limit</span>(listener,covers.<span class="built_in">data</span>(),covers.<span class="built_in">size</span>(),isCover32))&#123;</span><br><span class="line">            _out_diff_info(<span class="string">&quot;    research covers by limit ...\n&quot;</span>);</span><br><span class="line">            <span class="comment">// 创建一个用于重新搜索的上下文对象。</span></span><br><span class="line">            <span class="function">TDiffResearchCover <span class="title">diffResearchCover</span><span class="params">(diff,covers,*sstring,kMinSingleMatchScore,</span></span></span><br><span class="line"><span class="params"><span class="function">                                    listener-&gt;get_max_match_deep?listener-&gt;get_max_match_deep(listener):kDefaultMaxMatchDeepForLimit,</span></span></span><br><span class="line"><span class="params"><span class="function">                                    isCanExtendCover)</span></span>;</span><br><span class="line">            <span class="comment">// 将控制权交给 listener，由它来驱动重新搜索的过程。</span></span><br><span class="line">            listener-&gt;<span class="built_in">research_cover</span>(listener,&amp;diffResearchCover,covers.<span class="built_in">data</span>(),covers.<span class="built_in">size</span>(),isCover32);</span><br><span class="line">            diffResearchCover.<span class="built_in">researchFinish</span>(); <span class="comment">// 完成重搜。</span></span><br><span class="line">            _limitCoverLenth(covers,maxCoverLen); <span class="comment">// 再次应用限制和检查。</span></span><br><span class="line">            <span class="built_in">assert_covers_safe</span>(covers,diff.newData_end-diff.newData,diff.oldData_end-diff.oldData);</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        sstring=<span class="number">0</span>; <span class="comment">// 解除对临时对象的引用。</span></span><br><span class="line">        _sstring_default.<span class="built_in">clear</span>(); <span class="comment">// 显式释放后缀字符串占用的内存。</span></span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// --- 阶段四：(可选) 手动插入 ---</span></span><br><span class="line">    <span class="comment">// Hook点：如果 listener 存在并实现了 insert_cover...</span></span><br><span class="line">    <span class="keyword">if</span> (listener&amp;&amp;listener-&gt;insert_cover)&#123;</span><br><span class="line">        <span class="function">TDiffInsertCover <span class="title">diffInsertCover</span><span class="params">(covers)</span></span>;</span><br><span class="line">        hpatch_StreamPos_t newDataSize=(<span class="type">size_t</span>)(diff.newData_end-diff.newData);</span><br><span class="line">        hpatch_StreamPos_t oldDataSize=(<span class="type">size_t</span>)(diff.oldData_end-diff.oldData);</span><br><span class="line">        <span class="comment">// listener 可以手动插入 covers，甚至修改文件大小。</span></span><br><span class="line">        listener-&gt;<span class="built_in">insert_cover</span>(listener,&amp;diffInsertCover,covers.<span class="built_in">data</span>(),covers.<span class="built_in">size</span>(),isCover32,</span><br><span class="line">                               &amp;newDataSize,&amp;oldDataSize);</span><br><span class="line">        diff.newData_end=diff.newData+(<span class="type">size_t</span>)newDataSize;</span><br><span class="line">        diff.oldData_end=diff.oldData+(<span class="type">size_t</span>)oldDataSize;</span><br><span class="line">        _limitCoverLenth(covers,maxCoverLen);</span><br><span class="line">        <span class="built_in">assert_covers_safe</span>(covers,diff.newData_end-diff.newData,diff.oldData_end-diff.oldData);</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// --- 阶段五：(可选) 最终整理 ---</span></span><br><span class="line">    <span class="comment">// Hook点：如果 listener 存在并实现了 search_cover_finish...</span></span><br><span class="line">    <span class="keyword">if</span> (listener&amp;&amp;listener-&gt;search_cover_finish)&#123;</span><br><span class="line">        hpatch_StreamPos_t newDataSize=(<span class="type">size_t</span>)(diff.newData_end-diff.newData);</span><br><span class="line">        hpatch_StreamPos_t oldDataSize=(<span class="type">size_t</span>)(diff.oldData_end-diff.oldData);</span><br><span class="line">        <span class="type">size_t</span> newCoverCount=covers.<span class="built_in">size</span>();</span><br><span class="line">        <span class="comment">// listener 可以对最终的 cover 列表进行过滤或截断。</span></span><br><span class="line">        listener-&gt;<span class="built_in">search_cover_finish</span>(listener,covers.<span class="built_in">data</span>(),&amp;newCoverCount,isCover32,</span><br><span class="line">                                      &amp;newDataSize,&amp;oldDataSize);</span><br><span class="line">        <span class="built_in">check</span>(newCoverCount&lt;=covers.<span class="built_in">size</span>());</span><br><span class="line">        covers.<span class="built_in">resize</span>(newCoverCount);</span><br><span class="line">        diff.newData_end=diff.newData+(<span class="type">size_t</span>)newDataSize;</span><br><span class="line">        diff.oldData_end=diff.oldData+(<span class="type">size_t</span>)oldDataSize;</span><br><span class="line">        _limitCoverLenth(covers,maxCoverLen);</span><br><span class="line">        <span class="built_in">assert_covers_safe</span>(covers,diff.newData_end-diff.newData,diff.oldData_end-diff.oldData);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.github.io/posts/fd53b379/">https://wdfk-prog.github.io/posts/fd53b379/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.github.io" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/hpatch/">hpatch</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/08.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/b01c5be0/" title="hpatch_lite"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">hpatch_lite</div></div><div class="info-2"><div class="info-item-1">[TOC] 学习笔记HPatchLite\HDiffPatch\libHDiffPatch\HPatchLite\hpatch_lite.cHptach 算法1. Hptach 的核心：加法差分 (Additive Diff)这种方法可以被称为加法差分或增量差分。  核心公式： NewData = OldData + DiffData 反向公式： DiffData = NewData - OldData (在生成补丁时计算)  工作流程图： 1234567891011121314151617181920212223242526272829303132                  +----------------------+生成补丁时 (hpatch_diff) |                      |                  |   新文件 (New File)  |                  +----------------------+                              | (减法)                ...</div></div></div></a><a class="pagination-related" href="/posts/74360fdb/" title="SuffixString"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">SuffixString</div></div><div class="info-2"><div class="info-item-1">[TOC] HDiffPatch\libHDiffPatch\HDiff\private_diff\suffix_string.cpp后缀数组后缀 (Suffix)：一个字符串的后缀是指从字符串的某个位置开始到字符串末尾的所有字符组成的子串。例如，对于字符串 banana，它的所有后缀是：  banana (从位置0开始) anana  (从位置1开始) nana   (从位置2开始) ana    (从位置3开始) na     (从位置4开始) a      (从位置5开始)  后缀数组 (Suffix Array)：后缀数组不是存储这些后缀字符串本身，而是存储这些后缀的起始位置索引。最关键的一步是，这些索引是按照它们所代表的后缀字符串的**字典序（字母顺序）**进行排序的。 我们来为 banana 构建一个后缀数组：  列出所有后缀及其起始位置：    起始位置 后缀    0 banana   1 anana   2 nana   3 ana   4 na   5 a    按字典序对后缀进行排序：  a ana anana banana na nana   构建后缀数组...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/74360fdb/" title="SuffixString"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">SuffixString</div></div><div class="info-2"><div class="info-item-1">[TOC] HDiffPatch\libHDiffPatch\HDiff\private_diff\suffix_string.cpp后缀数组后缀 (Suffix)：一个字符串的后缀是指从字符串的某个位置开始到字符串末尾的所有字符组成的子串。例如，对于字符串 banana，它的所有后缀是：  banana (从位置0开始) anana  (从位置1开始) nana   (从位置2开始) ana    (从位置3开始) na     (从位置4开始) a      (从位置5开始)  后缀数组 (Suffix Array)：后缀数组不是存储这些后缀字符串本身，而是存储这些后缀的起始位置索引。最关键的一步是，这些索引是按照它们所代表的后缀字符串的**字典序（字母顺序）**进行排序的。 我们来为 banana 构建一个后缀数组：  列出所有后缀及其起始位置：    起始位置 后缀    0 banana   1 anana   2 nana   3 ana   4 na   5 a    按字典序对后缀进行排序：  a ana anana banana na nana   构建后缀数组...</div></div></div></a><a class="pagination-related" href="/posts/80aebecf/" title="hptach差分算法--学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">hptach差分算法--学习笔记</div></div><div class="info-2"><div class="info-item-1">hptach差分算法–学习笔记  libdivsufsort   1.1. divsufsort.md 1.2. sssort.md 1.3. trsort.md   2. hdiffpatch.md 3. hpatch_lite.md 4. readme.md 5. SuffixString.md  </div></div></div></a><a class="pagination-related" href="/posts/b01c5be0/" title="hpatch_lite"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">hpatch_lite</div></div><div class="info-2"><div class="info-item-1">[TOC] 学习笔记HPatchLite\HDiffPatch\libHDiffPatch\HPatchLite\hpatch_lite.cHptach 算法1. Hptach 的核心：加法差分 (Additive Diff)这种方法可以被称为加法差分或增量差分。  核心公式： NewData = OldData + DiffData 反向公式： DiffData = NewData - OldData (在生成补丁时计算)  工作流程图： 1234567891011121314151617181920212223242526272829303132                  +----------------------+生成补丁时 (hpatch_diff) |                      |                  |   新文件 (New File)  |                  +----------------------+                              | (减法)                ...</div></div></div></a><a class="pagination-related" href="/posts/d20370e5/" title="trsort"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">trsort</div></div><div class="info-2"><div class="info-item-1">[TOC] trsort Tandem Repeat Sort (串联重复排序)trsort 是 divsufsort 中一个专门用于对整数数组进行排序的、高度优化的算法。在 sort_typeBstar 的流程中，当计算出所有 B* 后缀的排名 (rank) 并将它们存入 ISA 数组后，trsort 就被调用来对这个排名数组进行最终的排序。 原理与设计思路解析trsort 的名称意为“串联重复排序”，这暗示了它特别擅长处理包含大量连续重复数值（即串联重复）的整数数组。这正是 B* 后缀排名数组的典型特征：许多不同的 B* 后缀在经过一定深度的比较后，会被赋予相同的排名。 trsort 本身是一个多关键字内省排序 (Multikey Introsort) 的变体，但它的实现方式与 sssort 完全不同，它采用了一种迭代式的、处理“未排序组”的策略。  核心策略：迭代式细化与预算控制算法通过一个主 for 循环，不断地对 ISA 数组进行多轮 (pass) 排序。每一轮都尝试解决上一轮留下的、还未完全排序的“相等组”。  分组识别:  do { ... } while(firs...</div></div></div></a><a class="pagination-related" href="/posts/61d60ff1/" title="DivSufSort"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">DivSufSort</div></div><div class="info-2"><div class="info-item-1">[TOC] DivSufSort中的后缀类型：A, B, 和 B* 详解 简单来说，这是一种对所有后缀进行分类的巧妙方法，其最终目的是找出并只排序一个规模小得多的“代表性”后缀子集，然后再利用这个排好序的子集，通过廉价的线性扫描来“诱导”出所有其他后缀的正确顺序。   1. Type A 和 Type B 后缀 (基础分类)算法首先将所有后缀（除了最后一个）分为两大类：Type A 和 Type B。分类的依据是该后缀与它紧邻的下一个后缀的字典序大小关系。 我们用 S[i...] 代表从位置 i 开始的后缀。  Type B 后缀 (B for “Bigger-comes-after”): 如果后缀 S[i...] 小于 后缀 S[i+1...]，那么后缀 i 就是 Type B。  判断捷径: 如果 T[i] &lt; T[i+1]，那么后缀 i 一定是 Type B。 如果 T[i] == T[i+1]，那么后缀 i 的类型与后缀 i+1 的类型相同。     Type A 后缀 (A for “Smaller-comes-after”): 如果后缀 S[i...] 大于 后...</div></div></div></a><a class="pagination-related" href="/posts/f26669ed/" title="sssort"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">sssort</div></div><div class="info-2"><div class="info-item-1">[toc] sssort 递归核心：优化的子串排序算法这是 divsufsort 算法的递归心脏，也是执行实际比较和排序工作的函数。当 sort_typeBstar 将 B* 后缀按照前两个字符分入不同的“桶”后，sssort (Substring Sort) 就被调用来对每一个桶内部的后缀进行完全、正确的排序。 原理与设计思路解析sssort 不是一个简单的排序函数，它是一个混合排序 (Hybrid Sort) 算法，结合了多种排序策略的优点，以在不同规模的数据上都达到最佳性能。它主要围绕一种优化的归并排序变体来实现。  核心策略：非递归的分块归并排序 (Non-Recursive Block Merge Sort)标准的归并排序是递归的，这会带来函数调用的开销。sssort 采用了一种迭代式、自底向上的实现方式，避免了深层递归。  分块 (Blocking):  算法首先将需要排序的区间 [first, last) 分成大小为 SS_BLOCKSIZE 的小数据块。SS_BLOCKSIZE 是一个编译时常量，通常是一个经过优化的值（比如1024）。 对每一个小数据块内部，它使...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">394</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">46</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">50</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://blog.csdn.net/qq_39665253" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#hdiffi-cpp"><span class="toc-number">1.</span> <span class="toc-text">hdiffi.cpp</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#hdiffi-hdiffi-in-mem-%E5%86%85%E5%AD%98%E6%A8%A1%E5%BC%8F%E4%B8%8B%E7%9A%84%E8%A1%A5%E4%B8%81%E7%94%9F%E6%88%90"><span class="toc-number">1.1.</span> <span class="toc-text">hdiffi &amp; hdiffi_in_mem 内存模式下的补丁生成</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF%E8%A7%A3%E6%9E%90"><span class="toc-number">1.1.1.</span> <span class="toc-text">原理与设计思路解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90"><span class="toc-number">1.1.2.</span> <span class="toc-text">代码解析</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#HDiffPatch-libHDiffPatch-HDiff-diff-cpp"><span class="toc-number">2.</span> <span class="toc-text">HDiffPatch\libHDiffPatch\HDiff\diff.cpp</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#getBestMatch-%E5%90%8E%E7%BC%80%E6%95%B0%E7%BB%84%E9%82%BB%E5%9F%9F%E6%90%9C%E7%B4%A2"><span class="toc-number">2.1.</span> <span class="toc-text">getBestMatch 后缀数组邻域搜索</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF%E8%A7%A3%E6%9E%90-1"><span class="toc-number">2.1.1.</span> <span class="toc-text">原理与设计思路解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90-1"><span class="toc-number">2.1.2.</span> <span class="toc-text">代码解析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#search-cover-%E8%B4%AA%E5%BF%83%E7%AE%97%E6%B3%95%E9%A9%B1%E5%8A%A8%E7%9A%84%E5%8E%9F%E5%A7%8B%E5%8C%B9%E9%85%8D%E6%90%9C%E7%B4%A2"><span class="toc-number">2.2.</span> <span class="toc-text">_search_cover 贪心算法驱动的原始匹配搜索</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF%E8%A7%A3%E6%9E%90-2"><span class="toc-number">2.2.1.</span> <span class="toc-text">原理与设计思路解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90-2"><span class="toc-number">2.2.2.</span> <span class="toc-text">代码解析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#search-and-dispose-cover-%E4%B8%A4%E9%98%B6%E6%AE%B5%E5%8C%B9%E9%85%8D%EF%BC%9A%E5%8E%9F%E5%A7%8B%E6%90%9C%E7%B4%A2%E4%B8%8E%E6%9C%80%E4%BC%98%E9%80%89%E6%8B%A9"><span class="toc-number">2.3.</span> <span class="toc-text">search_and_dispose_cover 两阶段匹配：原始搜索与最优选择</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF%E8%A7%A3%E6%9E%90-3"><span class="toc-number">2.3.1.</span> <span class="toc-text">原理与设计思路解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90-3"><span class="toc-number">2.3.2.</span> <span class="toc-text">代码解析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#first-search-and-dispose-cover-MT-%E5%A4%9A%E7%BA%BF%E7%A8%8B%E5%B9%B6%E8%A1%8C%E5%B7%AE%E5%BC%82%E5%8F%91%E7%8E%B0"><span class="toc-number">2.4.</span> <span class="toc-text">first_search_and_dispose_cover_MT 多线程并行差异发现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF%E8%A7%A3%E6%9E%90-4"><span class="toc-number">2.4.1.</span> <span class="toc-text">原理与设计思路解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90-4"><span class="toc-number">2.4.2.</span> <span class="toc-text">代码解析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#get-diff-%E6%A0%B8%E5%BF%83%E5%B7%AE%E5%BC%82%E5%8F%91%E7%8E%B0%E5%BC%95%E6%93%8E"><span class="toc-number">2.5.</span> <span class="toc-text">get_diff 核心差异发现引擎</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1%E6%80%9D%E8%B7%AF%E8%A7%A3%E6%9E%90-5"><span class="toc-number">2.5.1.</span> <span class="toc-text">原理与设计思路解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90-5"><span class="toc-number">2.5.2.</span> <span class="toc-text">代码解析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/76a6f6c2/" title="8 Introduction to Class B"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="8 Introduction to Class B"/></a><div class="content"><a class="title" href="/posts/76a6f6c2/" title="8 Introduction to Class B">8 Introduction to Class B</a><time datetime="2025-10-03T09:23:29.726Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/fa99c9bd/" title="fatfs"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fatfs"/></a><div class="content"><a class="title" href="/posts/fa99c9bd/" title="fatfs">fatfs</a><time datetime="2025-10-03T09:23:29.709Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/f16d9879/" title="SUMMARY"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="SUMMARY"/></a><div class="content"><a class="title" href="/posts/f16d9879/" title="SUMMARY">SUMMARY</a><time datetime="2025-10-03T09:23:29.705Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/1f4f0d72/" title="CLASS C – CONTINUOUSLY LISTENING"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="CLASS C – CONTINUOUSLY LISTENING"/></a><div class="content"><a class="title" href="/posts/1f4f0d72/" title="CLASS C – CONTINUOUSLY LISTENING">CLASS C – CONTINUOUSLY LISTENING</a><time datetime="2025-10-03T09:23:29.701Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/118ec530/" title="CLASS B - BEACON"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="CLASS B - BEACON"/></a><div class="content"><a class="title" href="/posts/118ec530/" title="CLASS B - BEACON">CLASS B - BEACON</a><time datetime="2025-10-03T09:23:29.698Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/08.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'e0cee352fe77b069a1fe9f0deb1a4448'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div></body></html>
