@@ -1,0 +1,1397 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>swap | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC]  mm&#x2F;swap.c 交换机制(Swap Mechanism) 物理内存的虚拟扩展历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其实现的交换（Swap）机制，是为了解决一个自计算机诞生以来就存在的根本性限制：物理内存（RAM）的大小是有限的。  运行大于物理内存的程序：在早期，如果一个程序需要比机器拥有的RAM更多的内存，它根本无法运行。交换机制通过将内存">
+<meta property="og:type" content="article">
+<meta property="og:title" content="swap">
+<meta property="og:url" content="https://wdfk-prog.space/posts/25938561/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC]  mm&#x2F;swap.c 交换机制(Swap Mechanism) 物理内存的虚拟扩展历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其实现的交换（Swap）机制，是为了解决一个自计算机诞生以来就存在的根本性限制：物理内存（RAM）的大小是有限的。  运行大于物理内存的程序：在早期，如果一个程序需要比机器拥有的RAM更多的内存，它根本无法运行。交换机制通过将内存">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/07.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-07T01:49:40.252Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="mm">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/07.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "swap",
+  "url": "https://wdfk-prog.space/posts/25938561/",
+  "image": "https://wdfk-prog.space/images/covers/07.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-07T01:49:40.252Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/25938561/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'swap',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/07.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">swap</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">swap<a class="post-edit-link" href="null_posts/linux/mm/swap.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-07T01:49:40.252Z" title="更新于 2025-10-07 09:49:40">2025-10-07</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/mm/">mm</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">9.7k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>31分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/25938561/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-07 09:49:40&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<p>[TOC]</p>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/b922e13cb04a4d6da1a387d267a706e1.png" alt="在这里插入图片描述"></p>
+<h1 id="mm-swap-c-交换机制-Swap-Mechanism-物理内存的虚拟扩展"><a href="#mm-swap-c-交换机制-Swap-Mechanism-物理内存的虚拟扩展" class="headerlink" title="mm&#x2F;swap.c 交换机制(Swap Mechanism) 物理内存的虚拟扩展"></a>mm&#x2F;swap.c 交换机制(Swap Mechanism) 物理内存的虚拟扩展</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p>这项技术以及其实现的交换（Swap）机制，是为了解决一个自计算机诞生以来就存在的根本性限制：<strong>物理内存（RAM）的大小是有限的</strong>。</p>
+<ul>
+<li><strong>运行大于物理内存的程序</strong>：在早期，如果一个程序需要比机器拥有的RAM更多的内存，它根本无法运行。交换机制通过将内存中不常用的部分临时存放到磁盘上，从而“欺骗”程序，让它以为自己拥有一个远大于实际物理内存的地址空间。这使得运行大型应用程序成为可能。</li>
+<li><strong>同时运行更多的程序</strong>：即使每个程序都能装入内存，但同时运行多个程序可能会迅速耗尽RAM。交换机制允许内核将处于空闲或等待状态的进程的内存换出到磁盘，从而为当前活动的进程腾出宝贵的物理内存，提高系统的并发能力和整体吞吐量。</li>
+<li><strong>系统休眠（Hibernation）</strong>：为了实现休眠到磁盘（Suspend-to-Disk）功能，内核需要一个地方来存储整个系统内存的快照。交换空间（Swap Space）被自然地用作这个存储区域。</li>
+</ul>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p>Linux的交换机制从早期UNIX继承了基本思想，并随着内核的演进不断完善。</p>
+<ul>
+<li><strong>从交换进程到交换页面</strong>：最早期的系统采用“交换”（Swapping），即换出整个进程的内存映像。现代Linux采用的是“分页”（Paging），它以固定大小的内存页（通常是4KB）为单位进行换出换入。分页比交换更精细、更高效，因为只需移动那些当前不活跃的页面，而不是整个进程。</li>
+<li><strong>支持交换文件（Swap Files）</strong>：最初，交换空间必须是一个独立的磁盘分区（Swap Partition）。后来内核增加了对使用普通文件作为交换空间的支持。这极大地提高了灵活性，因为管理员可以在不重新分区磁盘的情况下，动态地添加、删除或调整交换空间的大小。</li>
+<li><strong>支持多交换区与优先级</strong>：内核允许多个交换分区和交换文件同时存在，并且可以为它们指定不同的优先级。这允许管理员将交换操作优先导向更快的磁盘。</li>
+<li><strong>与内存控制组（cgroups）集成</strong>：在容器化时代，<code>memcg</code>（Memory Cgroup）的出现使得交换机制可以被精细地控制在每个容器的级别，实现了容器的交换空间隔离和限制。</li>
+<li><strong>交换机制的优化（zswap&#x2F;zram）</strong>：虽然不是<code>mm/swap.c</code>本身的一部分，但像zswap这样的技术是交换机制的重要演进。zswap在将页面写入磁盘之前，先在内存中对其进行压缩。这相当于一个压缩了的、基于RAM的写回缓存，极大地降低了实际发生慢速磁盘I&#x2F;O的频率，显著提升了交换性能。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p>交换机制是Linux内存管理中一个极其稳定和基础的部分。</p>
+<ul>
+<li><strong>社区活跃度</strong>：其核心代码非常成熟。社区的开发活动主要集中在性能优化、与cgroup和NUMA等现代内核特性的集成，以及改进像zswap这样的外围支持技术。</li>
+<li><strong>主流应用</strong>：<ul>
+<li><strong>桌面和服务器</strong>：尽管现代系统拥有大量RAM，但交换空间仍然被普遍启用，作为防止系统因内存耗尽而崩溃的<strong>安全网</strong>，并支持休眠功能。</li>
+<li><strong>低内存设备</strong>：在嵌入式系统或内存较小的云服务器上，交换机制对于系统的正常运行至关重要。</li>
+<li><strong>内存超售（Overcommit）环境</strong>：在虚拟化和容器环境中，为了提高物理服务器的利用率，常常会进行内存超售（即分配给所有虚拟机的内存总和大于物理内存）。在这种场景下，高效的交换机制是必不可少的。</li>
+</ul>
+</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p>交换机制的核心是在**物理内存（RAM）<strong>和</strong>交换空间（磁盘）<strong>之间移动内存页，并通过</strong>页表（Page Table）**来对这个过程进行虚拟化。</p>
+<p><strong>换出（Swap-out）过程：</strong></p>
+<ol>
+<li><strong>触发</strong>：当系统内存不足时，内核的页面回收逻辑（由<code>kswapd</code>后台线程或直接回收触发，主要实现在<code>mm/vmscan.c</code>）被激活。</li>
+<li><strong>选择牺牲页（Victim Selection）</strong>：页面回收算法会选择一个合适的页面进行换出。它优先选择<strong>匿名页</strong>（Anonymous Page），即那些不与任何文件关联的内存，如进程的堆（heap）和栈（stack）。</li>
+<li><strong>分配交换槽（Swap Slot）</strong>：内核在已配置的交换空间中找到一个空闲的槽位。</li>
+<li><strong>写入磁盘</strong>：内核将牺牲页的内容异步地写入到分配好的磁盘交换槽中。</li>
+<li><strong>修改页表项（PTE）</strong>：一旦写入完成，内核会修改该内存页对应的进程页表项（PTE）。它会清除PTE中的物理页帧号，并将“存在位”（Present Bit）清零，然后将描述交换区位置的**交换条目（<code>swp_entry_t</code>）**存入PTE中。</li>
+<li><strong>释放物理页</strong>：最后，这个物理页面被释放，可以被系统用于其他目的。</li>
+</ol>
+<p><strong>换入（Swap-in）过程：</strong></p>
+<ol>
+<li><strong>触发缺页异常（Page Fault）</strong>：当进程试图访问一个已经被换出的内存地址时，CPU会发现其PTE的“存在位”为0，从而触发一个缺页异常。</li>
+<li><strong>异常处理</strong>：内核的缺页异常处理函数接管控制。它检查PTE的内容，发现里面存储的不是0，而是一个有效的交换条目。</li>
+<li><strong>从磁盘读取</strong>：内核根据交换条目中的信息，在交换空间中找到对应的页面数据。</li>
+<li><strong>分配物理页</strong>：内核分配一个新的空闲物理内存页。</li>
+<li><strong>读入数据</strong>：内核将数据从磁盘读入到这个新分配的物理页中。</li>
+<li><strong>更新页表</strong>：内核更新PTE，使其指向新的物理页，并设置“存在位”。</li>
+<li><strong>恢复执行</strong>：缺页异常处理完毕，进程从被中断的指令处恢复执行，此时它对内存的访问可以正常进行了。</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>虚拟内存扩展</strong>：以较低的成本（磁盘空间远比RAM便宜）极大地扩展了系统的可用内存。</li>
+<li><strong>提高系统稳定性</strong>：在内存压力下，通过换出不活跃页面，可以避免因内存不足而触发OOM Killer（Out-of-Memory Killer），从而保护重要进程不被杀死。</li>
+<li><strong>支持休眠</strong>：为系统休眠到磁盘功能提供了基础。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>性能悬崖（Performance Cliff）</strong>：最大的劣势是性能。磁盘的访问速度比RAM慢几个数量级。一旦系统开始频繁地进行交换（称为“颠簸”或“Thrashing”），系统会把绝大部分时间花在等待I&#x2F;O上，导致系统响应变得极度缓慢，几乎无法使用。</li>
+<li><strong>SSD寿命</strong>：在固态硬盘（SSD）上进行大量、持续的交换写入，理论上会消耗其写入寿命（Write Endurance）。不过，现代SSD的寿命已经大大提高，这在大多数场景下已不是主要问题。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p>交换机制本身不是一个追求性能的“首选方案”，而是一个<strong>保障系统稳定运行的、必要的底层机制</strong>。</p>
+<ul>
+<li><strong>内存需求波动的桌面&#x2F;服务器</strong>：一个Web服务器在白天负载很高，晚上负载很低。在低负载时，许多服务进程的内存可能会被换出，为文件缓存（Page Cache）腾出更多空间，从而在下一次负载高峰到来时，能更快地服务文件请求。</li>
+<li><strong>内存受限的环境</strong>：在只有1GB内存的虚拟机或嵌入式设备上运行一个需要1.2GB内存峰值的应用，如果没有交换机制，这个应用根本无法启动。</li>
+<li><strong>需要休眠功能的笔记本电脑</strong>：休眠功能依赖于将内存内容写入交换区。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>硬实时系统</strong>：交换过程引入的延迟是不可预测且巨大的，会彻底破坏实时系统的时间确定性要求。</li>
+<li><strong>高性能计算（HPC）&#x2F;内存数据库</strong>：对于这类应用，所有数据都应常驻内存。任何交换操作都会导致灾难性的性能下降。这些应用通常会使用<code>mlock()</code>系统调用将自己的内存锁定在RAM中，防止被换出。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><p><strong>对比一：交换（Swapping Anonymous Pages） vs. 回写（Writing Back Dirty File Pages）</strong></p>
+<p>这两者都是在内存压力下将内存页写入磁盘，但目的和目标完全不同。</p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">交换 (Swap)</th>
+<th align="left">页面缓存回写 (Page Cache Write-back)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>处理对象</strong></td>
+<td align="left"><strong>匿名内存页（Anonymous Pages）</strong>，如进程的堆、栈。</td>
+<td align="left"><strong>与文件关联的内存页（File-backed Pages）</strong>，即Page Cache。</td>
+</tr>
+<tr>
+<td align="left"><strong>写入目标</strong></td>
+<td align="left"><strong>交换空间（Swap Space）</strong>，一个专用的分区或文件。</td>
+<td align="left"><strong>文件本身</strong>，在原始的文件系统中。</td>
+</tr>
+<tr>
+<td align="left"><strong>目的</strong></td>
+<td align="left">为了<strong>临时腾出物理内存</strong>，这些数据没有其他“家”。</td>
+<td align="left">为了<strong>持久化数据</strong>，确保对文件的修改被保存。</td>
+</tr>
+<tr>
+<td align="left"><strong>回收逻辑</strong></td>
+<td align="left">当一个匿名页被换出后，其物理页可以被立即释放。</td>
+<td align="left">当一个“脏”的文件页被写回磁盘后，它就变成了“干净”的页。如果内存紧张，这个干净的页可以被直接丢弃（因为可以从文件重新读回），而不需要写入任何地方。</td>
+</tr>
+</tbody></table>
+<p><strong>对比二：传统交换 vs. zswap</strong></p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">传统交换 (Traditional Swap)</th>
+<th align="left">zswap</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>工作模式</strong></td>
+<td align="left">直接将内存页写入到<strong>磁盘</strong>上的交换设备。</td>
+<td align="left">充当一个<strong>写回缓存（Write-back Cache）</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>工作流程</strong></td>
+<td align="left">内存 -&gt; 磁盘</td>
+<td align="left">内存 -&gt; <strong>压缩</strong> -&gt; zswap内存池 -&gt; （如果池满或页面变冷）-&gt; 解压 -&gt; 磁盘</td>
+</tr>
+<tr>
+<td align="left"><strong>性能</strong></td>
+<td align="left"><strong>慢</strong>。受限于磁盘I&#x2F;O速度。</td>
+<td align="left"><strong>快得多</strong>。大部分交换操作在RAM中完成（压缩&#x2F;解压），避免了磁盘I&#x2F;O。</td>
+</tr>
+<tr>
+<td align="left"><strong>资源消耗</strong></td>
+<td align="left">消耗磁盘I&#x2F;O和磁盘空间。</td>
+<td align="left">消耗<strong>CPU周期</strong>（用于压缩&#x2F;解压）和<strong>部分RAM</strong>（用于存储压缩后的页面）。</td>
+</tr>
+<tr>
+<td align="left"><strong>关系</strong></td>
+<td align="left">zswap<strong>不是</strong>交换的替代品，而是其<strong>增强</strong>。它仍然需要一个底层的传统交换设备作为最终的存储。</td>
+<td align="left"></td>
+</tr>
+</tbody></table>
+<h2 id="Folio-Final-Destructor-记忆页面的最后仪式"><a href="#Folio-Final-Destructor-记忆页面的最后仪式" class="headerlink" title="Folio Final Destructor: 记忆页面的最后仪式"></a>Folio Final Destructor: 记忆页面的最后仪式</h2><p>本代码片段定义了 <code>__folio_put</code> 函数，它是Linux内核内存管理中一个 folio（代表一个或多个连续物理页）生命周期的<strong>终点</strong>。这个函数<strong>不是</strong>简单地递减引用计数，而是在 folio 的引用计数<strong>已经降为零时</strong>，由 <code>folio_put</code> 宏调用的<strong>最终清理和释放函数</strong>。其核心功能是撤销 folio 分配和使用过程中附加的所有状态（如页缓存、cgroup记账等），并最终将 folio所占用的物理内存返还给伙伴系统（buddy system）分配器，使其能够被重新使用。</p>
+<h3 id="实现原理分析"><a href="#实现原理分析" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>__folio_put</code> 的执行流程是一个精确的、逆向的资源回收过程。它必须清理掉 folio 可能关联的所有子系统，然后才能释放物理内存。</p>
+<ol>
+<li><p><strong>处理特殊内存类型 (Early Exits)</strong>:</p>
+<ul>
+<li><code>if (unlikely(folio_is_zone_device(folio)))</code>: 首先检查 folio 是否属于特殊的 “device” 内存区域，例如持久化内存（PMEM）或GPU显存。这类内存有自己独立的分配器和释放逻辑，因此会调用 <code>free_zone_device_folio</code> 并提前返回。</li>
+<li><code>if (folio_test_hugetlb(folio))</code>: 接着检查 folio 是否属于 HugeTLB 页。HugeTLB 页由一个独立的、预分配的池进行管理，有自己的释放函数 <code>free_huge_folio</code>。</li>
+<li><strong>对于普通内存，这两个条件都为假。</strong></li>
+</ul>
+</li>
+<li><p><strong>从页缓存解绑 (<code>page_cache_release</code>)</strong>:</p>
+<ul>
+<li>这是一个关键步骤。当一个 folio 被用作页缓存时，它会被关联到一个 <code>inode</code> 的 <code>address_space</code> 上。<code>page_cache_release</code> 会执行必要的清理，例如，递减 <code>address_space</code> 的引用计数。这是确保当一个文件的所有页缓存都被释放后，其 <code>address_space</code> 也能被正确回收的关键。</li>
+</ul>
+</li>
+<li><p><strong>清理延迟拆分 (<code>folio_unqueue_deferred_split</code>)</strong>:</p>
+<ul>
+<li>为了性能，当内核需要将一个大的folio（例如16KB）拆分成小的基页（4KB）时，这个拆分操作可能会被<strong>延迟</strong>执行。这个 folio 会被放进一个“待拆分”队列。<code>__folio_put</code> 在这里检查该 folio 是否还在这个队列中，如果是，就将其移除，因为既然整个 folio 都要被释放了，再执行拆分就毫无意义了。</li>
+</ul>
+</li>
+<li><p><strong>Cgroup 内存记账返还 (<code>mem_cgroup_uncharge</code>)</strong>:</p>
+<ul>
+<li>如果内核启用了内存控制组（cgroups），那么当一个 folio 被分配时，它的内存使用量会被“记账”（charge）到分配它的那个cgroup上。<code>mem_cgroup_uncharge</code> 执行相反的操作：它将这个 folio 的大小从其所属 cgroup 的内存使用量中减去。这是实现容器内存限制和隔离的基础。</li>
+</ul>
+</li>
+<li><p><strong>返还物理内存 (<code>free_frozen_pages</code>)</strong>:</p>
+<ul>
+<li>这是整个流程的最后一步，也是最根本的一步。<code>free_frozen_pages</code> 是伙伴系统分配器的核心API之一。</li>
+<li>它接收 folio 对应的 <code>struct page</code> 和 folio 的阶数（<code>folio_order</code>，即 <code>log2(页面数量)</code>）。</li>
+<li>它会将这个（可能由多个连续页面组成的）物理内存块，返还到伙伴系统中对应大小的空闲链表上，使其可供系统下一次内存分配使用。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析"><a href="#代码分析" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// __folio_put: 当folio引用计数降为0时，执行的最终清理函数。</span></span><br><span class="line"><span class="type">void</span> __folio_put(<span class="keyword">struct</span> folio *folio)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 检查是否为特殊的设备内存。在STM32H750上，此条件为false。</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(folio_is_zone_device(folio))) &#123;</span><br><span class="line">		free_zone_device_folio(folio);</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// 检查是否为HugeTLB页。在STM32H750上，此条件为false。</span></span><br><span class="line">	<span class="keyword">if</span> (folio_test_hugetlb(folio)) &#123;</span><br><span class="line">		free_huge_folio(folio);</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 步骤1: 从页缓存子系统解绑，处理address_space等资源的引用计数。</span></span><br><span class="line">	page_cache_release(folio);</span><br><span class="line">	<span class="comment">// 步骤2: 如果folio在延迟拆分队列中，将其移除。</span></span><br><span class="line">	folio_unqueue_deferred_split(folio);</span><br><span class="line">	<span class="comment">// 步骤3: 从内存控制组返还内存记账。</span></span><br><span class="line">	<span class="comment">// (如果CONFIG_MEMCG未定义，此函数为空操作)。</span></span><br><span class="line">	mem_cgroup_uncharge(folio);</span><br><span class="line">	<span class="comment">// 步骤4: 将folio代表的物理内存返还给伙伴系统分配器。</span></span><br><span class="line">	<span class="comment">// folio_order() 告诉分配器要释放的内存块的大小。</span></span><br><span class="line">	free_frozen_pages(&amp;folio-&gt;page, folio_order(folio));</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 导出符号，供内核其他部分（如slab分配器）调用。</span></span><br><span class="line">EXPORT_SYMBOL(__folio_put);</span><br></pre></td></tr></table></figure>
+
+<h2 id="Per-CPU-LRU-Batching-Amortizing-Lock-Overhead-for-High-Performance-Memory-Management"><a href="#Per-CPU-LRU-Batching-Amortizing-Lock-Overhead-for-High-Performance-Memory-Management" class="headerlink" title="Per-CPU LRU Batching: Amortizing Lock Overhead for High-Performance Memory Management"></a>Per-CPU LRU Batching: Amortizing Lock Overhead for High-Performance Memory Management</h2><p>本代码片段揭示了Linux内存管理子系统中一个核心的性能优化机制：<strong>per-CPU页&#x2F;folio批处理（batching）</strong>。其主要功能是避免在每次需要将一个页面（folio）添加到LRU（Least Recently Used）链表时都去竞争一个全局的、高争用的锁。取而代之的是，内核将这些LRU操作请求暂存在一个<strong>当前CPU私有的、无锁的批处理队列</strong>中。<code>lru_add_drain_all</code>函数的作用就是**强制处理（drain）**这些per-CPU队列，将所有暂存的页面一次性地提交到全局LRU链表中。</p>
+<h3 id="实现原理分析-1"><a href="#实现原理分析-1" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>这个机制是典型的用空间换时间、分摊锁开销的优化策略。</p>
+<ol>
+<li><p><strong>Per-CPU数据结构 (<code>cpu_fbatches</code>)</strong>:</p>
+<ul>
+<li>内核为每个CPU核心都定义了一个<code>cpu_fbatches</code>结构体。这意味着每个CPU都有自己独立的批处理队列（<code>lru_add</code>, <code>lru_deactivate</code>等）。</li>
+<li><strong>优点</strong>: 当一个CPU上的代码需要将一个页面加入LRU时，它只需访问自己私有的<code>cpu_fbatches</code>结构。因为没有其他CPU会访问这个结构，所以<strong>几乎没有缓存争用</strong>，性能极高。</li>
+<li><strong><code>folio_batch</code></strong>: 这是一个简单的数据结构，本质上是一个固定大小的folio指针数组，用于暂存待处理的folio。</li>
+</ul>
+</li>
+<li><p><strong>分级锁 (<code>local_lock</code> vs <code>local_lock_irq</code>)</strong>:</p>
+<ul>
+<li><code>local_lock_t</code>: 这是一个轻量级锁。在多核系统上，它通过禁止抢占来保护数据。这足以防止在同一个CPU上的不同任务之间产生竞争。</li>
+<li><code>local_lock_irq</code>: 这是一个更强的锁，它会同时禁止抢占和本地中断。用于保护那些可能在中断上下文中也被访问的数据（如<code>lru_move_tail</code>）。</li>
+</ul>
+</li>
+<li><p><strong>批处理与清空 (Batch and Drain)</strong>:</p>
+<ul>
+<li><strong>批处理</strong>: 当内核代码（例如，在缺页异常处理中）需要将一个新页面加入LRU时，它实际上是调用一个内部函数（如<code>folio_add_lru</code>，未在此处显示），该函数将folio指针添加到当前CPU的<code>cpu_fbatches.lru_add</code>批处理队列中，然后就快速返回了。它<strong>不直接操作</strong>全局LRU链表。</li>
+<li><strong>清空 (Drain)</strong>: <code>lru_add_drain()</code>函数就是“清空”操作。它会锁定当前CPU的批处理队列，然后调用一个工作函数（<code>lru_add_drain_cpu</code>）来处理队列中的所有folio。这个工作函数会<strong>获取一次</strong>全局的LRU链表锁，然后在一个循环中将批处理队列里的<strong>所有folio</strong>都移动到全局LRU链表中，最后<strong>释放一次</strong>全局锁。</li>
+</ul>
+</li>
+<li><p><strong><code>lru_add_drain_all</code> 的角色</strong>:</p>
+<ul>
+<li>此函数在<code>vm/drop_caches.c</code>中被调用。它的作用是在执行<code>drop_caches</code>操作<strong>之前</strong>，确保所有CPU上所有暂存的、待加入LRU的页面都已经被处理完毕。</li>
+<li>这保证了全局LRU链表处于一个完全一致和最新的状态，<code>drop_caches</code>才能看到并清理掉<strong>所有</strong>符合条件的缓存页，而不会遗漏那些还“卡在”per-CPU批处理队列里的页面。</li>
+</ul>
+</li>
+</ol>
+<h3 id="特定场景分析：单核、无MMU的STM32H750平台"><a href="#特定场景分析：单核、无MMU的STM32H750平台" class="headerlink" title="特定场景分析：单核、无MMU的STM32H750平台"></a>特定场景分析：单核、无MMU的STM32H750平台</h3><h4 id="硬件交互与MMU"><a href="#硬件交互与MMU" class="headerlink" title="硬件交互与MMU"></a>硬件交互与MMU</h4><p>此机制是纯粹的内核内存管理算法，与硬件或MMU无关。</p>
+<h4 id="单核环境下的行为"><a href="#单核环境下的行为" class="headerlink" title="单核环境下的行为"></a>单核环境下的行为</h4><p>虽然<code>per-CPU</code>是为多核设计的，但它在单核系统上会优雅地退化：</p>
+<ul>
+<li><strong><code>DEFINE_PER_CPU</code></strong>: 在单核系统上，这只会定义一个普通的、非数组的<code>cpu_fbatches</code>变量。所有<code>per_cpu_ptr()</code>之类的操作都会被编译器优化为对这个单一变量的直接访问。</li>
+<li><strong><code>local_lock_t</code></strong>: 在单核可抢占内核中，<code>local_lock()</code>被编译为<code>preempt_disable()</code>，<code>local_unlock()</code>被编译为<code>preempt_enable()</code>。这仍然是<strong>绝对必要</strong>的。它可以防止一个任务在修改批处理队列的过程中被另一个任务抢占，从而避免了数据损坏。</li>
+<li><strong><code>smp_processor_id()</code></strong>: 在单核系统上，此宏总是返回0。</li>
+</ul>
+<h4 id="实际意义"><a href="#实际意义" class="headerlink" title="实际意义"></a>实际意义</h4><p>你可能会问，既然只有一个CPU，没有CPU间的竞争，为什么还需要这么复杂的批处理机制？<br>答案是，这个机制<strong>仍然能带来显著的性能优势</strong>。</p>
+<ul>
+<li><strong>减少锁的持有时间</strong>: 全局LRU链表通常由一个自旋锁保护。在单核系统上，获取这个自旋锁意味着<strong>禁止本地中断</strong>。如果每次添加一个页面都要“禁止中断 -&gt; 操作链表 -&gt; 开启中断”，当中断频繁或链表操作耗时时，会增加系统的中断延迟，影响实时性。</li>
+<li><strong>分摊开销</strong>: 通过批处理，内核可以“攒一堆”页面，然后<strong>一次性地</strong>“禁止中断 -&gt; 循环处理15个页面 -&gt; 开启中断”。这极大地**分摊（amortize）**了开关中断和获取&#x2F;释放锁的开销，使得平均到每个页面的同步成本大大降低。</li>
+</ul>
+<p><strong>结论</strong>: 在STM32H750上，<code>lru_add_drain_all</code>和它背后的per-CPU批处理机制，是一个通过<strong>分摊同步开销</strong>来提高内存管理效率、降低中断延迟的关键优化。它使得即使在单核系统上，高频率的内存页面操作也不会对系统响应性造成过大的冲击。</p>
+<h3 id="代码分析-1"><a href="#代码分析-1" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// cpu_fbatches: 定义一个per-CPU结构体，用于暂存待处理的folio批次。</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cpu_fbatches</span> &#123;</span></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 以下folio批次被组织在一起，因为它们通过禁用抢占来保护。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">local_lock_t</span> lock;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">lru_add</span>;</span>             <span class="comment">// 待加入LRU的folio</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">lru_deactivate_file</span>;</span> <span class="comment">// 待取消激活的文件folio</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">lru_deactivate</span>;</span>      <span class="comment">// 待取消激活的匿名folio</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">lru_lazyfree</span>;</span>        <span class="comment">// 待惰性释放的folio</span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_SMP</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">lru_activate</span>;</span>        <span class="comment">// 待激活的folio（仅多核）</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">	<span class="comment">/* 保护以下批次，它们需要禁用中断。 */</span></span><br><span class="line">	<span class="type">local_lock_t</span> lock_irq;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">lru_move_tail</span>;</span>       <span class="comment">// 待移动到LRU尾部的folio</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 使用DEFINE_PER_CPU为每个CPU定义并初始化一个cpu_fbatches实例。</span></span><br><span class="line"><span class="comment">// 在单核STM32H750上，这只会创建一个实例。</span></span><br><span class="line"><span class="type">static</span> <span class="title function_">DEFINE_PER_CPU</span><span class="params">(<span class="keyword">struct</span> cpu_fbatches, cpu_fbatches)</span> = &#123;</span><br><span class="line">	.lock = INIT_LOCAL_LOCK(lock),</span><br><span class="line">	.lock_irq = INIT_LOCAL_LOCK(lock_irq),</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// lru_add_drain: 清空当前CPU的LRU批处理队列。</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">lru_add_drain</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 获取本地锁（在单核上，这会禁用抢占）。</span></span><br><span class="line">	local_lock(&amp;cpu_fbatches.lock);</span><br><span class="line">	<span class="comment">// 调用工作函数，处理当前CPU（ID由smp_processor_id()获取）的所有批处理队列。</span></span><br><span class="line">	lru_add_drain_cpu(smp_processor_id());</span><br><span class="line">	<span class="comment">// 释放本地锁（在单核上，这会恢复抢占）。</span></span><br><span class="line">	local_unlock(&amp;cpu_fbatches.lock);</span><br><span class="line">	<span class="comment">// 清空本地的mlock批处理队列。</span></span><br><span class="line">	mlock_drain_local();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// lru_add_drain_all: 清空所有CPU的LRU批处理队列。</span></span><br><span class="line"><span class="comment">// 在本代码片段中，它被简化为只清空当前CPU的，</span></span><br><span class="line"><span class="comment">// 因为drop_caches通常是通过向所有CPU发送IPI（处理器间中断）来确保所有CPU都执行这个操作。</span></span><br><span class="line"><span class="comment">// 但对于此文件的上下文，可以理解为“清空所有需要清空的”。</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">lru_add_drain_all</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	lru_add_drain();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Per-CPU-LRU-Drain-批量内存管理的主力"><a href="#Per-CPU-LRU-Drain-批量内存管理的主力" class="headerlink" title="Per-CPU LRU Drain: 批量内存管理的主力"></a>Per-CPU LRU Drain: 批量内存管理的主力</h2><p>本代码片段定义了 <code>lru_add_drain_cpu</code> 函数，它是 per-CPU 页&#x2F;folio 批处理机制的<strong>核心执行者</strong>。在 <code>lru_add_drain</code> 获取了本地锁之后，它就调用这个函数来完成实际的工作。<code>lru_add_drain_cpu</code> 的功能是遍历指定CPU的 <code>cpu_fbatches</code> 结构中所有类型的批处理队列，并将其中所有暂存的folio<strong>提交</strong>到全局的、共享的LRU链表中。这是将为性能而“延迟”的操作最终“同步”回系统全局状态的关键一步。</p>
+<h3 id="实现原理分析-2"><a href="#实现原理分析-2" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>lru_add_drain_cpu</code> 是一个高度特化的工作函数，其设计前提是调用者已经确保了必要的同步（通常是禁用了抢占）。</p>
+<ol>
+<li><p><strong>目标明确</strong>: 函数接收一个 <code>cpu</code> 编号，并通过 <code>per_cpu</code> 宏直接定位到该CPU的 <code>cpu_fbatches</code> 实例。这使得它可以被用于清空当前CPU的队列，也可以在CPU热拔插等场景下，由其他CPU来清空一个即将离线的CPU的队列。</p>
+</li>
+<li><p><strong>分批处理</strong>: 函数依次处理 <code>cpu_fbatches</code> 结构中的每一个 <code>folio_batch</code>：<code>lru_add</code>, <code>lru_move_tail</code>, <code>lru_deactivate_file</code> 等。</p>
+</li>
+<li><p><strong>通用提交逻辑 (<code>folio_batch_move_lru</code>)</strong>: 对于每个非空的批处理队列（通过 <code>folio_batch_count</code> 检查），它都会调用一个外部函数 <code>folio_batch_move_lru</code>。这个函数（未在此代码中显示）是真正实现“提交”的地方。我们可以推断其内部逻辑为：<br>a. 获取保护相应全局LRU链表的<strong>重量级锁</strong>（通常是一个需要禁用中断的自旋锁）。<br>b. 在一个循环中，将批处理队列中的所有folio指针逐一添加到全局LRU链表中。<br>c. 释放全局LRU链表的锁。<br>d. 清空本地的 <code>folio_batch</code> 队列。</p>
+</li>
+<li><p><strong>特殊的中断安全处理 (<code>lru_move_tail</code>)</strong>:</p>
+<ul>
+<li><code>lru_move_tail</code> 批处理队列的处理方式与其他不同。它使用了 <code>local_lock_irqsave</code>。</li>
+<li><strong>原因</strong>: 从 <code>cpu_fbatches</code> 结构体的注释可知，<code>lru_move_tail</code> 是一个可以从<strong>中断上下文</strong>中被修改的队列。</li>
+<li><strong>问题</strong>: 仅仅禁用抢占不足以保护它。一个任务在执行 <code>lru_add_drain_cpu</code> 的过程中，可能会被一个中断打断，而这个中断服务程序（ISR）可能会尝试向 <code>lru_move_tail</code> 队列中添加一个新的folio，导致数据竞争。</li>
+<li><strong>解决方案</strong>: 因此，在处理 <code>lru_move_tail</code> 队列之前，必须使用 <code>local_lock_irqsave</code>，它不仅会获取一个锁，还会<strong>禁用当前CPU的本地中断</strong>。这确保了在清空该队列期间，不会有任何中断来干扰它，从而保证了操作的原子性和安全性。<code>data_race()</code> 宏可能用于在编译时或运行时检查这种潜在的竞争。</li>
+</ul>
+</li>
+</ol>
+<h3 id="特定场景分析：单核、无MMU的STM32H750平台-1"><a href="#特定场景分析：单核、无MMU的STM32H750平台-1" class="headerlink" title="特定场景分析：单核、无MMU的STM32H750平台"></a>特定场景分析：单核、无MMU的STM32H750平台</h3><h4 id="硬件交互与MMU-1"><a href="#硬件交互与MMU-1" class="headerlink" title="硬件交互与MMU"></a>硬件交互与MMU</h4><p>此函数是纯粹的内核内存管理算法，与硬件或MMU无关。</p>
+<h4 id="单核环境下的行为-1"><a href="#单核环境下的行为-1" class="headerlink" title="单核环境下的行为"></a>单核环境下的行为</h4><p>在单核的STM32H750上，此函数的行为逻辑完全正确，并且其设计中的保护措施仍然是必要的。</p>
+<ul>
+<li><strong>调用上下文</strong>: <code>lru_add_drain</code> 在调用此函数前会禁用抢占 (<code>local_lock</code>)。</li>
+<li><strong><code>per_cpu(..., cpu)</code></strong>: <code>cpu</code> 参数将始终为0，函数将操作全局唯一的 <code>cpu_fbatches</code> 实例。</li>
+<li><strong><code>local_lock_irqsave</code></strong>: 在单核CPU上，这个函数的核心作用就是 <code>local_irq_save</code>，即<strong>禁用本地中断</strong>。这仍然是与中断服务程序进行同步的<strong>唯一正确方式</strong>。因此，对 <code>lru_move_tail</code> 的特殊保护逻辑在单核系统上依然是必需和有效的。</li>
+<li><strong><code>folio_activate_drain(cpu)</code></strong>: 同样，这个函数会处理 <code>lru_activate</code> 批处理队列，确保所有待激活的页面都被处理。</li>
+</ul>
+<h4 id="实际意义-1"><a href="#实际意义-1" class="headerlink" title="实际意义"></a>实际意义</h4><p><code>lru_add_drain_cpu</code> 是 per-CPU 批处理策略<strong>兑现其性能承诺</strong>的地方。在STM32H750上，它的意义在于：</p>
+<ul>
+<li><strong>实现开销分摊</strong>: 正是这个函数，通过<code>folio_batch_move_lru</code>，实现了“一次锁定，多次操作”的模式。这显著降低了平均到每个页面的同步开销。</li>
+<li><strong>降低中断延迟</strong>: 对于<code>lru_move_tail</code>这种可能在中断中使用的队列，批处理机制允许中断服务程序（ISR）只做一个极快的、无锁的“添加到本地队列”操作就立即返回，而将耗时的、需要加全局锁的链表操作<strong>延迟</strong>到 <code>lru_add_drain_cpu</code> 在非中断上下文中执行。这极大地缩短了ISR的执行时间，降低了系统的最大中断延迟，对于需要实时响应的嵌入式系统来说，这是一个非常重要的特性。</li>
+</ul>
+<p><strong>结论</strong>: <code>lru_add_drain_cpu</code> 是 per-CPU 批处理优化的执行引擎。在STM32H750上，它不仅通过分摊锁开销提高了整体效率，更重要的是，它通过延迟中断上下文中的重度工作，帮助降低了系统中断延迟，提升了系统的实时性和响应性。</p>
+<h3 id="代码分析-2"><a href="#代码分析-2" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 清空指定cpu的folio_batch队列中的页面。</span></span><br><span class="line"><span class="comment"> * 前提条件：要么“cpu”是当前CPU，并且抢占已被禁用；</span></span><br><span class="line"><span class="comment"> * 要么“cpu”正在被热拔插，并且已经死亡。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">lru_add_drain_cpu</span><span class="params">(<span class="type">int</span> cpu)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 获取指定CPU的fbatches结构体指针。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cpu_fbatches</span> *<span class="title">fbatches</span> =</span> &amp;per_cpu(cpu_fbatches, cpu);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> *<span class="title">fbatch</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// --- 处理 lru_add 批处理 ---</span></span><br><span class="line">	fbatch = &amp;fbatches-&gt;lru_add;</span><br><span class="line">	<span class="comment">// 如果lru_add队列不为空...</span></span><br><span class="line">	<span class="keyword">if</span> (folio_batch_count(fbatch))</span><br><span class="line">		<span class="comment">// ...则调用工作函数将其中的所有folio移动到全局lru_add链表。</span></span><br><span class="line">		folio_batch_move_lru(fbatch, lru_add);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// --- 处理 lru_move_tail 批处理 (中断安全) ---</span></span><br><span class="line">	fbatch = &amp;fbatches-&gt;lru_move_tail;</span><br><span class="line">	<span class="comment">// 检查lru_move_tail队列是否可能存在数据竞争（来自中断）。</span></span><br><span class="line">	<span class="keyword">if</span> (data_race(folio_batch_count(fbatch))) &#123;</span><br><span class="line">		<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 获取一个同时禁用本地中断的锁，以安全地与中断服务程序同步。</span></span><br><span class="line">		local_lock_irqsave(&amp;cpu_fbatches.lock_irq, flags);</span><br><span class="line">		<span class="comment">// 移动所有folio到全局lru_move_tail链表。</span></span><br><span class="line">		folio_batch_move_lru(fbatch, lru_move_tail);</span><br><span class="line">		<span class="comment">// 释放锁并恢复中断状态。</span></span><br><span class="line">		local_unlock_irqrestore(&amp;cpu_fbatches.lock_irq, flags);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// --- 处理 lru_deactivate_file 批处理 ---</span></span><br><span class="line">	fbatch = &amp;fbatches-&gt;lru_deactivate_file;</span><br><span class="line">	<span class="keyword">if</span> (folio_batch_count(fbatch))</span><br><span class="line">		folio_batch_move_lru(fbatch, lru_deactivate_file);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// --- 处理 lru_deactivate 批处理 ---</span></span><br><span class="line">	fbatch = &amp;fbatches-&gt;lru_deactivate;</span><br><span class="line">	<span class="keyword">if</span> (folio_batch_count(fbatch))</span><br><span class="line">		folio_batch_move_lru(fbatch, lru_deactivate);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// --- 处理 lru_lazyfree 批处理 ---</span></span><br><span class="line">	fbatch = &amp;fbatches-&gt;lru_lazyfree;</span><br><span class="line">	<span class="keyword">if</span> (folio_batch_count(fbatch))</span><br><span class="line">		folio_batch_move_lru(fbatch, lru_lazyfree);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 清空与页面激活相关的批处理队列。</span></span><br><span class="line">	folio_activate_drain(cpu);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="页缓存辅助函数：降级与清理"><a href="#页缓存辅助函数：降级与清理" class="headerlink" title="页缓存辅助函数：降级与清理"></a>页缓存辅助函数：降级与清理</h2><p>本代码片段定义了两个重要的页缓存管理辅助函数：</p>
+<ul>
+<li><code>deactivate_file_folio</code>: 当一个folio无法被立即驱逐（例如，因为它是脏的）时，此函数提供了一种“降级”机制。它将folio标记为内存回收的优先候选者，增加了它在未来被回收的可能性。</li>
+<li><code>folio_batch_remove_exceptionals</code>: 这是一个内务（housekeeping）函数，用于清理一个<code>folio_batch</code>，从中移除所有非folio的“特殊条目”（如影子条目），以确保后续操作只处理真实的内存页。</li>
+</ul>
+<hr>
+<h3 id="函数一：deactivate-file-folio"><a href="#函数一：deactivate-file-folio" class="headerlink" title="函数一：deactivate_file_folio"></a>函数一：<code>deactivate_file_folio</code></h3><h4 id="实现原理分析-3"><a href="#实现原理分析-3" class="headerlink" title="实现原理分析"></a>实现原理分析</h4><p><code>deactivate_file_folio</code> 的核心思想是，当不能直接删除一个缓存页时，就将其移动到LRU（Least Recently Used）链表的“冷”端，从而“暗示”内存管理系统这个页面已不再活跃。</p>
+<ol>
+<li><p><strong>安全检查 (<code>folio_test_unevictable</code>)</strong>:</p>
+<ul>
+<li>函数首先检查folio是否被标记为“不可驱逐”（unevictable）。这种情况发生在页面被<code>mlock()</code>系统调用锁定在内存中，或者用于某些特殊的内核数据结构。</li>
+<li>对于不可驱逐的folio，尝试将其降级是毫无意义的，因为无论如何它都不会被回收。因此函数直接返回。</li>
+</ul>
+</li>
+<li><p><strong>新一代LRU处理 (<code>lru_gen_enabled</code>)</strong>:</p>
+<ul>
+<li>现代Linux内核引入了更先进的多代LRU（Multi-Generational LRU）算法，由<code>lru_gen_enabled()</code>检查是否启用。</li>
+<li>如果启用了新算法，它会调用<code>lru_gen_clear_refs</code>。这个函数会尝试清除folio的“被访问”标志位。在新算法中，一个没有被访问过的folio自然就成了回收的候选者。如果这个操作成功了，就达到了“降级”的目的，函数直接返回。</li>
+</ul>
+</li>
+<li><p><strong>传统LRU处理 (<code>folio_batch_add_and_move</code>)</strong>:</p>
+<ul>
+<li>如果新一代LRU未启用或未处理该folio，则回退到传统的双链表（Active&#x2F;Inactive）LRU机制。</li>
+<li><code>folio_batch_add_and_move</code> 是一个高效的批处理接口。它会将<code>folio</code>添加到当前CPU的一个<strong>私有批处理队列</strong>（<code>lru_deactivate_file</code>）中。</li>
+<li>这个操作<strong>不会</strong>立即获取全局LRU锁并移动folio。相反，它只是快速地将folio暂存起来。真正的移动操作会被延迟，直到批处理队列满了或者被<code>lru_add_drain</code>等函数强制清空时，才会一次性地处理整批folio。这极大地分摊了锁竞争的开销。</li>
+</ul>
+</li>
+</ol>
+<h3 id="函数二：folio-batch-remove-exceptionals"><a href="#函数二：folio-batch-remove-exceptionals" class="headerlink" title="函数二：folio_batch_remove_exceptionals"></a>函数二：<code>folio_batch_remove_exceptionals</code></h3><h4 id="实现原理分析-4"><a href="#实现原理分析-4" class="headerlink" title="实现原理分析"></a>实现原理分析</h4><p><code>folio_batch_remove_exceptionals</code> 的功能非常专一：过滤一个<code>folio_batch</code>，只留下真正的folio。</p>
+<ol>
+<li><strong>问题背景</strong>: <code>find_lock_entries</code> 为了效率，会把XArray中的所有条目——无论是真正的folio指针还是代表文件空洞的“影子条目”（value entries）——都抓取到<code>folio_batch</code>中。</li>
+<li><strong>过滤算法</strong>:<ul>
+<li>函数使用了一个经典的<strong>双指针、原地（in-place）过滤算法</strong>。</li>
+<li><code>i</code> 是“读指针”，它遍历批处理中的每一个原始条目。</li>
+<li><code>j</code> 是“写指针”，它指向下一个有效folio应该被放置的位置。</li>
+<li>在循环中，<code>if (!xa_is_value(folio))</code> 检查当前条目是否<strong>不是</strong>一个影子条目。</li>
+<li>如果是真正的folio，就执行 <code>fbatch-&gt;folios[j++] = folio;</code>，将其“拷贝”到写指针的位置，然后写指针前进。</li>
+<li>如果不是真正的folio（是影子条目），写指针<code>j</code><strong>不会</strong>前进，这个条目在下一次有效的拷贝中就会被覆盖掉。</li>
+</ul>
+</li>
+<li><strong>更新计数</strong>: 循环结束后，<code>j</code>的值就是批处理中所有真实folio的数量。<code>fbatch-&gt;nr = j;</code> 更新批处理的计数值，逻辑上“截断”了数组，丢弃了末尾的所有无效条目。</li>
+</ol>
+<h3 id="代码分析-3"><a href="#代码分析-3" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * deactivate_file_folio() - 降级一个文件folio。</span></span><br><span class="line"><span class="comment"> * @folio: 要降级的folio。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 此函数向VM暗示@folio是一个很好的回收候选者，例如，</span></span><br><span class="line"><span class="comment"> * 如果因为folio是脏的或正在回写而导致其失效操作失败。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 上下文: 调用者持有对folio的引用。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">deactivate_file_folio</span><span class="params">(<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 检查1: 如果folio是不可驱逐的（例如被mlock），则降级无意义。</span></span><br><span class="line">	<span class="keyword">if</span> (folio_test_unevictable(folio))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 检查2: 如果启用了新一代LRU，则使用其机制来“老化”这个folio。</span></span><br><span class="line">	<span class="keyword">if</span> (lru_gen_enabled() &amp;&amp; lru_gen_clear_refs(folio))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 检查3: 回退到传统LRU，将folio添加到per-CPU的“待降级”批处理队列中。</span></span><br><span class="line">	folio_batch_add_and_move(folio, lru_deactivate_file, <span class="literal">true</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * folio_batch_remove_exceptionals() - 从批处理中修剪掉非folio的条目。</span></span><br><span class="line"><span class="comment"> * @fbatch: 要修剪的批处理。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * find_get_entries()会用folio和影子/交换/DAX条目填充批处理。</span></span><br><span class="line"><span class="comment"> * 此函数从@fbatch中修剪掉所有非folio的条目，且不留下空洞，</span></span><br><span class="line"><span class="comment"> * 以便将其传递给只处理folio的批处理操作。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">folio_batch_remove_exceptionals</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">int</span> i, j; <span class="comment">// i是读指针，j是写指针</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 使用双指针算法进行原地过滤。</span></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>, j = <span class="number">0</span>; i &lt; folio_batch_count(fbatch); i++) &#123;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span> =</span> fbatch-&gt;folios[i];</span><br><span class="line">		<span class="comment">// 检查当前条目是否不是一个“值条目”（即，它是一个真正的folio）。</span></span><br><span class="line">		<span class="keyword">if</span> (!xa_is_value(folio))</span><br><span class="line">			<span class="comment">// 如果是，则将其移动到写指针的位置，并移动写指针。</span></span><br><span class="line">			fbatch-&gt;folios[j++] = folio;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// 更新批处理的有效数量为真实folio的数量。</span></span><br><span class="line">	fbatch-&gt;nr = j;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="swap-setup-与-I-O-集群参数-page-cluster-初始化"><a href="#swap-setup-与-I-O-集群参数-page-cluster-初始化" class="headerlink" title="swap_setup 与 I&#x2F;O 集群参数 page-cluster 初始化"></a>swap_setup 与 I&#x2F;O 集群参数 page-cluster 初始化</h2><p>本代码片段负责初始化内核交换（Swap）与分页（Paging）I&#x2F;O 子系统的一个关键性能参数：<code>page_cluster</code>。其核心功能是根据系统总内存大小，为一个决定 I&#x2F;O 操作批次大小的全局变量 <code>page_cluster</code> 设置一个合理的默认值，并随后通过 <code>sysctl</code> 机制在 <code>/proc/sys/vm/page-cluster</code> 创建一个文件，使得该参数在系统运行时可以被动态调整。</p>
+<h3 id="实现原理分析-5"><a href="#实现原理分析-5" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>该机制的核心是<strong>I&#x2F;O 集群化</strong>（I&#x2F;O Clustering），也称为 I&#x2F;O 批处理（Batching），旨在提高块设备 I&#x2F;O 的效率。</p>
+<ol>
+<li><p><strong>I&#x2F;O 效率与集群化</strong>:</p>
+<ul>
+<li>向硬盘、SD 卡或 Flash 等块设备读写单个内存页（通常为 4KB）的效率很低。因为每次 I&#x2F;O 操作都包含固定的开销，如命令处理、寻道时间（对机械硬盘）和传输建立时间。</li>
+<li>通过将多个连续的页面 I&#x2F;O 请求合并成一个更大、更连续的块 I&#x2F;O 请求，可以将这些固定开销分摊到更多的数据上，从而极大地提高整体 I&#x2F;O 吞吐率。</li>
+<li><code>page_cluster</code> 变量控制的就是这个集群的大小。<strong>它存储的不是页面的数量，而是数量的以 2 为底的对数</strong>。即，实际的集群大小是 2 的 <code>page_cluster</code> 次方个页面。例如，<code>page_cluster = 3</code> 意味着每次 I&#x2F;O 操作会尝试处理 2^3 &#x3D; 8 个页面。</li>
+</ul>
+</li>
+<li><p><strong>基于内存大小的启发式默认值</strong>:</p>
+<ul>
+<li><code>swap_setup</code> 函数实现了一个简单的启发式算法来设置 <code>page_cluster</code> 的默认值。它计算系统的总 RAM（以MB为单位）。</li>
+<li>如果内存小于 16MB，它会选择一个较小的集群值 <code>2</code>（对应 4 个页面，16KB）。这是一种保守策略，因为在内存极度受限的系统中，一次性分配过大的 I&#x2F;O 缓冲区可能会对系统造成压力，或导致延迟抖动。</li>
+<li>对于内存较大的系统，它选择一个更高效的值 <code>3</code>（对应 8 个页面，32KB）。</li>
+</ul>
+</li>
+<li><p><strong>运行时可调优性</strong>:</p>
+<ul>
+<li><code>swap_sysctl_table</code> 将 <code>page_cluster</code> 变量暴露给用户空间。这使得系统管理员可以根据具体的工作负载和存储介质（例如，针对某款 SD 卡的最优 I&#x2F;O 大小）的特性，在系统运行时动态地调整这个值，以寻求最佳性能。</li>
+</ul>
+</li>
+</ol>
+<h3 id="特定场景分析：单核、无MMU的STM32H750平台-2"><a href="#特定场景分析：单核、无MMU的STM32H750平台-2" class="headerlink" title="特定场景分析：单核、无MMU的STM32H750平台"></a>特定场景分析：单核、无MMU的STM32H750平台</h3><h4 id="功能相关性：从“交换”到“按需分页”"><a href="#功能相关性：从“交换”到“按需分页”" class="headerlink" title="功能相关性：从“交换”到“按需分页”"></a>功能相关性：从“交换”到“按需分页”</h4><ul>
+<li><strong>无交换，但分页依然关键</strong>: 在没有硬盘作为交换分区的 STM32H750 系统上，<code>kswapd</code> 无法换出匿名页。因此，<code>page_cluster</code> 参数对于“交换”（Swapping）操作没有意义。</li>
+<li><strong>核心作用于按需分页 (Demand Paging)</strong>: 然而，<code>page_cluster</code> 对于<strong>按需分页</strong>（特别是页面读入，Page-in）仍然至关重要。当在 uClinux 上执行一个程序时，其代码段（<code>.text</code>）和只读数据段（<code>.rodata</code>）通常不会一次性全部加载到 SRAM 中。相反，当执行流遇到一个尚未加载的页面时，会触发一个缺页异常，内核此时会从存储介质（如 QSPI Flash 或 SD 卡）中将该页面读入内存。</li>
+<li><strong>预读与性能</strong>: <code>page_cluster</code> 在这里控制了内核的<strong>预读</strong>（Read-ahead）行为。当需要读入第 N 页时，内核会乐观地认为程序很快也会需要第 N+1, N+2, … 页（程序的空间局部性原理），因此它会一次性地从文件系统中读取 2 的 <code>page_cluster</code> 次方个连续页面到页缓存中。这极大地减少了后续的缺页异常次数和昂贵的 I&#x2F;O 操作，从而显著提高了应用程序的启动速度和运行性能。</li>
+</ul>
+<h4 id="内存约束与默认值"><a href="#内存约束与默认值" class="headerlink" title="内存约束与默认值"></a>内存约束与默认值</h4><ul>
+<li>STM32H750 的 SRAM 容量有限，很多配置都可能小于 16MB。在这种情况下，<code>swap_setup</code> 会将 <code>page_cluster</code> 设置为 <code>2</code>。这意味着每次从 Flash 进行按需分页时，I&#x2F;O 的单位是 4 个页面（16 KB）。这是一个非常适合资源受限 MCU 的、在 I&#x2F;O 效率和内存占用之间取得良好平衡的默认值。</li>
+</ul>
+<h4 id="无MMU与单核影响"><a href="#无MMU与单核影响" class="headerlink" title="无MMU与单核影响"></a>无MMU与单核影响</h4><ul>
+<li><code>page_cluster</code> 的逻辑完全在内核的内存管理和块设备层实现，与 MMU 的存在与否无关。</li>
+<li>这是一个在系统启动时设置的参数，其初始化过程不存在并发问题。在运行时，内存管理子系统在读取该值时，其自身的数据结构会受到必要的锁保护。因此，单核环境对此没有特殊影响。</li>
+</ul>
+<h3 id="代码分析-4"><a href="#代码分析-4" class="headerlink" title="代码分析"></a>代码分析</h3><pre><code class="language-c">/**
+ * @var page_cluster
+ * @brief 控制一次性交换或分页 I/O 的页面数量，值为 2 的幂指数。
+ *
+ * 例如，值为 3 表示集群大小为 2^3 = 8 个页面。
+ */
+int page_cluster;
+/**
+ * @var page_cluster_max
+ * @brief page_cluster 参数允许的最大值。
+ */
+static const int page_cluster_max = 31;
+
+/**
+ * @var swap_sysctl_table
+ * @brief 定义了 /proc/sys/vm/page-cluster sysctl 文件。
+ */
+static const struct ctl_table swap_sysctl_table[] = {
+	{
+		.procname	= &quot;page-cluster&quot;, /**&lt; 文件名 */
+		.data		= &amp;page_cluster, /**&lt; 直接指向 page_cluster 全局变量 */
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax, /**&lt; 使用标准的整数范围检查处理函数 */
+		.extra1		= SYSCTL_ZERO, /**&lt; 允许的最小值为 0 */
+		.extra2		= (void *)&amp;page_cluster_max, /**&lt; 允许的最大值为 31 */
+	}
+};
+
+/**
+ * @brief 执行交换系统的任何必要设置。
+ *
+ * 此函数在内核启动早期被调用，用于设置 page_cluster 的默认值
+ * 并注册相关的 sysctl 接口。
+ */
+void __init swap_setup(void)
+{
+	// 计算系统总内存，单位为 MB。
+	unsigned long megs = PAGES_TO_MB(totalram_pages());
+
+	/* 对于小内存机器使用较小的集群大小 */
+	if (megs &lt; 16)
+		page_cluster = 2; // 对应 2^2 = 4 个页面
+	else
+		page_cluster = 3; // 对应 2^3 = 8 个页面
+	/*
+	 * 目前，系统中的其他部分意味着我们
+	 * *真的*不希望集群大小比这更大。
+	 */
+
+	// 注册 sysctl 表，创建 /proc/sys/vm/page-cluster 文件。
+	register_sysctl_init(&quot;vm&quot;, swap_sysctl_table);
+}```
+</code></pre>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/25938561/">https://wdfk-prog.space/posts/25938561/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/mm/">mm</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/07.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/5d2f0480/" title="truncate"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">truncate</div></div><div class="info-2"><div class="info-item-1">[toc] mm&#x2F;truncate.c 页面缓存截断(Page Cache Truncation) 文件大小变更的核心内存管理历史与背景这项技术是为了解决什么特定問題而誕生的？这项技术是为了实现一个最基本、最核心的文件系统功能：更改文件的大小，特别是缩减文件（Truncation）。这是一个由POSIX标准规定的基础操作。mm/truncate.c专门负责处理这个操作在内存管理（Memory Management, MM）层面最复杂的部分：确保文件的内存表示（即页面缓存 Page Cache）与文件在磁盘上的新大小保持一致。 它解决了以下核心问题：  内存与磁盘同步：当用户调用truncate()或以O_TRUNC模式打开文件时，不仅需要通知文件系统释放磁盘上的数据块，还必须精确地从内核的页面缓存中移除或修改对应的缓存页。否则，应用程序可能会读到已经被“删除”的陈旧数据，或者脏页（Dirty Page）可能会错误地将已删除的数据写回磁盘。 处理边界条件：文件截断不总是以页面大小（通常是4KB）对齐的。mm/truncate.c必须能精确处理部分被截断的页面，即一个页面中...</div></div></div></a><a class="pagination-related" href="/posts/de66b2a3/" title="util"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">util</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;util.cinit_user_buckets: 初始化memdup_user的专用内存桶此代码片段的作用是在内核启动的早期阶段, 创建一个专用的、高性能的内存分配器(一个kmem_buckets实例), 并将其赋给全局指针user_buckets。这个专用的分配器被命名为&quot;memdup_user&quot;, 意味着它被内核中的memdup_user()函数和相关函数独占使用, 目的是优化从用户空间复制数据到内核空间时的小块内存分配性能。 工作原理: memdup_user()是一个非常常见的内核函数, 用于安全地从用户空间拷贝一块数据到内核新分配的内存中。这个操作在处理系统调用参数、网络数据包等场景中被频繁调用, 且请求分配的内存大小各不相同。 标准的通用内存分配器kmalloc()虽然功能强大, 但对于这种极其频繁、大小多变的小块内存请求, 其内部的查找和管理开销可能会成为性能瓶颈。 kmem_buckets (内存桶) 则是一种更轻量级、更快的专用分配器, 类似一个内存池(memory pool)。  它内部预先维护了一系列”桶”(b...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1"> [TOC] init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的 i...</div></div></div></a><a class="pagination-related" href="/posts/0/" title="workingset"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">workingset</div></div><div class="info-2"><div class="info-item-1">  [toc]  mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制历史与背景这项技术是为了解决什么特定问题而诞生的？mm/workingset.c 中的代码是为了解决传统页面回收算法（如vmscan.c中的两阶段LRU）的一个核心痛点：无法精确区分真正的“工作集”和短暂的、非核心的内存使用。 工作集（Working Set）指的是一个进程在当前阶段为了高效运行而需要频繁访问的内存页面集合。传统LRU算法通过active&#x2F;inactive链表来近似这个集合，但存在以下问题：  抖动（Thrashing）：当内存压力增大时，一个暂时不活动的进程（例如，用户切换到了另一个窗口），其工作集页面可能会被从active链表老化到inactive链表，并最终被回收。当用户切回该进程时，进程会遭遇大量的缺页中断（page faults），需要从磁盘或交换空间重新读取其工作集，导致系统响应缓慢，磁盘I&#x2F;O飙升。workingset.c 的核心目标就是识别并保护这些被错误回收的工作集页面，从而抑...</div></div></div></a><a class="pagination-related" href="/posts/e8ec9031/" title="vmscan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">vmscan</div></div><div class="info-2"><div class="info-item-1">   [toc]  mm&#x2F;vmscan.c 页面回收(Page Reclaim) 内核内存管理的核心压力调节器历史与背景这项技术是为了解决什么特定问题而诞生的？mm/vmscan.c 中的代码是为了解决计算机科学中最基本的问题之一：物理内存是一种有限资源。当系统运行的应用程序和内核本身需要的内存总量超过了可用的物理RAM时，操作系统必须有一种机制来释放一些当前已分配但“不那么重要”的内存，以便为新的、更紧迫的内存请求腾出空间。 如果没有页面回收机制，系统在内存耗尽时唯一的选择就是拒绝新的内存分配请求，这将导致应用程序崩溃或系统完全停止响应。vmscan.c 实现的页面回收（Page Reclaim）算法，其核心目标是在内存压力（Memory Pressure）下，智能地选择并回收内存页面，从而保证系统的持续运行和响应能力。 它的发展经历了哪些重要的里程碑或版本迭代？Linux的页面回收算法经历了重大的演进，以适应不断变化的硬件和工作负载：  早期的LRU：最初的Linux内核使用了相当简单的“最近最少使用”（Least Recently Used, LRU）算法。 两阶...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/e5a511c0/" title="mmzone"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">mmzone</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;vmscan.c lruvec 结构体 页面回收的核心数据结构lruvec 是 Linux 内核中用于管理 LRU（Least Recently Used，最近最少使用）页面列表的一个核心数据结构。它是内存管理子系统的一部分，定义于 mm/vmscan.c 相关头文件中，主要作用是在页面回收（Page Reclamation）过程中，对不同类型、不同状态的内存页面进行分组和跟踪，是内核决定回收哪些页面的关键依据。 历史与背景这项技术是为了解决什么特定问题而诞生的？lruvec 的诞生是为了解决在现代计算机体系结构下，如何高效、精确、可扩展地管理内存页面以供回收的问题。  区分页面类型：不同类型的内存页面回收成本和策略完全不同。例如，文件页（File-backed pages）如果内容未被修改（是干净的），可以直接丢弃，需要时再从磁盘读回；而匿名页（Anonymous pages，如进程堆栈、malloc分配的内存）则必须先交换到交换空间（Swap Area）才能释放，成本更高。lruvec 需要将它们分开管理。 近似LRU算法：真正的LRU算法要求跟踪...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-swap-c-%E4%BA%A4%E6%8D%A2%E6%9C%BA%E5%88%B6-Swap-Mechanism-%E7%89%A9%E7%90%86%E5%86%85%E5%AD%98%E7%9A%84%E8%99%9A%E6%8B%9F%E6%89%A9%E5%B1%95"><span class="toc-number">1.</span> <span class="toc-text">mm&#x2F;swap.c 交换机制(Swap Mechanism) 物理内存的虚拟扩展</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Folio-Final-Destructor-%E8%AE%B0%E5%BF%86%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%9C%80%E5%90%8E%E4%BB%AA%E5%BC%8F"><span class="toc-number">1.1.</span> <span class="toc-text">Folio Final Destructor: 记忆页面的最后仪式</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">1.1.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">1.1.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Per-CPU-LRU-Batching-Amortizing-Lock-Overhead-for-High-Performance-Memory-Management"><span class="toc-number">1.2.</span> <span class="toc-text">Per-CPU LRU Batching: Amortizing Lock Overhead for High-Performance Memory Management</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-1"><span class="toc-number">1.2.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E5%88%86%E6%9E%90%EF%BC%9A%E5%8D%95%E6%A0%B8%E3%80%81%E6%97%A0MMU%E7%9A%84STM32H750%E5%B9%B3%E5%8F%B0"><span class="toc-number">1.2.2.</span> <span class="toc-text">特定场景分析：单核、无MMU的STM32H750平台</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%A1%AC%E4%BB%B6%E4%BA%A4%E4%BA%92%E4%B8%8EMMU"><span class="toc-number">1.2.2.1.</span> <span class="toc-text">硬件交互与MMU</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8D%95%E6%A0%B8%E7%8E%AF%E5%A2%83%E4%B8%8B%E7%9A%84%E8%A1%8C%E4%B8%BA"><span class="toc-number">1.2.2.2.</span> <span class="toc-text">单核环境下的行为</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E9%99%85%E6%84%8F%E4%B9%89"><span class="toc-number">1.2.2.3.</span> <span class="toc-text">实际意义</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-1"><span class="toc-number">1.2.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Per-CPU-LRU-Drain-%E6%89%B9%E9%87%8F%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E7%9A%84%E4%B8%BB%E5%8A%9B"><span class="toc-number">1.3.</span> <span class="toc-text">Per-CPU LRU Drain: 批量内存管理的主力</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-2"><span class="toc-number">1.3.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E5%88%86%E6%9E%90%EF%BC%9A%E5%8D%95%E6%A0%B8%E3%80%81%E6%97%A0MMU%E7%9A%84STM32H750%E5%B9%B3%E5%8F%B0-1"><span class="toc-number">1.3.2.</span> <span class="toc-text">特定场景分析：单核、无MMU的STM32H750平台</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%A1%AC%E4%BB%B6%E4%BA%A4%E4%BA%92%E4%B8%8EMMU-1"><span class="toc-number">1.3.2.1.</span> <span class="toc-text">硬件交互与MMU</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8D%95%E6%A0%B8%E7%8E%AF%E5%A2%83%E4%B8%8B%E7%9A%84%E8%A1%8C%E4%B8%BA-1"><span class="toc-number">1.3.2.2.</span> <span class="toc-text">单核环境下的行为</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E9%99%85%E6%84%8F%E4%B9%89-1"><span class="toc-number">1.3.2.3.</span> <span class="toc-text">实际意义</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-2"><span class="toc-number">1.3.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%A1%B5%E7%BC%93%E5%AD%98%E8%BE%85%E5%8A%A9%E5%87%BD%E6%95%B0%EF%BC%9A%E9%99%8D%E7%BA%A7%E4%B8%8E%E6%B8%85%E7%90%86"><span class="toc-number">1.4.</span> <span class="toc-text">页缓存辅助函数：降级与清理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%87%BD%E6%95%B0%E4%B8%80%EF%BC%9Adeactivate-file-folio"><span class="toc-number">1.4.1.</span> <span class="toc-text">函数一：deactivate_file_folio</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-3"><span class="toc-number">1.4.1.1.</span> <span class="toc-text">实现原理分析</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%87%BD%E6%95%B0%E4%BA%8C%EF%BC%9Afolio-batch-remove-exceptionals"><span class="toc-number">1.4.2.</span> <span class="toc-text">函数二：folio_batch_remove_exceptionals</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-4"><span class="toc-number">1.4.2.1.</span> <span class="toc-text">实现原理分析</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-3"><span class="toc-number">1.4.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#swap-setup-%E4%B8%8E-I-O-%E9%9B%86%E7%BE%A4%E5%8F%82%E6%95%B0-page-cluster-%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="toc-number">1.5.</span> <span class="toc-text">swap_setup 与 I&#x2F;O 集群参数 page-cluster 初始化</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-5"><span class="toc-number">1.5.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E5%88%86%E6%9E%90%EF%BC%9A%E5%8D%95%E6%A0%B8%E3%80%81%E6%97%A0MMU%E7%9A%84STM32H750%E5%B9%B3%E5%8F%B0-2"><span class="toc-number">1.5.2.</span> <span class="toc-text">特定场景分析：单核、无MMU的STM32H750平台</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8A%9F%E8%83%BD%E7%9B%B8%E5%85%B3%E6%80%A7%EF%BC%9A%E4%BB%8E%E2%80%9C%E4%BA%A4%E6%8D%A2%E2%80%9D%E5%88%B0%E2%80%9C%E6%8C%89%E9%9C%80%E5%88%86%E9%A1%B5%E2%80%9D"><span class="toc-number">1.5.2.1.</span> <span class="toc-text">功能相关性：从“交换”到“按需分页”</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%86%85%E5%AD%98%E7%BA%A6%E6%9D%9F%E4%B8%8E%E9%BB%98%E8%AE%A4%E5%80%BC"><span class="toc-number">1.5.2.2.</span> <span class="toc-text">内存约束与默认值</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%97%A0MMU%E4%B8%8E%E5%8D%95%E6%A0%B8%E5%BD%B1%E5%93%8D"><span class="toc-number">1.5.2.3.</span> <span class="toc-text">无MMU与单核影响</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-4"><span class="toc-number">1.5.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/07.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '94651b02d4d31741ea2cdefcd9d50c05'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

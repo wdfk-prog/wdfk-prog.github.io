@@ -1,0 +1,1342 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>filemap | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC] mm&#x2F;filemap.c: Linux 页缓存 (Page Cache) 的心脏mm&#x2F;filemap.c 是 Linux 内核中实现和管理页缓存 (Page Cache) 的核心源文件。页缓存是 Linux I&#x2F;O 性能的基石，它将磁盘上的文件内容缓存到物理内存（RAM）中，使得后续对同一文件的读写操作可以直接在内存中完成，从而避免了缓慢的磁盘 I&#x2F;O。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="filemap">
+<meta property="og:url" content="https://wdfk-prog.space/posts/662716e7/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC] mm&#x2F;filemap.c: Linux 页缓存 (Page Cache) 的心脏mm&#x2F;filemap.c 是 Linux 内核中实现和管理页缓存 (Page Cache) 的核心源文件。页缓存是 Linux I&#x2F;O 性能的基石，它将磁盘上的文件内容缓存到物理内存（RAM）中，使得后续对同一文件的读写操作可以直接在内存中完成，从而避免了缓慢的磁盘 I&#x2F;O。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/08.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:28.703Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="mm">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/08.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "filemap",
+  "url": "https://wdfk-prog.space/posts/662716e7/",
+  "image": "https://wdfk-prog.space/images/covers/08.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:28.703Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/662716e7/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'filemap',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/08.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">filemap</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">filemap<a class="post-edit-link" href="null_posts/linux/mm/filemap.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:28.703Z" title="更新于 2025-10-03 17:23:28">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/mm/">mm</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">12.6k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>43分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/662716e7/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:28&quot;}" hidden></div><p>[TOC]</p>
+<h1 id="mm-filemap-c-Linux-页缓存-Page-Cache-的心脏"><a href="#mm-filemap-c-Linux-页缓存-Page-Cache-的心脏" class="headerlink" title="mm&#x2F;filemap.c: Linux 页缓存 (Page Cache) 的心脏"></a>mm&#x2F;filemap.c: Linux 页缓存 (Page Cache) 的心脏</h1><p><code>mm/filemap.c</code> 是 Linux 内核中<strong>实现和管理页缓存 (Page Cache) 的核心源文件</strong>。页缓存是 Linux I&#x2F;O 性能的基石，它将磁盘上的文件内容缓存到物理内存（RAM）中，使得后续对同一文件的读写操作可以直接在内存中完成，从而避免了缓慢的磁盘 I&#x2F;O。</p>
+<p>可以把 <code>mm/filemap.c</code> 想象成一个<strong>高效的“图书管理员”</strong>，它负责管理一个巨大的图书馆（页缓存），图书馆里的每一页书（<code>struct page</code>）都对应着磁盘文件上的某一页内容。</p>
+<hr>
+<h3 id="一、-核心职责"><a href="#一、-核心职责" class="headerlink" title="一、 核心职责"></a>一、 核心职责</h3><p><code>mm/filemap.c</code> 的代码几乎参与了所有与文件 I&#x2F;O 相关的内存操作，其核心职责包括：</p>
+<ol>
+<li><p><strong>页缓存的查找与插入 (Finding and Inserting)</strong>: 当需要读取文件数据时，它负责在页缓存中查找是否已缓存了对应的页面。如果找到（Cache Hit），则直接返回内存页；如果未找到（Cache Miss），则负责分配一个新的物理页，并将其插入到页缓存中，准备从磁盘加载数据。</p>
+</li>
+<li><p><strong>数据的读取与写入 (Reading and Writing)</strong>:</p>
+<ul>
+<li><strong>读操作</strong>: 在 Cache Miss 的情况下，它负责调用底层文件系统的 <code>readpage</code> 或 <code>readpages</code> 操作，将数据从磁盘读入到新分配的内存页中。</li>
+<li><strong>写操作</strong>: 当用户写入数据时，它负责将数据写入到页缓存中，并将该页标记为<strong>脏页 (Dirty)</strong>。它并不立即将数据写回磁盘，而是依赖于 <code>backing-dev</code> 机制进行后续的异步回写（Writeback）。</li>
+</ul>
+</li>
+<li><p><strong>预读 (Read-Ahead)</strong>: 为了提高顺序读性能，<code>mm/filemap.c</code> 实现了复杂的预读算法。当它检测到进程正在顺序读取文件时，它会<strong>主动、提前</strong>地将文件后续的内容异步读入页缓存中。这样，当进程真正需要这些数据时，它们很可能已经在内存里了。</p>
+</li>
+<li><p><strong>页面截断与清理 (Truncation and Invalidation)</strong>: 当文件被截断（变小）或删除时，<code>mm/filemap.c</code> 负责从页缓存中找到并移除所有属于该文件无效部分的缓存页，并确保脏页被正确处理。</p>
+</li>
+<li><p><strong>内存回收接口</strong>: 当系统内存不足时，内存回收机制（<code>kswapd</code> 内核线程）会扫描页缓存。<code>mm/filemap.c</code> 提供了判断一个缓存页是否可以被回收的接口。如果页面是干净的（Clean），就可以直接回收；如果是脏的（Dirty），则必须先将其写回磁盘才能回收。</p>
+</li>
+</ol>
+<hr>
+<h3 id="二、-核心数据结构与机制"><a href="#二、-核心数据结构与机制" class="headerlink" title="二、 核心数据结构与机制"></a>二、 核心数据结构与机制</h3><p><code>mm/filemap.c</code> 的所有操作都围绕着两个核心数据结构展开：</p>
+<ol>
+<li><p><strong><code>struct address_space</code></strong>:</p>
+<ul>
+<li>可以把它看作是<strong>页缓存中一个文件的“索引卡片”</strong>。每个被缓存的文件（由 <code>struct inode</code> 表示）都有一个与之关联的 <code>address_space</code> 对象。</li>
+<li>它包含了管理该文件所有缓存页所需的信息，其中最重要的是一个<strong>基数树 (Radix Tree)</strong> 或 <strong>XArray</strong>（一种更现代的数据结构）的根指针 (<code>page_tree</code>)。</li>
+<li><strong><code>page_tree</code></strong>: 这个树形数据结构是页缓存的<strong>核心索引机制</strong>。它以文件内的<strong>页面偏移量（page offset）<strong>为键（key），以指向对应 <code>struct page</code> 的指针为值（value）。这使得内核可以</strong>以 O(logN) 的时间复杂度</strong>快速地根据文件偏移量找到或插入一个缓存页。</li>
+</ul>
+</li>
+<li><p><strong><code>struct page</code></strong>:</p>
+<ul>
+<li>代表一个物理页帧。当一个 <code>page</code> 被用于页缓存时，它的几个字段会被赋予特殊的含义：</li>
+<li><code>page-&gt;mapping</code>: 指向它所属的 <code>address_space</code>。</li>
+<li><code>page-&gt;index</code>: 存储了它在文件内的页面偏移量。</li>
+<li><code>page-&gt;flags</code>: 包含了丰富的状态位，如 <code>PG_dirty</code> (脏页), <code>PG_uptodate</code> (数据已从磁盘加载且有效), <code>PG_writeback</code> (正在被回写) 等。</li>
+</ul>
+</li>
+</ol>
+<p><strong><code>address_space_operations</code></strong>:</p>
+<ul>
+<li><code>struct address_space</code> 中包含一个指向 <code>address_space_operations</code> 结构体的指针。这是一个<strong>函数指针表</strong>，定义了页缓存如何与底层文件系统进行交互。</li>
+<li>它扮演着<strong>抽象层</strong>的角色，使得 <code>mm/filemap.c</code> 的通用逻辑可以与任何具体的文件系统（ext4, XFS, NFS等）协同工作。</li>
+<li>关键操作包括：<ul>
+<li><code>.readpage()</code> &#x2F; <code>.readpages()</code>: 当 Cache Miss 发生时，<code>filemap.c</code> 调用此函数，要求文件系统从磁盘读取一页或多页数据。</li>
+<li><code>.writepage()</code> &#x2F; <code>.writepages()</code>: 当回写线程需要将脏页写回磁盘时，调用此函数。</li>
+<li><code>.set_page_dirty()</code>: 通知文件系统一个页面变脏了，文件系统可以借此机会更新日志（Journaling）。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3 id="三、-关键源码函数解析"><a href="#三、-关键源码函数解析" class="headerlink" title="三、 关键源码函数解析"></a>三、 关键源码函数解析</h3><ul>
+<li><p><strong><code>find_or_create_page()</code> &#x2F; <code>pagecache_get_page()</code></strong>:</p>
+<ul>
+<li>这是页缓存的<strong>核心查找&#x2F;创建函数</strong>。</li>
+<li>它首先在 <code>address_space</code> 的基数树中根据文件偏移 <code>index</code> 查找页面。</li>
+<li>如果找到，就增加页面的引用计数并返回（Cache Hit）。</li>
+<li>如果找不到，它会分配一个新的 <code>page</code>，将其插入到基数树中，然后返回这个新页面，并将其锁定，准备进行 I&#x2F;O 操作（Cache Miss）。</li>
+</ul>
+</li>
+<li><p><strong><code>generic_file_read_iter()</code></strong>:</p>
+<ul>
+<li>这是文件<strong>读操作</strong>的通用实现，被大多数文件系统直接使用。</li>
+<li>它循环处理用户的读请求，对每一页：<ol>
+<li>调用 <code>pagecache_get_page()</code> 查找或创建缓存页。</li>
+<li>如果页面不在内存中 (<code>!PageUptodate</code>)，则调用 <code>a_ops-&gt;readpage()</code> 从磁盘加载数据。</li>
+<li>等待 I&#x2F;O 完成。</li>
+<li>将页缓存中的数据拷贝到用户的缓冲区。</li>
+</ol>
+</li>
+</ul>
+</li>
+<li><p><strong><code>generic_perform_write()</code></strong>:</p>
+<ul>
+<li>这是文件<strong>写操作</strong>的通用实现。</li>
+<li>它将用户缓冲区的数据拷贝到页缓存中，并调用 <code>set_page_dirty()</code> 将页面标记为脏页。脏页的处理则交由 <code>backing-dev</code> 机制负责。</li>
+</ul>
+</li>
+<li><p><strong><code>do_readahead()</code></strong>:</p>
+<ul>
+<li>实现<strong>预读</strong>逻辑的函数。它会根据当前的读取模式和上下文，决定是否以及预读多少个页面，然后异步地发起 I&#x2F;O 请求。</li>
+</ul>
+</li>
+<li><p><strong><code>truncate_inode_pages_range()</code></strong>:</p>
+<ul>
+<li>实现<strong>文件截断</strong>的函数。它会扫描基数树，找到并移除指定范围内的所有缓存页。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3 id="四、-场景贯穿：第一次读取一个文件"><a href="#四、-场景贯穿：第一次读取一个文件" class="headerlink" title="四、 场景贯穿：第一次读取一个文件"></a>四、 场景贯穿：第一次读取一个文件</h3><ol>
+<li><strong>系统调用</strong>: 应用程序调用 <code>read()</code> 系统调用。</li>
+<li><strong>VFS 层</strong>: VFS 层找到对应的 <code>struct file</code> 和 <code>struct inode</code>，最终调用 <code>generic_file_read_iter()</code>。</li>
+<li><strong><code>mm/filemap.c</code> 介入</strong>: <code>generic_file_read_iter()</code> 开始执行。假设要读取文件的前 4KB (offset 0)。</li>
+<li><strong>查找页缓存</strong>: 它调用 <code>pagecache_get_page(inode-&gt;i_mapping, 0)</code>。由于是第一次读取，基数树中没有索引为 0 的页面，发生 <strong>Cache Miss</strong>。</li>
+<li><strong>分配与插入</strong>: <code>pagecache_get_page</code> 会分配一个新的 <code>struct page</code>，并将其插入到 <code>inode-&gt;i_mapping-&gt;page_tree</code> 中，索引为 0。此时页面是锁定的，且没有 <code>Uptodate</code> 标志。</li>
+<li><strong>调用文件系统</strong>: <code>generic_file_read_iter</code> 发现页面不是 <code>Uptodate</code>，于是调用 <code>inode-&gt;i_mapping-&gt;a_ops-&gt;readpage(file, page)</code>。</li>
+<li><strong>磁盘 I&#x2F;O</strong>: ext4 等文件系统收到请求，计算出文件 offset 0 对应的磁盘逻辑块地址，然后构建 <code>bio</code> 提交给块设备层，发起磁盘读操作。</li>
+<li><strong>I&#x2F;O 完成</strong>: 当 DMA 操作完成，数据从磁盘读入到 <code>page</code> 对应的物理内存后，块设备层通过回调函数通知上层。</li>
+<li><strong>更新状态</strong>: I&#x2F;O 完成处理函数会设置 <code>PageUptodate</code> 标志，并解锁页面。</li>
+<li><strong>唤醒进程与拷贝</strong>: 等待 I&#x2F;O 的进程被唤醒。<code>generic_file_read_iter</code> 确认页面已 <code>Uptodate</code>，然后调用 <code>copy_to_user()</code> 将 <code>page</code> 中的数据拷贝到应用程序的缓冲区。</li>
+<li><strong>预读触发</strong>: 在此过程中，<code>filemap.c</code> 的预读逻辑可能会被激活，它会发现这是一个顺序读，于是异步地为文件的 offset 1, 2, 3… 发起 <code>readpage</code> 请求。</li>
+</ol>
+<hr>
+<h3 id="五、-总结"><a href="#五、-总结" class="headerlink" title="五、 总结"></a>五、 总结</h3><p><code>mm/filemap.c</code> 是 Linux 高性能 I&#x2F;O 的核心引擎。它通过<strong>页缓存机制</strong>，将频繁访问的文件数据保留在高速的 RAM 中，极大地减少了对慢速磁盘的依赖。</p>
+<p>其关键设计思想在于：</p>
+<ul>
+<li><strong>通用性</strong>: 通过 <code>address_space</code> 和 <code>address_space_operations</code> 的抽象，提供了一套适用于所有文件系统的、统一的缓存管理框架。</li>
+<li><strong>高效索引</strong>: 利用基数树或 XArray，实现了对海量缓存页的快速查找和管理。</li>
+<li><strong>异步操作</strong>: 读操作的预读和写操作的延迟回写都是异步的，最大化了系统吞吐量和响应性。</li>
+</ul>
+<p>理解 <code>mm/filemap.c</code> 的工作原理，是理解 Linux 文件系统性能、内存使用情况以及如何进行 I&#x2F;O 性能调优的根本。</p>
+<h1 id="include-linux-pagemap-h"><a href="#include-linux-pagemap-h" class="headerlink" title="include&#x2F;linux&#x2F;pagemap.h"></a>include&#x2F;linux&#x2F;pagemap.h</h1><h2 id="mapping-shrinkable-检查页面缓存（page-cache）的状态，以确定是否允许回收-inode"><a href="#mapping-shrinkable-检查页面缓存（page-cache）的状态，以确定是否允许回收-inode" class="headerlink" title="mapping_shrinkable 检查页面缓存（page cache）的状态，以确定是否允许回收 inode"></a>mapping_shrinkable 检查页面缓存（page cache）的状态，以确定是否允许回收 inode</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * mapping_shrinkable - 测试页面缓存状态是否允许 inode 回收</span></span><br><span class="line"><span class="comment"> * @mapping：页面缓存映射</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这将检查映射的缓存状态，以了解 inode 回收和 LRU 管理。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 调用方应持有 i_lock，但不需要持有 i_pages 锁，这通常可以保护缓存状态。这是因为保护 inode 及其 LRU 状态的 i_lock 和 list_lru 锁不会嵌套在 irq 安全的 i_pages 锁内。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 缓存删除在 i_lock 下执行，这可确保当 inode 为空时，它将可靠地在 LRU 上排队。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 缓存添加不会获得 i_lock，并且可能会与此检查竞争，在这种情况下，当 inode 具有缓存页时，我们会将 inode 报告为可收缩。这没关系： shrinker 还会检查 refcount 和引用的位，在向 inode 添加新缓存页的过程中，它们将被提升或设置。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">mapping_shrinkable</span><span class="params">(<span class="keyword">struct</span> address_space *mapping)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">void</span> *head;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 *在 highmem 系统上，在页面高速缓存出现 highmem 压力之前，inode 可能会有 lowmem 压力。使 inode 可收缩，而不管缓存状态如何。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (IS_ENABLED(CONFIG_HIGHMEM))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 检查缓存是否为空 </span></span><br><span class="line"><span class="comment">    说明没有页面与 inode 关联，可以安全地回收 inode*/</span></span><br><span class="line">	head = rcu_access_pointer(mapping-&gt;i_pages.xa_head);</span><br><span class="line">	<span class="keyword">if</span> (!head)</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果 xa_head 存储的是非驻留页面缓存条目（例如单个偏移量为 0 的条目），函数返回 true</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!xa_is_node(head) &amp;&amp; xa_is_value(head))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="filemap-fdatawait-等待写回完成"><a href="#filemap-fdatawait-等待写回完成" class="headerlink" title="filemap_fdatawait 等待写回完成"></a>filemap_fdatawait 等待写回完成</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">int</span> <span class="title function_">filemap_fdatawait</span><span class="params">(<span class="keyword">struct</span> address_space *mapping)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> filemap_fdatawait_range(mapping, <span class="number">0</span>, LLONG_MAX);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Folio状态检查与锁定：内存页操作的基础原语"><a href="#Folio状态检查与锁定：内存页操作的基础原语" class="headerlink" title="Folio状态检查与锁定：内存页操作的基础原语"></a>Folio状态检查与锁定：内存页操作的基础原语</h2><p>本代码片段定义了两个基础的、性能关键的内联函数，它们是Linux内核中对 <code>folio</code> 进行操作的基础构建块。</p>
+<ul>
+<li><code>folio_trylock</code>: 提供了一个<strong>非阻塞</strong>的方式来尝试锁定一个folio。这是高性能批处理和避免死锁的关键工具。</li>
+<li><code>folio_contains</code>: 提供了一个快速的检查，用于判断一个给定的文件页索引是否落在一个（可能由多个页组成的）大型folio的覆盖范围内。</li>
+</ul>
+<h3 id="实现原理分析"><a href="#实现原理分析" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><h4 id="folio-trylock"><a href="#folio-trylock" class="headerlink" title="folio_trylock"></a><code>folio_trylock</code></h4><ol>
+<li><p><strong>核心原子操作 (<code>test_and_set_bit_lock</code>)</strong>:</p>
+<ul>
+<li>这个函数是 <code>folio_trylock</code> 的心脏。<code>test_and_set_bit_lock</code> 是一个<strong>原子</strong>的“测试并设置”操作。它会执行以下三个步骤，且整个过程不可被中断：<br>a.  <strong>测试 (Test)</strong>: 检查 <code>PG_locked</code> 位（folio标志位中的一个）的当前值。<br>b.  <strong>设置 (Set)</strong>: 无论当前值是多少，都将该位设置为1。<br>c.  <strong>返回 (Return)</strong>: 返回该位在<strong>设置之前</strong>的旧值。</li>
+<li><code>_lock</code> 后缀表示这个原子操作还附带了“获取锁”的内存屏障语义，可以防止后续的内存访问被乱序到它前面。</li>
+</ul>
+</li>
+<li><p><strong>逻辑判断</strong>:</p>
+<ul>
+<li>如果 <code>PG_locked</code> 位原来是0（未锁定），<code>test_and_set_bit_lock</code>会返回0。<code>!0</code> 的结果是 <code>true</code>，表示<strong>成功获取了锁</strong>。</li>
+<li>如果 <code>PG_locked</code> 位原来是1（已被锁定），<code>test_and_set_bit_lock</code>会返回1。<code>!1</code> 的结果是 <code>false</code>，表示<strong>获取锁失败</strong>，因为已经有别人持有了锁。</li>
+<li><code>likely()</code>: 这是一个编译器提示，告诉编译器 <code>test_and_set_bit_lock</code> 返回0（即成功获取锁）是<strong>最可能发生</strong>的情况。这允许编译器优化指令流水线，将更可能执行的分支放在更优的位置。</li>
+</ul>
+</li>
+</ol>
+<h4 id="folio-contains"><a href="#folio-contains" class="headerlink" title="folio_contains"></a><code>folio_contains</code></h4><ol>
+<li><p><strong>核心逻辑</strong>:</p>
+<ul>
+<li><code>index - folio-&gt;index</code>: 计算给定的文件页索引 <code>index</code> 相对于 folio 的起始索引 <code>folio-&gt;index</code> 的偏移量。</li>
+<li><code>&lt; folio_nr_pages(folio)</code>: 检查这个偏移量是否小于 folio 包含的总页面数。</li>
+<li><strong>示例</strong>: 一个大型folio的<code>index</code>是10，<code>nr_pages</code>是4。它覆盖了索引10, 11, 12, 13。如果传入的<code>index</code>是12，那么 <code>12 - 10 = 2</code>，<code>2 &lt; 4</code> 为真，函数返回<code>true</code>。如果传入的<code>index</code>是14，<code>14 - 10 = 4</code>，<code>4 &lt; 4</code> 为假，函数返回<code>false</code>。</li>
+</ul>
+</li>
+<li><p><strong>调试断言</strong>:</p>
+<ul>
+<li><code>VM_WARN_ON_ONCE_FOLIO(folio_test_swapcache(folio), folio)</code>: 这是一个调试用的断言。它检查这个folio是否意外地处于<code>swapcache</code>中。<code>folio_contains</code>的调用者被要求确保folio不处于这种状态，因为在这种状态下，folio的<code>index</code>字段的含义可能会改变。如果断言触发，它会在内核日志中打印一次警告，帮助开发者捕获逻辑错误。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析"><a href="#代码分析" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * folio_trylock() - 尝试锁定一个folio。</span></span><br><span class="line"><span class="comment"> * @folio: 要尝试锁定的folio。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 通常情况下，folio_lock()是正确的选择。但有时我们不希望等待</span></span><br><span class="line"><span class="comment"> * folio解锁（例如，当锁的获取顺序不正确，或者处理一批folio的</span></span><br><span class="line"><span class="comment"> * 进度比按顺序处理它们更重要时）。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 上下文: 任何上下文。</span></span><br><span class="line"><span class="comment"> * 返回值: 是否成功获取了锁。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">folio_trylock</span><span class="params">(<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// test_and_set_bit_lock原子地测试并设置PG_locked位，返回其旧值。</span></span><br><span class="line">	<span class="comment">// 如果旧值是0（未锁定），!0为true，表示成功。</span></span><br><span class="line">	<span class="comment">// 如果旧值是1（已锁定），!1为false，表示失败。</span></span><br><span class="line">	<span class="comment">// likely()提示编译器成功路径是大概率事件。</span></span><br><span class="line">	<span class="keyword">return</span> likely(!test_and_set_bit_lock(PG_locked, folio_flags(folio, <span class="number">0</span>)));</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * folio_contains - 这个folio是否包含这个索引？</span></span><br><span class="line"><span class="comment"> * @folio: The folio.</span></span><br><span class="line"><span class="comment"> * @index: 文件内的页索引。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 上下文: 调用者应已锁定folio，并确保（例如）shmem没有将此folio</span></span><br><span class="line"><span class="comment"> * 移到交换缓存中。</span></span><br><span class="line"><span class="comment"> * 返回值: true 或 false。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">folio_contains</span><span class="params">(<span class="keyword">struct</span> folio *folio, <span class="type">pgoff_t</span> index)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 调试断言：如果folio在swapcache中，则发出警告。</span></span><br><span class="line">	VM_WARN_ON_ONCE_FOLIO(folio_test_swapcache(folio), folio);</span><br><span class="line">	<span class="comment">// 核心逻辑：计算索引相对于folio起始的偏移量，</span></span><br><span class="line">	<span class="comment">// 并检查它是否小于folio包含的总页面数。</span></span><br><span class="line">	<span class="keyword">return</span> index - folio-&gt;index &lt; folio_nr_pages(folio);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="include-linux-mm-h"><a href="#include-linux-mm-h" class="headerlink" title="include&#x2F;linux&#x2F;mm.h"></a>include&#x2F;linux&#x2F;mm.h</h1><h2 id="folio-nr-pages-计算一个-folio（页面的抽象表示）中包含的页面数量"><a href="#folio-nr-pages-计算一个-folio（页面的抽象表示）中包含的页面数量" class="headerlink" title="folio_nr_pages 计算一个 folio（页面的抽象表示）中包含的页面数量"></a>folio_nr_pages 计算一个 folio（页面的抽象表示）中包含的页面数量</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * folio_nr_pages - 作品集中的页数。</span></span><br><span class="line"><span class="comment"> * @folio：对开页。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回值：2 的正数幂。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">long</span> <span class="title function_">folio_nr_pages</span><span class="params">(<span class="type">const</span> <span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 检查 folio 是否为普通页面 */</span></span><br><span class="line">	<span class="keyword">if</span> (!folio_test_large(folio))</span><br><span class="line">		<span class="comment">/* 如果 folio 是普通页面，直接返回 1，表示该 folio 仅包含一个页面 */</span></span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">	<span class="keyword">return</span> folio_large_nr_pages(folio);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="mm-filemap-c"><a href="#mm-filemap-c" class="headerlink" title="mm&#x2F;filemap.c"></a>mm&#x2F;filemap.c</h1><h2 id="find-get-entry-在-xa-state（XArray-状态）中查找与指定条件匹配的-folio（页面的抽象表示）"><a href="#find-get-entry-在-xa-state（XArray-状态）中查找与指定条件匹配的-folio（页面的抽象表示）" class="headerlink" title="find_get_entry 在 xa_state（XArray 状态）中查找与指定条件匹配的 folio（页面的抽象表示）"></a>find_get_entry 在 xa_state（XArray 状态）中查找与指定条件匹配的 folio（页面的抽象表示）</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="keyword">struct</span> folio *<span class="title function_">find_get_entry</span><span class="params">(<span class="keyword">struct</span> xa_state *xas, <span class="type">pgoff_t</span> max,</span></span><br><span class="line"><span class="params">		<span class="type">xa_mark_t</span> mark)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span>;</span></span><br><span class="line"></span><br><span class="line">retry:</span><br><span class="line">   <span class="comment">/* XA_PRESENT 标记通常用于筛选或查找那些实际存在的条目，而不考虑其他状态或标记。 */</span></span><br><span class="line">	<span class="keyword">if</span> (mark == XA_PRESENT)</span><br><span class="line">		folio = xas_find(xas, max);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">      <span class="comment">/* 查找具有指定标记的页面。 */</span></span><br><span class="line">		folio = xas_find_marked(xas, max, mark);</span><br><span class="line"></span><br><span class="line">   <span class="comment">/* 查找操作需要重试（例如由于并发修改导致的不一致性 */</span></span><br><span class="line">	<span class="keyword">if</span> (xas_retry(xas, folio))</span><br><span class="line">		<span class="keyword">goto</span> retry;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 找到的条目是 NULL 或表示特殊值（例如影子条目、交换条目或 DAX 条目），直接返回该条目而不尝试增加引用计数.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!folio || xa_is_value(folio))</span><br><span class="line">		<span class="keyword">return</span> folio;</span><br><span class="line"></span><br><span class="line">   <span class="comment">/* 尝试增加 folio 的引用计数 */</span></span><br><span class="line">	<span class="keyword">if</span> (!folio_try_get(folio))</span><br><span class="line">		<span class="keyword">goto</span> reset;</span><br><span class="line">   <span class="comment">/* 重新加载 xas 状态，确保返回的 folio 与当前状态一致 */</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(folio != xas_reload(xas))) &#123;</span><br><span class="line">      <span class="comment">/* 释放 folio 的引用计数并 */</span></span><br><span class="line">		folio_put(folio);</span><br><span class="line">		<span class="keyword">goto</span> reset;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> folio;</span><br><span class="line">reset:</span><br><span class="line">   <span class="comment">/* 调用 xas_reset 重置 xas 状态，清除可能的错误状态并准备重新查找。 */</span></span><br><span class="line">	xas_reset(xas);</span><br><span class="line">	<span class="keyword">goto</span> retry;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="filemap-get-folios-tag-从指定的地址空间（address-space）中获取一批与特定标签（tag）匹配的-folio（页面的抽象表示）"><a href="#filemap-get-folios-tag-从指定的地址空间（address-space）中获取一批与特定标签（tag）匹配的-folio（页面的抽象表示）" class="headerlink" title="filemap_get_folios_tag 从指定的地址空间（address_space）中获取一批与特定标签（tag）匹配的 folio（页面的抽象表示）"></a>filemap_get_folios_tag 从指定的地址空间（address_space）中获取一批与特定标签（tag）匹配的 folio（页面的抽象表示）</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * filemap_get_folios_tag - 获取一批与 @tag 匹配的作品集</span></span><br><span class="line"><span class="comment"> * @mapping：搜索address_space</span></span><br><span class="line"><span class="comment"> * @start：起始页索引</span></span><br><span class="line"><span class="comment"> * @end：最终页面索引（含）</span></span><br><span class="line"><span class="comment"> * @tag：标签索引</span></span><br><span class="line"><span class="comment"> * @fbatch：要填充的批次</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 第一个对开页可以在 @start 之前开始;如果是这样，它将包含 @start。 最终对开页可能会延伸到 @end 之外;如果是，它将包含 @end。 对开页具有升序索引。 如果页面缓存中存在没有作品集的索引，则作品集之间可能存在间隙。 如果在运行页面缓存时将作品集添加到页面缓存或从页面缓存中删除作品集，则此调用可能会找到也可能找不到它们。仅返回使用 @tag 标记的作品集。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回：找到的作品集数。</span></span><br><span class="line"><span class="comment"> * 同时更新@start以索引下一个作品集以进行遍历。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">unsigned</span> <span class="title function_">filemap_get_folios_tag</span><span class="params">(<span class="keyword">struct</span> address_space *mapping, <span class="type">pgoff_t</span> *start,</span></span><br><span class="line"><span class="params">			<span class="type">pgoff_t</span> end, <span class="type">xa_mark_t</span> tag, <span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">   <span class="comment">/* 使用 XA_STATE 初始化遍历状态（xas） */</span></span><br><span class="line">	XA_STATE(xas, &amp;mapping-&gt;i_pages, *start);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span>;</span></span><br><span class="line"></span><br><span class="line">	rcu_read_lock();</span><br><span class="line">   <span class="comment">/* 查找与标签（tag）匹配的 folio */</span></span><br><span class="line">	<span class="keyword">while</span> ((folio = find_get_entry(&amp;xas, end, tag)) != <span class="literal">NULL</span>) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 影子条目永远不应该被标记，但这个迭代是无锁的，所以有一个页面回收窗口来驱逐我们看到的被标记的页面。跳过它。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">      	<span class="comment">/* 找到的条目是影子条目 */</span></span><br><span class="line">		<span class="keyword">if</span> (xa_is_value(folio))</span><br><span class="line">			<span class="keyword">continue</span>;</span><br><span class="line">      	<span class="comment">/* 添加到批处理结构（fbatch）中。如果批处理已满，更新起始索引并退出循环 */</span></span><br><span class="line">		<span class="keyword">if</span> (!folio_batch_add(fbatch, folio)) &#123;</span><br><span class="line">			<span class="type">unsigned</span> <span class="type">long</span> nr = folio_nr_pages(folio);</span><br><span class="line">			*start = folio-&gt;index + nr;</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果遍历到范围的末尾，更新起始索引以指向下一个条目。</span></span><br><span class="line"><span class="comment">    * 特别处理索引溢出的情况，避免影响调用者。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (end == (<span class="type">pgoff_t</span>)<span class="number">-1</span>)</span><br><span class="line">		*start = (<span class="type">pgoff_t</span>)<span class="number">-1</span>;</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		*start = end + <span class="number">1</span>;</span><br><span class="line">out:</span><br><span class="line">	rcu_read_unlock();</span><br><span class="line">   <span class="comment">/* 返回批处理结构中找到的 folio 数量 */</span></span><br><span class="line">	<span class="keyword">return</span> folio_batch_count(fbatch);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(filemap_get_folios_tag);</span><br></pre></td></tr></table></figure>
+
+<h2 id="filemap-fdatawait-range-用于等待指定地址空间（address-space）中某个范围内的页面完成写回操作"><a href="#filemap-fdatawait-range-用于等待指定地址空间（address-space）中某个范围内的页面完成写回操作" class="headerlink" title="__filemap_fdatawait_range 用于等待指定地址空间（address_space）中某个范围内的页面完成写回操作"></a>__filemap_fdatawait_range 用于等待指定地址空间（address_space）中某个范围内的页面完成写回操作</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> __filemap_fdatawait_range(<span class="keyword">struct</span> address_space *mapping,</span><br><span class="line">				     <span class="type">loff_t</span> start_byte, <span class="type">loff_t</span> end_byte)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">pgoff_t</span> index = start_byte &gt;&gt; PAGE_SHIFT;</span><br><span class="line">	<span class="type">pgoff_t</span> end = end_byte &gt;&gt; PAGE_SHIFT;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">fbatch</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> nr_folios;</span><br><span class="line"></span><br><span class="line">	folio_batch_init(&amp;fbatch);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">while</span> (index &lt;= end) &#123;</span><br><span class="line">		<span class="type">unsigned</span> i;</span><br><span class="line">     	<span class="comment">/* 获取指定范围内标记为写回状态的页面 */</span></span><br><span class="line">		nr_folios = filemap_get_folios_tag(mapping, &amp;index, end,</span><br><span class="line">				PAGECACHE_TAG_WRITEBACK, &amp;fbatch);</span><br><span class="line"></span><br><span class="line">		<span class="keyword">if</span> (!nr_folios)</span><br><span class="line">			<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">		<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; nr_folios; i++) &#123;</span><br><span class="line">			<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span> =</span> fbatch.folios[i];</span><br><span class="line">         	<span class="comment">/* 阻塞并等待写回操作完成 */</span></span><br><span class="line">			folio_wait_writeback(folio);</span><br><span class="line">		&#125;</span><br><span class="line">      	<span class="comment">/* 释放批处理结构中的资源 */</span></span><br><span class="line">		folio_batch_release(&amp;fbatch);</span><br><span class="line">      	<span class="comment">/*  检查是否需要调度其他任务，避免长时间占用 CPU */</span></span><br><span class="line">		cond_resched();</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="filemap-check-errors-用于检查-address-space（地址空间）结构中是否存在未处理的写入错误，并返回相应的错误代码"><a href="#filemap-check-errors-用于检查-address-space（地址空间）结构中是否存在未处理的写入错误，并返回相应的错误代码" class="headerlink" title="filemap_check_errors 用于检查 address_space（地址空间）结构中是否存在未处理的写入错误，并返回相应的错误代码"></a>filemap_check_errors 用于检查 address_space（地址空间）结构中是否存在未处理的写入错误，并返回相应的错误代码</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">filemap_check_errors</span><span class="params">(<span class="keyword">struct</span> address_space *mapping)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> ret = <span class="number">0</span>;</span><br><span class="line">	<span class="comment">/* 检查空间不足错误 */</span></span><br><span class="line">	<span class="comment">/* 检查地址空间的标志位 AS_ENOSPC 是否被设置，表示写入操作因空间不足而失败 */</span></span><br><span class="line">	<span class="keyword">if</span> (test_bit(AS_ENOSPC, &amp;mapping-&gt;flags) &amp;&amp;</span><br><span class="line">		<span class="comment">/* 清除该标志位，并将返回值设置为 -ENOSPC（空间不足错误） */</span></span><br><span class="line">	    test_and_clear_bit(AS_ENOSPC, &amp;mapping-&gt;flags))</span><br><span class="line">		ret = -ENOSPC;</span><br><span class="line">	<span class="comment">/* 检查 I/O 错误 */</span></span><br><span class="line">	<span class="keyword">if</span> (test_bit(AS_EIO, &amp;mapping-&gt;flags) &amp;&amp;</span><br><span class="line">	    test_and_clear_bit(AS_EIO, &amp;mapping-&gt;flags))</span><br><span class="line">		ret = -EIO;</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(filemap_check_errors);</span><br></pre></td></tr></table></figure>
+
+<h2 id="folio-waitqueue-用于获取与-folio（页面的抽象表示）相关联的等待队列"><a href="#folio-waitqueue-用于获取与-folio（页面的抽象表示）相关联的等待队列" class="headerlink" title="folio_waitqueue 用于获取与 folio（页面的抽象表示）相关联的等待队列"></a>folio_waitqueue 用于获取与 folio（页面的抽象表示）相关联的等待队列</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 为了等待页面可用，必须有与页面关联的等待队列。</span></span><br><span class="line"><span class="comment"> * 通过使用 waitqueues 的哈希表，其中存储桶规则是维护同一队列中的所有 waiter，</span></span><br><span class="line"><span class="comment"> * 并在任何页面可用时唤醒所有 waiter，并让唤醒的上下文检查以确保适当的页面可用，</span></span><br><span class="line"><span class="comment"> * 这可以节省空间，但代价是在罕见的哈希冲突期间出现 “thundering herd” 现象。</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">Thundering Herd（雷鸣般的群体效应） 是一种性能问题，通常发生在多线程或多进程环境中。当多个线程或进程同时等待某个资源（如锁、信号或事件）时，一旦资源可用，所有等待的线程或进程会同时被唤醒，导致系统负载激增或竞争加剧。这种现象可能导致性能下降，甚至系统不稳定Thundering Herd（雷鸣般的群体效应） 是一种性能问题，通常发生在多线程或多进程环境中。当多个线程或进程同时等待某个资源（如锁、信号或事件）时，一旦资源可用，所有等待的线程或进程会同时被唤醒，导致系统负载激增或竞争加剧。这种现象可能导致性能下降，甚至系统不稳定</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAGE_WAIT_TABLE_BITS 8</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAGE_WAIT_TABLE_SIZE (1 &lt;&lt; PAGE_WAIT_TABLE_BITS)</span></span><br><span class="line"><span class="type">static</span> <span class="type">wait_queue_head_t</span> folio_wait_table[PAGE_WAIT_TABLE_SIZE] __cacheline_aligned;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">wait_queue_head_t</span> *<span class="title function_">folio_waitqueue</span><span class="params">(<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> &amp;folio_wait_table[hash_ptr(folio, PAGE_WAIT_TABLE_BITS)];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="wake-page-function-处理等待队列中的唤醒逻辑"><a href="#wake-page-function-处理等待队列中的唤醒逻辑" class="headerlink" title="wake_page_function 处理等待队列中的唤醒逻辑"></a>wake_page_function 处理等待队列中的唤醒逻辑</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 页面等待代码对 “wait-&gt;flags” 的处理有些不同寻常，因为我们有多种不同类型的等待，而不仅仅是通常的 “exclusive” 等待。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> *我们有：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * （a） 没有特殊位设置：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 我们只是在等待 bit 被释放，当唤醒器调用 wakeup 函数时，我们设置 WQ_FLAG_WOKEN 并将其唤醒，并将其从 await 队列中删除。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 简单明了。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * （b） WQ_FLAG_EXCLUSIVE：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 服务员正在等待取锁，并且只应叫醒一名服务员，以避免任何雷霆万钧的羊群行为。我们将设置 WQ_FLAG_WOKEN 位，将其唤醒，并将其从 await 队列中删除。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这是传统的专属等待。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * （c） WQ_FLAG_EXCLUSIVE |WQ_FLAG_CUSTOM：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * waiter 正在等待获取位，并且还希望将锁转移到它以实现公平的锁定行为。如果无法取锁，我们将停止遍历等待队列，而不会唤醒 Waiter。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment">* 这是“公平锁交接”的情况，除了设置WQ_FLAG_WOKEN外，我们还设置WQ_FLAG_DONE让服务员轻松看到它现在有锁。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">wake_page_function</span><span class="params">(<span class="type">wait_queue_entry_t</span> *wait, <span class="type">unsigned</span> mode, <span class="type">int</span> sync, <span class="type">void</span> *arg)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">int</span> flags;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_page_key</span> *<span class="title">key</span> =</span> arg;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_page_queue</span> *<span class="title">wait_page</span></span></span><br><span class="line"><span class="class">		=</span> container_of(wait, <span class="keyword">struct</span> wait_page_queue, wait);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 检查当前等待条目是否匹配唤醒条件 */</span></span><br><span class="line">	<span class="keyword">if</span> (!wake_page_match(wait_page, key))</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 等待类型为独占或公平锁移交，函数尝试获取锁</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	flags = wait-&gt;flags;</span><br><span class="line">	<span class="keyword">if</span> (flags &amp; WQ_FLAG_EXCLUSIVE) &#123;</span><br><span class="line">		<span class="comment">/* 如果锁无法获取，函数停止队列遍历并返回 -1 */</span></span><br><span class="line">		<span class="keyword">if</span> (test_bit(key-&gt;bit_nr, &amp;key-&gt;folio-&gt;flags))</span><br><span class="line">			<span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">		<span class="keyword">if</span> (flags &amp; WQ_FLAG_CUSTOM) &#123;</span><br><span class="line">			<span class="keyword">if</span> (test_and_set_bit(key-&gt;bit_nr, &amp;key-&gt;folio-&gt;flags))</span><br><span class="line">				<span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">			flags |= WQ_FLAG_DONE;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 我们持有等待队列锁，但等待此锁的 Waiter 将检查标志，而不会被锁定。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 因此，原子地更新标志，并在之后唤醒 Waiter 以避免任何竞争。此 store-release 与 folio_wait_bit_common（） 中的 load-acquire 配对。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	smp_store_release(&amp;wait-&gt;flags, flags | WQ_FLAG_WOKEN);</span><br><span class="line">	<span class="comment">/* 唤醒处于特定状态的线程 */</span></span><br><span class="line">	wake_up_state(wait-&gt;private, mode);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 好了，我们已经成功完成了我们正在等待的工作，我们可以无条件地删除等待条目。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 请注意，这与 Waiter 中的 “finish_wait（）” 配对，并且必须是我们绝对最后要做的事情。在此 list_del_init（&amp;wait-&gt;entry） 之后，等待条目可能会被取消分配，进程甚至可能已退出。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	list_del_init_careful(&amp;wait-&gt;entry);</span><br><span class="line">	<span class="comment">/* 如果等待类型为独占，返回非零值；否则返回 0。 */</span></span><br><span class="line">	<span class="keyword">return</span> (flags &amp; WQ_FLAG_EXCLUSIVE) != <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="folio-wait-bit-common-等待-folio（页面的抽象表示）上的特定标志位（bit-nr）被清除"><a href="#folio-wait-bit-common-等待-folio（页面的抽象表示）上的特定标志位（bit-nr）被清除" class="headerlink" title="folio_wait_bit_common 等待 folio（页面的抽象表示）上的特定标志位（bit_nr）被清除"></a>folio_wait_bit_common 等待 folio（页面的抽象表示）上的特定标志位（bit_nr）被清除</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">int</span> <span class="title function_">folio_wait_bit_common</span><span class="params">(<span class="keyword">struct</span> folio *folio, <span class="type">int</span> bit_nr,</span></span><br><span class="line"><span class="params">		<span class="type">int</span> state, <span class="keyword">enum</span> behavior behavior)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 获取 folio 的等待队列，并初始化等待条目。 */</span></span><br><span class="line">	<span class="type">wait_queue_head_t</span> *q = folio_waitqueue(folio);</span><br><span class="line">	<span class="type">int</span> unfairness = sysctl_page_lock_unfairness;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_page_queue</span> <span class="title">wait_page</span>;</span></span><br><span class="line">	<span class="type">wait_queue_entry_t</span> *wait = &amp;wait_page.wait;</span><br><span class="line">	<span class="type">bool</span> thrashing = <span class="literal">false</span>;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> pflags;</span><br><span class="line">	<span class="type">bool</span> in_thrashing;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 如果页面处于工作集状态且未更新，函数进入页面抖动处理逻辑。</span></span><br><span class="line"><span class="comment">		页面抖动通常表示频繁的页面交换或写回，可能影响性能 */</span></span><br><span class="line">	<span class="keyword">if</span> (bit_nr == PG_locked &amp;&amp;</span><br><span class="line">	    !folio_test_uptodate(folio) &amp;&amp; folio_test_workingset(folio)) &#123;</span><br><span class="line">		delayacct_thrashing_start(&amp;in_thrashing);</span><br><span class="line">		psi_memstall_enter(&amp;pflags);</span><br><span class="line">		thrashing = <span class="literal">true</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	init_wait(wait);</span><br><span class="line">	<span class="comment">/* 设置等待条目的回调函数 wake_page_function，用于处理唤醒逻辑 */</span></span><br><span class="line">	wait-&gt;func = wake_page_function;</span><br><span class="line">	wait_page.folio = folio;</span><br><span class="line">	wait_page.bit_nr = bit_nr;</span><br><span class="line"></span><br><span class="line">repeat:</span><br><span class="line">	wait-&gt;flags = <span class="number">0</span>;</span><br><span class="line">	<span class="keyword">if</span> (behavior == EXCLUSIVE) &#123;</span><br><span class="line">		wait-&gt;flags = WQ_FLAG_EXCLUSIVE;</span><br><span class="line">		<span class="keyword">if</span> (--unfairness &lt; <span class="number">0</span>)</span><br><span class="line">			wait-&gt;flags |= WQ_FLAG_CUSTOM;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 最后检查我们是否可以同步获取 page bit。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 在此之前做 folio_set_waiters（） 标记，让任何我们 _刚刚_ 错过的唤醒者知道他们需要唤醒我们（否则他们甚至永远不会进入查看页面队列的慢速情况），如果我们需要睡眠，请将我们自己添加到等待队列中。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 这部分需要在队列锁下完成，以避免 races。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_lock_irq(&amp;q-&gt;lock);</span><br><span class="line">	<span class="comment">/* 标记页面有等待者，确保唤醒逻辑能够正确处理 */</span></span><br><span class="line">	folio_set_waiters(folio);</span><br><span class="line">	<span class="comment">/* 尝试获取标志位 */</span></span><br><span class="line">	<span class="keyword">if</span> (!folio_trylock_flag(folio, bit_nr, wait))</span><br><span class="line">		<span class="comment">/* 当前线程添加到等待队列 */</span></span><br><span class="line">		__add_wait_queue_entry_tail(q, wait);</span><br><span class="line">	spin_unlock_irq(&amp;q-&gt;lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 从现在开始，所有的 logic 都将基于 WQ_FLAG_WOKEN 和 WQ_FLAG_DONE 标志，</span></span><br><span class="line"><span class="comment">	 * 以查看 wake 函数是否已经完成了 page bit 测试。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 我们可以删除对作品集的引用。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (behavior == DROP)</span><br><span class="line">		folio_put(folio);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 请注意，在 “finish_wait（）” 之前，或者直到我们看到 WQ_FLAG_WOKEN 标志之前，我们需要非常小心 &#x27;wait-&gt;flags&#x27;，因为我们可能会与设置它们的唤醒器进行比赛。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">for</span> (;;) &#123;</span><br><span class="line">		<span class="type">unsigned</span> <span class="type">int</span> flags;</span><br><span class="line"></span><br><span class="line">		set_current_state(state);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* 循环，直到我们被唤醒或中断 */</span></span><br><span class="line">		<span class="comment">/* 进入睡眠状态，等待标志位清除或信号中断 */</span></span><br><span class="line">		flags = smp_load_acquire(&amp;wait-&gt;flags);</span><br><span class="line">		<span class="keyword">if</span> (!(flags &amp; WQ_FLAG_WOKEN)) &#123;</span><br><span class="line">			<span class="keyword">if</span> (signal_pending_state(state, current))</span><br><span class="line">				<span class="keyword">break</span>;</span><br><span class="line">			<span class="comment">/* io_schedule 进行 I/O 调度，避免长时间占用 CPU */</span></span><br><span class="line">			io_schedule();</span><br><span class="line">			<span class="keyword">continue</span>;</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* If we were non-exclusive, we&#x27;re done */</span></span><br><span class="line">		<span class="keyword">if</span> (behavior != EXCLUSIVE)</span><br><span class="line">			<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* If the waker got the lock for us, we&#x27;re done */</span></span><br><span class="line">		<span class="keyword">if</span> (flags &amp; WQ_FLAG_DONE)</span><br><span class="line">			<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 否则，如果我们要获得锁，则需要尝试自己获取它。</span></span><br><span class="line"><span class="comment">		 *</span></span><br><span class="line"><span class="comment">		 * 如果失败，我们将不得不重试所有这些作。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (unlikely(test_and_set_bit(bit_nr, folio_flags(folio, <span class="number">0</span>))))</span><br><span class="line">			<span class="keyword">goto</span> repeat;</span><br><span class="line"></span><br><span class="line">		wait-&gt;flags |= WQ_FLAG_DONE;</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果发生信号，则此“finish_wait（）”可能会从等待队列中删除最后一个服务员，但 folio 服务员位将保持设置状态。没关系。下一次醒来会照顾它，尝试在这里这样做会很困难并且容易发生比赛。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="comment">/* 从等待队列中移除当前线程，清理等待状态 */</span></span><br><span class="line">	finish_wait(q, wait);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (thrashing) &#123;</span><br><span class="line">		delayacct_thrashing_end(&amp;in_thrashing);</span><br><span class="line">		psi_memstall_leave(&amp;pflags);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 *注意！在我们完成 &#x27;finish_wait（）&#x27; 之前， wait-&gt;标志并不稳定，我们可能由于信号而退出了上面的循环，并在信号测试之后但在 &#x27;finish_wait（）&#x27; 之前发生了唤醒事件。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 因此，只有在 finish_wait（） 之后，我们才能可靠地确定我们是否被唤醒，因此我们现在可以根据该状态计算出最终的返回值，而无需进行争用。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 另请注意，WQ_FLAG_WOKEN对于非专属服务员来说就足够了，但专属服务员需要WQ_FLAG_DONE。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (behavior == EXCLUSIVE)</span><br><span class="line">		<span class="keyword">return</span> wait-&gt;flags &amp; WQ_FLAG_DONE ? <span class="number">0</span> : -EINTR;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> wait-&gt;flags &amp; WQ_FLAG_WOKEN ? <span class="number">0</span> : -EINTR;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="folio-wait-bit-用于等待-folio（页面的抽象表示）上的指定标志位（bit-nr）被清除"><a href="#folio-wait-bit-用于等待-folio（页面的抽象表示）上的指定标志位（bit-nr）被清除" class="headerlink" title="folio_wait_bit 用于等待 folio（页面的抽象表示）上的指定标志位（bit_nr）被清除"></a>folio_wait_bit 用于等待 folio（页面的抽象表示）上的指定标志位（bit_nr）被清除</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">folio_wait_bit</span><span class="params">(<span class="keyword">struct</span> folio *folio, <span class="type">int</span> bit_nr)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*	TASK_UNINTERRUPTIBLE 指定等待模式为不可中断，确保调用线程不会因信号而退出等待。</span></span><br><span class="line"><span class="comment">		SHARED 指定等待的共享模式，允许多个线程同时等待同一标志位 */</span></span><br><span class="line">	folio_wait_bit_common(folio, bit_nr, TASK_UNINTERRUPTIBLE, SHARED);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(folio_wait_bit);</span><br></pre></td></tr></table></figure>
+
+<h2 id="filemap-fdatawait-range-等待写回完成"><a href="#filemap-fdatawait-range-等待写回完成" class="headerlink" title="filemap_fdatawait_range 等待写回完成"></a>filemap_fdatawait_range 等待写回完成</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * filemap_fdatawait_range - 等待写回完成</span></span><br><span class="line"><span class="comment"> * @mapping：要等待的地址空间结构</span></span><br><span class="line"><span class="comment"> * @start_byte：范围开始的偏移量（以字节为单位）</span></span><br><span class="line"><span class="comment"> * @end_byte：范围结束（含）的偏移量（以字节为单位）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 遍历给定范围内给定地址空间的 under-writeback 页面列表，并等待所有页面。 检查地址空间的错误状态并返回。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 由于该函数清除了地址空间的错误状态，因此调用者负责检查返回值并处理和/或报告错误。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回值：地址空间的错误状态。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">filemap_fdatawait_range</span><span class="params">(<span class="keyword">struct</span> address_space *mapping, <span class="type">loff_t</span> start_byte,</span></span><br><span class="line"><span class="params">			    <span class="type">loff_t</span> end_byte)</span></span><br><span class="line">&#123;</span><br><span class="line">	__filemap_fdatawait_range(mapping, start_byte, end_byte);</span><br><span class="line">	<span class="keyword">return</span> filemap_check_errors(mapping);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(filemap_fdatawait_range);</span><br></pre></td></tr></table></figure>
+
+<h2 id="pagecache-init-初始化页面缓存相关的结构和系统控制参数"><a href="#pagecache-init-初始化页面缓存相关的结构和系统控制参数" class="headerlink" title="pagecache_init 初始化页面缓存相关的结构和系统控制参数"></a>pagecache_init 初始化页面缓存相关的结构和系统控制参数</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* How many times do we accept lock stealing from under a waiter? */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> sysctl_page_lock_unfairness = <span class="number">5</span>;</span><br><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">ctl_table</span> <span class="title">filemap_sysctl_table</span>[] =</span> &#123;</span><br><span class="line">	&#123;</span><br><span class="line">		.procname	= <span class="string">&quot;page_lock_unfairness&quot;</span>,</span><br><span class="line">		.data		= &amp;sysctl_page_lock_unfairness,</span><br><span class="line">		.maxlen		= <span class="keyword">sizeof</span>(sysctl_page_lock_unfairness),</span><br><span class="line">		.mode		= <span class="number">0644</span>,</span><br><span class="line">		.proc_handler	= proc_dointvec_minmax,</span><br><span class="line">		.extra1		= SYSCTL_ZERO,</span><br><span class="line">	&#125;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="type">void</span> __init <span class="title function_">pagecache_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> i;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; PAGE_WAIT_TABLE_SIZE; i++)</span><br><span class="line">		init_waitqueue_head(&amp;folio_wait_table[i]);</span><br><span class="line"></span><br><span class="line">	page_writeback_init();</span><br><span class="line">	register_sysctl_init(<span class="string">&quot;vm&quot;</span>, filemap_sysctl_table);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="页缓存批处理查找与锁定：高效检索可操作的缓存页"><a href="#页缓存批处理查找与锁定：高效检索可操作的缓存页" class="headerlink" title="页缓存批处理查找与锁定：高效检索可操作的缓存页"></a>页缓存批处理查找与锁定：高效检索可操作的缓存页</h2><p>本代码片段定义了 <code>find_lock_entries</code> 函数，它是内核中用于从文件页缓存（<code>address_space</code>）中<strong>高效地、批量地查找并锁定</strong>一批可操作条目的核心函数。这个函数是 <code>invalidate_mapping_pages</code> 等高级缓存管理功能能够高性能运作的<strong>引擎</strong>。它不仅仅是查找，更重要的是它会<strong>过滤</strong>掉不适合操作的条目（如已被锁定、正在回写），并对找到的 folio <strong>原子地加锁</strong>，为调用者准备好一个可以直接进行安全操作的 folio 批次。</p>
+<h3 id="实现原理分析-1"><a href="#实现原理分析-1" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>find_lock_entries</code> 的实现直接与底层的XArray数据结构和 folio 的状态管理紧密交互，其逻辑复杂但高效。</p>
+<ol>
+<li><p><strong>RCU保护下的遍历</strong>:</p>
+<ul>
+<li>整个遍历过程被 <code>rcu_read_lock()</code> 和 <code>rcu_read_unlock()</code> 包围。</li>
+<li><strong>为什么用RCU？</strong> 页缓存的XArray支持在不持有锁的情况下进行查找（RCU-walk）。这允许查找操作与删除操作可以高度并发地进行。RCU读锁确保了在遍历期间，即使有条目被并发地删除，其指针所指向的<code>folio</code>结构体内存也不会被立即释放，从而防止了 use-after-free 错误。</li>
+</ul>
+</li>
+<li><p><strong>核心查找循环 (<code>find_get_entry</code>)</strong>:</p>
+<ul>
+<li><code>while ((folio = find_get_entry(&amp;xas, end, XA_PRESENT)))</code>: 这是核心的查找循环。<code>find_get_entry</code> 是一个XArray的辅助函数，它会从<code>xas</code>指定的位置开始查找，直到<code>end</code>，并返回找到的条目。</li>
+<li><strong>关键</strong>: <code>find_get_entry</code> 在返回 <code>folio</code> 指针之前，会自动地<strong>增加该folio的引用计数</strong> (<code>folio_get</code>)。这保证了即使在后续的锁定和检查过程中，<code>folio</code>对象也不会消失。</li>
+</ul>
+</li>
+<li><p><strong>对找到的条目进行严格的过滤和锁定</strong>:</p>
+<ul>
+<li><strong>处理真实Folio (<code>!xa_is_value</code>)</strong>:<br>a.  <strong>范围检查</strong>: 它会仔细检查大型folio（由多个页面组成）的边界，确保整个folio都完全落在<code>start</code>和<code>end</code>的请求范围内。<br>b.  <strong>尝试锁定 (<code>folio_trylock</code>)</strong>: 这是最关键的过滤步骤。它尝试获取folio的<code>PG_locked</code>位。如果失败（返回<code>false</code>），说明该folio已被其他任务锁定，当前操作<strong>不能</strong>处理它，因此通过<code>goto put</code>跳过。<br>c.  <strong>状态检查</strong>: 锁定成功后，它会再次检查folio的状态。<code>folio-&gt;mapping != mapping</code>检查folio是否在锁定期间被迁移到了其他文件（一个罕见的竞态）；<code>folio_test_writeback</code>检查folio是否正在被写回磁盘。如果任一条件为真，说明folio当前状态不适合被驱逐，通过<code>goto unlock</code>跳过。</li>
+<li><strong>处理影子条目 (<code>xa_is_value</code>)</strong>: 对于影子条目，它只做范围检查。影子条目没有锁或回写状态，可以直接处理。</li>
+</ul>
+</li>
+<li><p><strong>添加到批处理</strong>:</p>
+<ul>
+<li>只有通过了所有检查和锁定的folio（或影子条目），才会被<code>folio_batch_add</code>添加到<code>fbatch</code>中。</li>
+<li>同时，它的索引被记录在<code>indices</code>数组中。</li>
+<li><code>*start = base + nr;</code> 更新下一次查找的起始点，跳过当前找到的整个条目（可能是大型folio）。</li>
+</ul>
+</li>
+<li><p><strong>错误处理与清理 (<code>goto</code>)</strong>:</p>
+<ul>
+<li>代码中大量使用了<code>goto</code>语句。在这种复杂的、多级检查的状态机中，<code>goto</code>是一种清晰、高效的错误处理方式，可以避免深层嵌套的<code>if-else</code>。</li>
+<li><code>put</code>: 如果folio在锁定前就被排除了，跳转到这里，只调用<code>folio_put</code>释放之前<code>find_get_entry</code>增加的引用计数。</li>
+<li><code>unlock</code>: 如果folio在锁定后被排除，跳转到这里，先<code>folio_unlock</code>解锁，再<code>folio_put</code>释放引用。</li>
+</ul>
+</li>
+<li><p><strong>返回</strong>: 函数最终返回批处理中成功添加的条目数量。</p>
+</li>
+</ol>
+<h3 id="代码分析-1"><a href="#代码分析-1" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * find_lock_entries - 查找一批页缓存条目。</span></span><br><span class="line"><span class="comment"> * @mapping:	要搜索的 address_space。</span></span><br><span class="line"><span class="comment"> * @start:	起始页缓存索引的指针（会被更新）。</span></span><br><span class="line"><span class="comment"> * @end:	最终页索引（包含）。</span></span><br><span class="line"><span class="comment"> * @fbatch:	用于存放结果条目的 folio_batch。</span></span><br><span class="line"><span class="comment"> * @indices:	fbatch中条目的缓存索引。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回值: 找到的条目数量。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">unsigned</span> <span class="title function_">find_lock_entries</span><span class="params">(<span class="keyword">struct</span> address_space *mapping, <span class="type">pgoff_t</span> *start,</span></span><br><span class="line"><span class="params">		<span class="type">pgoff_t</span> end, <span class="keyword">struct</span> folio_batch *fbatch, <span class="type">pgoff_t</span> *indices)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 初始化XArray状态机，定位到*start索引。</span></span><br><span class="line">	XA_STATE(xas, &amp;mapping-&gt;i_pages, *start);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 进入RCU读端临界区，以安全地遍历XArray。</span></span><br><span class="line">	rcu_read_lock();</span><br><span class="line">	<span class="comment">// 主循环：使用find_get_entry查找下一个存在的条目，并自动增加其引用计数。</span></span><br><span class="line">	<span class="keyword">while</span> ((folio = find_get_entry(&amp;xas, end, XA_PRESENT))) &#123;</span><br><span class="line">		<span class="type">unsigned</span> <span class="type">long</span> base; <span class="comment">// folio的基地址索引</span></span><br><span class="line">		<span class="type">unsigned</span> <span class="type">long</span> nr;   <span class="comment">// folio包含的页面数</span></span><br><span class="line"></span><br><span class="line">		<span class="comment">// 检查找到的是不是一个真正的folio。</span></span><br><span class="line">		<span class="keyword">if</span> (!xa_is_value(folio)) &#123;</span><br><span class="line">			<span class="comment">// --- 处理真实Folio ---</span></span><br><span class="line">			nr = folio_nr_pages(folio);</span><br><span class="line">			base = folio-&gt;index;</span><br><span class="line">			<span class="comment">// 过滤：跳过起始位置在请求范围之前的folio。</span></span><br><span class="line">			<span class="keyword">if</span> (base &lt; *start)</span><br><span class="line">				<span class="keyword">goto</span> put;</span><br><span class="line">			<span class="comment">// 过滤：跳过结束位置超出请求范围的folio。</span></span><br><span class="line">			<span class="keyword">if</span> (base + nr - <span class="number">1</span> &gt; end)</span><br><span class="line">				<span class="keyword">goto</span> put;</span><br><span class="line">			<span class="comment">// 过滤：尝试锁定folio，如果失败则跳过。</span></span><br><span class="line">			<span class="keyword">if</span> (!folio_trylock(folio))</span><br><span class="line">				<span class="keyword">goto</span> put;</span><br><span class="line">			<span class="comment">// 过滤：锁定后再次检查状态，防止竞态。</span></span><br><span class="line">			<span class="keyword">if</span> (folio-&gt;mapping != mapping ||</span><br><span class="line">			    folio_test_writeback(folio))</span><br><span class="line">				<span class="keyword">goto</span> unlock;</span><br><span class="line">			<span class="comment">// 调试断言，确保folio的索引与XArray的索引一致。</span></span><br><span class="line">			VM_BUG_ON_FOLIO(!folio_contains(folio, xas.xa_index),</span><br><span class="line">					folio);</span><br><span class="line">		&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">			<span class="comment">// --- 处理影子/值条目 ---</span></span><br><span class="line">			<span class="comment">// ... 范围检查逻辑 ...</span></span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 更新下一次循环的起始索引，跳过当前整个条目。</span></span><br><span class="line">		*start = base + nr;</span><br><span class="line">		<span class="comment">// 记录当前条目的索引。</span></span><br><span class="line">		indices[fbatch-&gt;nr] = xas.xa_index;</span><br><span class="line">		<span class="comment">// 将条目添加到批处理中。</span></span><br><span class="line">		<span class="keyword">if</span> (!folio_batch_add(fbatch, folio))</span><br><span class="line">			<span class="keyword">break</span>; <span class="comment">// 如果批处理已满，则退出循环。</span></span><br><span class="line">		<span class="keyword">continue</span>;</span><br><span class="line">unlock:</span><br><span class="line">		<span class="comment">// 如果锁定后检查失败，先解锁。</span></span><br><span class="line">		folio_unlock(folio);</span><br><span class="line">put:</span><br><span class="line">		<span class="comment">// 释放由find_get_entry增加的引用计数。</span></span><br><span class="line">		folio_put(folio);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// 退出RCU读端临界区。</span></span><br><span class="line">	rcu_read_unlock();</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 返回批处理中成功添加的条目数量。</span></span><br><span class="line">	<span class="keyword">return</span> folio_batch_count(fbatch);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Folio-解锁和唤醒：释放页面锁并通知服务员"><a href="#Folio-解锁和唤醒：释放页面锁并通知服务员" class="headerlink" title="Folio 解锁和唤醒：释放页面锁并通知服务员"></a>Folio 解锁和唤醒：释放页面锁并通知服务员</h2><p>本代码片段定义了 <code>folio_unlock</code> 函数，它是与 <code>folio_lock</code> 和 <code>folio_trylock</code> 配对的<strong>解锁原语</strong>。其核心功能是清除 folio 的 <code>PG_locked</code> 标志位，并<strong>唤醒</strong>所有可能正在睡眠等待这个锁的进程。这是Linux内存管理中所有基于页面锁（<code>PG_locked</code>）的同步机制的基础。<code>folio_unlock</code> 的实现非常高效，它通过一个巧妙的原子操作来同时完成解锁和判断是否有等待者这两个步骤。</p>
+<h3 id="实现原理分析-2"><a href="#实现原理分析-2" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><h4 id="folio-unlock"><a href="#folio-unlock" class="headerlink" title="folio_unlock"></a><code>folio_unlock</code></h4><ol>
+<li><p><strong>编译时与运行时检查</strong>:</p>
+<ul>
+<li><code>BUILD_BUG_ON(...)</code>: 这些是编译时断言。它们检查内核中某些关键标志位的定义，确保 <code>PG_waiters</code> 和 <code>PG_locked</code> 的位号（bit number）符合某些硬件架构（如x86）的优化预期。如果定义不符，编译会直接失败。</li>
+<li><code>VM_BUG_ON_FOLIO(...)</code>: 这是一个运行时断言。它检查被解锁的folio是否真的处于锁定状态。如果尝试解锁一个未被锁定的folio，说明内核逻辑存在严重错误，会触发一个bug报告。</li>
+</ul>
+</li>
+<li><p><strong>核心原子操作 (<code>folio_xor_flags_has_waiters</code>)</strong>:</p>
+<ul>
+<li>这是 <code>folio_unlock</code> 中最关键、最高效的一步。这个函数（其内部实现未显示，但可以推断）执行了一个<strong>原子的、带返回值的异或（XOR）操作</strong>。</li>
+<li><strong>解锁</strong>: 它原子地将 <code>folio</code> 的标志字与 <code>1 &lt;&lt; PG_locked</code> 进行XOR操作。因为<code>PG_locked</code>位当前是1，<code>1 XOR 1 = 0</code>，所以这一步的效果就是<strong>原子地将<code>PG_locked</code>位清零</strong>，即完成了“解锁”。</li>
+<li><strong>检查等待者</strong>: <code>PG_waiters</code> 是另一个标志位。当有进程因等待<code>PG_locked</code>而睡眠时，内核会设置<code>PG_waiters</code>位。这个原子操作在执行XOR之后，会检查标志字中 <code>PG_waiters</code> 位的值。</li>
+<li><strong>返回值</strong>: 如果 <code>PG_waiters</code> 位被设置了，<code>folio_xor_flags_has_waiters</code> 返回 <code>true</code>；否则返回 <code>false</code>。</li>
+<li><strong>优点</strong>: 通过<strong>一次原子操作</strong>，同时完成了“解锁”和“判断是否有等待者”两个任务，避免了“先解锁，再检查”可能导致的竞态条件（即在解锁后、检查前，一个新的等待者到来）。</li>
+</ul>
+</li>
+<li><p><strong>条件唤醒</strong>:</p>
+<ul>
+<li><code>if (folio_xor_flags_has_waiters(...)) folio_wake_bit(...)</code>: 只有当原子操作告诉我们<strong>确实有等待者</strong>时，才需要调用相对“重”的唤醒函数 <code>folio_wake_bit</code>。如果没有任何等待者，<code>folio_unlock</code> 就在一次原子操作后快速返回，性能极高。</li>
+</ul>
+</li>
+</ol>
+<h4 id="folio-wake-bit"><a href="#folio-wake-bit" class="headerlink" title="folio_wake_bit"></a><code>folio_wake_bit</code></h4><p>这个函数负责执行实际的唤醒操作。</p>
+<ol>
+<li><strong>获取等待队列</strong>: <code>folio_waitqueue(folio)</code> 会找到与这个folio关联的等待队列头（<code>wait_queue_head_t</code>）。在内核中，为了节省内存，通常不是每个folio都有一个独立的等待队列，而是通过一个哈希表将多个folio映射到同一个等待队列上。</li>
+<li><strong>准备唤醒键 (<code>wait_page_key</code>)</strong>: <code>__wake_up_locked_key</code> 是一个高级的唤醒函数，它允许进行<strong>选择性唤醒</strong>。<code>wait_page_key</code> 结构体就是“筛选条件”。我们只希望唤醒那些正在等待<strong>这个特定folio</strong>的**<code>PG_locked</code>位**的进程，而不是唤醒哈希冲突到同一个等待队列上的其他folio的等待者。<code>key</code>中设置了<code>folio</code>指针和<code>bit_nr</code>，就是为了这个目的。</li>
+<li><strong>执行唤醒</strong>: <code>__wake_up_locked_key(q, TASK_NORMAL, &amp;key)</code> 在持有等待队列的自旋锁的情况下，遍历队列，并唤醒所有与<code>key</code>匹配的等待项。</li>
+<li><strong>清理<code>PG_waiters</code>标志</strong>:<ul>
+<li><code>if (!waitqueue_active(q) || !key.page_match)</code>: 在唤醒之后，函数会检查等待队列是否已经变空（<code>!waitqueue_active(q)</code>），或者本次唤醒是否已经处理了所有与该folio匹配的等待者（<code>!key.page_match</code>）。</li>
+<li>如果满足任一条件，就调用 <code>folio_clear_waiters(folio)</code> 来清除folio上的<code>PG_waiters</code>标志。</li>
+<li><strong>为什么可能不清？</strong> 如注释所说，在哈希冲突的情况下，队列上可能还有等待其他folio的进程，此时 <code>waitqueue_active(q)</code> 仍为真。这不要紧，不清<code>PG_waiters</code>标志是安全的，下一次对这个哈希队列的唤醒操作最终会清理它。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析-2"><a href="#代码分析-2" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// folio_wake_bit: 唤醒正在等待folio上特定比特位的任务。</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">folio_wake_bit</span><span class="params">(<span class="keyword">struct</span> folio *folio, <span class="type">int</span> bit_nr)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 获取folio对应的等待队列头（可能是一个哈希队列）。</span></span><br><span class="line">	<span class="type">wait_queue_head_t</span> *q = folio_waitqueue(folio);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_page_key</span> <span class="title">key</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 设置唤醒键，用于精确匹配等待者。</span></span><br><span class="line">	key.folio = folio;   <span class="comment">// 只唤醒等待这个folio的任务</span></span><br><span class="line">	key.bit_nr = bit_nr; <span class="comment">// 只唤醒等待这个比特位的任务</span></span><br><span class="line">	key.page_match = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 获取等待队列的锁，并禁用中断。</span></span><br><span class="line">	spin_lock_irqsave(&amp;q-&gt;lock, flags);</span><br><span class="line">	<span class="comment">// 执行带键值的唤醒操作。</span></span><br><span class="line">	__wake_up_locked_key(q, TASK_NORMAL, &amp;key);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 在唤醒后，尝试清理folio上的PG_waiters标志。</span></span><br><span class="line">	<span class="keyword">if</span> (!waitqueue_active(q) || !key.page_match)</span><br><span class="line">		folio_clear_waiters(folio);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 释放锁并恢复中断。</span></span><br><span class="line">	spin_unlock_irqrestore(&amp;q-&gt;lock, flags);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * folio_unlock - 解锁一个已锁定的folio。</span></span><br><span class="line"><span class="comment"> * @folio: The folio.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">folio_unlock</span><span class="params">(<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 编译时断言，确保关键标志位的布局符合预期。</span></span><br><span class="line">	BUILD_BUG_ON(PG_waiters != <span class="number">7</span>);</span><br><span class="line">	BUILD_BUG_ON(PG_locked &gt; <span class="number">7</span>);</span><br><span class="line">	<span class="comment">// 运行时调试断言，确保我们正在解锁一个确实被锁定的folio。</span></span><br><span class="line">	VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 核心操作：原子地清除PG_locked位，并检查PG_waiters位是否被设置。</span></span><br><span class="line">	<span class="comment">// 这是一个集解锁与检查于一体的高效操作。</span></span><br><span class="line">	<span class="keyword">if</span> (folio_xor_flags_has_waiters(folio, <span class="number">1</span> &lt;&lt; PG_locked))</span><br><span class="line">		<span class="comment">// 仅当确实有等待者时，才调用较重的唤醒函数。</span></span><br><span class="line">		folio_wake_bit(folio, PG_locked);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 导出符号，供内核其他部分使用。</span></span><br><span class="line">EXPORT_SYMBOL(folio_unlock);</span><br></pre></td></tr></table></figure>
+
+<h2 id="Folio-等待队列：高效地管理对内存页的并发访问"><a href="#Folio-等待队列：高效地管理对内存页的并发访问" class="headerlink" title="Folio 等待队列：高效地管理对内存页的并发访问"></a>Folio 等待队列：高效地管理对内存页的并发访问</h2><p>本代码片段定义了 Linux 内核中用于管理对 <code>folio</code> 对象（代表一个或多个物理页的内存单元）的并发访问的<strong>等待队列机制</strong>。由于为每一个 <code>folio</code> 都创建一个独立的等待队列会消耗大量内存，内核采用了一种<strong>哈希表</strong>来共享等待队列。多个 <code>folio</code> 对象可能会被哈希到同一个等待队列上，但这通过辅助的键值匹配可以保证正确的唤醒，是内存效率和性能之间的折衷。</p>
+<h3 id="实现原理分析-3"><a href="#实现原理分析-3" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>本机制的核心思想是：并非每个 <code>folio</code> 都拥有一个专属的等待队列，而是多个 <code>folio</code> <strong>共享</strong>同一个等待队列。</p>
+<ol>
+<li><p><strong>等待队列哈希表 (<code>folio_wait_table</code>)</strong>:</p>
+<ul>
+<li><code>#define PAGE_WAIT_TABLE_BITS 8</code>: 定义了哈希表的桶（bucket）的数量的对数，即哈希表的大小为 <code>2^PAGE_WAIT_TABLE_BITS</code>。更大的值可以减少哈希冲突，但会增加内存占用。</li>
+<li><code>#define PAGE_WAIT_TABLE_SIZE (1 &lt;&lt; PAGE_WAIT_TABLE_BITS)</code>: 计算出哈希表的大小。</li>
+<li><code>static wait_queue_head_t folio_wait_table[PAGE_WAIT_TABLE_SIZE] __cacheline_aligned;</code>: 声明了等待队列头的数组。<code>__cacheline_aligned</code>属性确保数组中的每个元素都对齐到一个缓存行，以减少缓存行争用，提高多核性能。</li>
+</ul>
+</li>
+<li><p><strong>哈希函数 (<code>folio_waitqueue</code>)</strong>:</p>
+<ul>
+<li><code>static wait_queue_head_t *folio_waitqueue(struct folio *folio)</code>: 这是一个内联函数，实现了将 <code>folio</code> 映射到等待队列的哈希函数。</li>
+<li><code>hash_ptr(folio, PAGE_WAIT_TABLE_BITS)</code>: 这是一个通用的内核哈希函数，它将<code>folio</code>指针（实际上是<code>folio</code>结构体的地址）作为输入，并使用<code>PAGE_WAIT_TABLE_BITS</code>作为掩码来生成一个介于0和<code>PAGE_WAIT_TABLE_SIZE - 1</code>之间的哈希值。实际上就是取<code>folio</code>地址的低8位（如果<code>PAGE_WAIT_TABLE_BITS</code>是8）。</li>
+<li>函数返回<code>folio_wait_table</code>数组中对应索引的等待队列头指针。</li>
+</ul>
+</li>
+<li><p><strong>哈希冲突与精准唤醒</strong>:</p>
+<ul>
+<li>由于多个 <code>folio</code> 可能会被哈希到同一个等待队列，当调用 <code>wake_up</code> 唤醒等待在这个队列上的任务时，可能会出现“误唤醒”（thundering herd）现象：本不应该被唤醒的、等待其他 <code>folio</code> 的任务也被错误地唤醒了。</li>
+<li>为了解决这个问题，<code>folio_wake_bit</code> 使用了带键值的唤醒机制 (<code>__wake_up_locked_key</code>)，并传递了一个 <code>wait_page_key</code> 结构体。该结构体中包含了<strong>目标 <code>folio</code> 的指针</strong>以及<strong>被等待的标志位</strong>（例如<code>PG_locked</code>）。</li>
+<li><code>__wake_up_locked_key</code> 只会唤醒那些同时满足以下两个条件的任务：<br>a.  等待在<strong>同一个</strong>等待队列上（哈希冲突）。<br>b.  等待的是<strong>同一个<code>folio</code></strong> 的<strong>同一个特定标志位</strong>。</li>
+<li>这种精确的唤醒机制避免了“误唤醒”带来的性能损失，保证了只有真正需要被唤醒的任务才会被唤醒。</li>
+</ul>
+</li>
+<li><p><strong>清空等待者标志</strong>:</p>
+<ul>
+<li>folio_clear_waiters</li>
+</ul>
+</li>
+</ol>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 为了等待页面变为可用，必须有与页面关联的等待队列。</span></span><br><span class="line"><span class="comment"> * 通过使用等待队列的哈希表，其中bucket的原则是维护所有在同一个</span></span><br><span class="line"><span class="comment"> * 队列上的等待者，并在任何页面变为可用时唤醒所有等待者，并且对于</span></span><br><span class="line"><span class="comment"> * 被唤醒的上下文进行检查以确保适当的页面变为可用，这节省了空间</span></span><br><span class="line"><span class="comment"> * 但代价是罕见的哈希冲突期间的“惊群效应”现象。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="comment">// 定义哈希表的位数。</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAGE_WAIT_TABLE_BITS 8</span></span><br><span class="line"><span class="comment">// 计算哈希表的大小。</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAGE_WAIT_TABLE_SIZE (1 &lt;&lt; PAGE_WAIT_TABLE_BITS)</span></span><br><span class="line"><span class="comment">// 声明并初始化等待队列头的哈希表。 __cacheline_aligned用于缓存行对齐。</span></span><br><span class="line"><span class="type">static</span> <span class="type">wait_queue_head_t</span> folio_wait_table[PAGE_WAIT_TABLE_SIZE] __cacheline_aligned;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_waitqueue: 计算指定folio对应的等待队列头的地址。</span></span><br><span class="line"><span class="type">static</span> <span class="type">wait_queue_head_t</span> *<span class="title function_">folio_waitqueue</span><span class="params">(<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 使用hash_ptr函数将folio指针映射到哈希表的索引，并返回对应的等待队列头指针。</span></span><br><span class="line">	<span class="keyword">return</span> &amp;folio_wait_table[hash_ptr(folio, PAGE_WAIT_TABLE_BITS)];</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_wake_bit: 唤醒正在等待folio上特定比特位的任务。</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">folio_wake_bit</span><span class="params">(<span class="keyword">struct</span> folio *folio, <span class="type">int</span> bit_nr)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 获取folio对应的等待队列头。</span></span><br><span class="line">	<span class="type">wait_queue_head_t</span> *q = folio_waitqueue(folio);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_page_key</span> <span class="title">key</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 设置唤醒键，用于精确匹配等待者。</span></span><br><span class="line">	key.folio = folio;  <span class="comment">// 只唤醒等待这个folio的任务。</span></span><br><span class="line">	key.bit_nr = bit_nr; <span class="comment">// 只唤醒等待特定比特位的任务。</span></span><br><span class="line">	key.page_match = <span class="number">0</span>;  <span class="comment">// 初始为0，__wake_up_locked_key会设置。</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 获取等待队列的锁，并禁用中断。</span></span><br><span class="line">	spin_lock_irqsave(&amp;q-&gt;lock, flags);</span><br><span class="line">	<span class="comment">// 执行带键值的唤醒操作。</span></span><br><span class="line">	__wake_up_locked_key(q, TASK_NORMAL, &amp;key);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 检查是否需要清理等待者标志。</span></span><br><span class="line">	<span class="keyword">if</span> (!waitqueue_active(q) || !key.page_match)</span><br><span class="line">		folio_clear_waiters(folio);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 释放锁并恢复中断。</span></span><br><span class="line">	spin_unlock_irqrestore(&amp;q-&gt;lock, flags);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="VFS通用文件读取例程：基于页缓存的标准读取实现"><a href="#VFS通用文件读取例程：基于页缓存的标准读取实现" class="headerlink" title="VFS通用文件读取例程：基于页缓存的标准读取实现"></a>VFS通用文件读取例程：基于页缓存的标准读取实现</h2><p>本代码片段展示了<code>generic_file_read_iter</code>函数，它是Linux VFS层为绝大多数普通文件系统提供的<strong>标准<code>read_iter()</code>实现</strong>。<code>read_iter</code>是现代内核中用于文件读取的核心接口，它取代了旧的<code>read</code>接口，因为它使用<code>iov_iter</code>结构体，可以高效地处理分散&#x2F;聚集I&#x2F;O（scatter-gather I&#x2F;O），即将数据直接读取到多个不连续的内存缓冲区中，避免了不必要的数据拷贝。</p>
+<p>您可以将<code>generic_file_read_iter</code>想象成一个图书管的<strong>标准借阅流程</strong>。这个流程适用于图书馆里所有可以放入公共书架（<strong>Page Cache</strong>，页缓存）的普通书籍（普通文件）。</p>
+<ul>
+<li><strong>读者</strong>: 用户进程。</li>
+<li><strong>借书单 (<code>iov_iter</code>)</strong>: 记录了读者想要把书的内容抄到哪些笔记本（内存缓冲区）的哪些位置。</li>
+<li><strong>图书馆员 (<code>generic_file_read_iter</code>)</strong>: 执行借阅流程。</li>
+</ul>
+<p>这个流程分为两种情况：</p>
+<ol>
+<li><p><strong>VIP加急服务 (Direct I&#x2F;O)</strong>: 读者（进程）如果出示了“加急卡”（<code>O_DIRECT</code>标志），图书馆员会绕过公共书架（Page Cache），直接去后台的书库（存储设备），让库管（<code>mapping-&gt;a_ops-&gt;direct_IO</code>）把书的内容直接复印到读者的笔记本上。这个过程没有中间环节，速度可能很快，但对读者的笔记本（内存对齐、大小等）有严格要求。</p>
+</li>
+<li><p><strong>标准借阅流程 (Buffered I&#x2F;O)</strong>: 对于绝大多数普通读者，图书馆员会：</p>
+<ul>
+<li><strong>在公共书架上查找 (<code>filemap_read</code>)</strong>: 图书馆员首先去公共书架（Page Cache）找这本书。</li>
+<li><strong>书在架子上</strong>: 如果书正好在书架上（数据在Page Cache中），就直接拿给读者抄写。</li>
+<li><strong>书不在架子上</strong>: 如果书不在书架上（数据不在Page Cache中），图书馆员会发起一个“调取请求”（启动块I&#x2F;O操作），让库管去后台书库（存储设备）把书拿过来，放到公共书架上。然后，再从书架上拿给读者抄写。</li>
+<li><strong>预读</strong>: 如果图书馆员看到读者借了第一章，他会猜测读者可能接下来会借第二章，于是会顺手把第二章也从书库调取到公共书架上，以备不时之需。这就是“预读”（readahead）。</li>
+</ul>
+</li>
+</ol>
+<h3 id="实现原理分析-4"><a href="#实现原理分析-4" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>generic_file_read_iter</code>是一个分发器，它根据打开文件的标志（<code>iocb-&gt;ki_flags</code>）来决定是走直接I&#x2F;O路径还是缓冲I&#x2F;O路径。</p>
+<ol>
+<li><p><strong>直接I&#x2F;O (Direct I&#x2F;O) 路径 (<code>iocb-&gt;ki_flags &amp; IOCB_DIRECT</code>)</strong>:</p>
+<ul>
+<li><strong>前提</strong>: 用户在<code>open()</code>时指定了<code>O_DIRECT</code>标志。</li>
+<li><strong>写回等待</strong>: <code>kiocb_write_and_wait(iocb, count)</code>是一个看似奇怪但非常重要的步骤。它确保在开始直接读取之前，所有与此文件相关的、由本进程发起的“脏”页（dirty pages，即在Page Cache中被修改过但尚未写回磁盘的数据）都被写回到存储设备上。这是为了保证数据的一致性。因为直接I&#x2F;O会绕过Page Cache，如果不先写回脏页，那么直接读操作可能会读到比Page Cache中还旧的数据。</li>
+<li><strong>委托给底层</strong>: 核心操作被委托给地址空间操作表（<code>address_space_operations</code>）中的<code>-&gt;direct_IO</code>方法。具体文件系统（如ext4）或块设备层会实现这个方法，它负责构建I&#x2F;O请求，并直接与块设备驱动交互，将数据从磁盘直接传输到用户提供的<code>iov_iter</code>缓冲区中。</li>
+<li><strong>部分读取与回退</strong>: <code>direct_IO</code>可能会因为各种原因（如遇到压缩块、磁盘错误等）只读取了部分数据。<code>iov_iter_revert</code>函数在这里的作用是，如果发生了部分读取，它会回退<code>iov_iter</code>的内部指针，使其准确地反映出还有多少缓冲区空间未被填充。</li>
+<li><strong>回退到缓冲I&#x2F;O</strong>: 在某些文件系统（如Btrfs）上，如果直接I&#x2F;O因为特定原因（如压缩）而提前终止，代码会<strong>继续执行</strong>，落入到下面的缓冲I&#x2F;O路径 (<code>filemap_read</code>)，尝试用标准方式读取剩余的数据。但对于DAX文件（直接在存储设备上执行，没有传统Page Cache），这是行不通的，所以会直接返回。</li>
+</ul>
+</li>
+<li><p><strong>缓冲I&#x2F;O (Buffered I&#x2F;O) 路径 (<code>filemap_read</code>)</strong>:</p>
+<ul>
+<li>这是最常见的情况。</li>
+<li><code>filemap_read</code>是一个复杂的函数（未在此代码片段中提供），它封装了所有与Page Cache交互的逻辑。其大致流程是：<br>a. 循环遍历请求的读取范围。<br>b. 对于每一页，调用<code>find_get_page</code>在Page Cache中查找。<br>c. <strong>Cache Hit</strong>: 如果页在缓存中，并且是最新的（<code>Uptodate</code>），就将页的内容拷贝到<code>iov_iter</code>指定的缓冲区。<br>d. <strong>Cache Miss</strong>: 如果页不在缓存中，或者已失效，就会触发“缺页处理”：<br>i.  分配一个新的页。<br>ii. 将其加入到文件的Page Cache中。<br>iii. 调用地址空间操作表中的<code>-&gt;read_folio</code>方法，创建一个块I&#x2F;O请求，让块设备层从磁盘读取数据填充这个页。<br>iv. 如果是同步读取，当前进程会等待I&#x2F;O完成。<br>v.  I&#x2F;O完成后，页被标记为<code>Uptodate</code>，然后将内容拷贝到用户缓冲区。<br>e. 同时，它会根据访问模式触发**预读（readahead）**逻辑，异步地读取文件后续的页面，以期下次读取时能命中缓存。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析-3"><a href="#代码分析-3" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * generic_file_read_iter - 通用文件系统读取例程</span></span><br><span class="line"><span class="comment"> * @iocb:	内核 I/O 控制块 (kiocb)，包含了文件指针、位置、标志等信息。</span></span><br><span class="line"><span class="comment"> * @iter:	iov_iter 结构体，描述了数据要被读到哪里去。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这是所有能直接使用页缓存(page cache)的文件系统的 &quot;read_iter()&quot; 标准实现。</span></span><br><span class="line"><span class="comment"> * ... [注释中对IOCB_NOWAIT和IOCB_NOIO标志的解释] ...</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">ssize_t</span></span><br><span class="line"><span class="title function_">generic_file_read_iter</span><span class="params">(<span class="keyword">struct</span> kiocb *iocb, <span class="keyword">struct</span> iov_iter *iter)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 获取总共要读取的字节数。</span></span><br><span class="line">	<span class="type">size_t</span> count = iov_iter_count(iter);</span><br><span class="line">	<span class="type">ssize_t</span> retval = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 如果请求读取0字节，直接返回0，避免不必要地更新文件访问时间(atime)。</span></span><br><span class="line">	<span class="keyword">if</span> (!count)</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 检查是否是直接I/O (Direct I/O) 请求。</span></span><br><span class="line">	<span class="keyword">if</span> (iocb-&gt;ki_flags &amp; IOCB_DIRECT) &#123;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">file</span> *<span class="title">file</span> =</span> iocb-&gt;ki_filp;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">address_space</span> *<span class="title">mapping</span> =</span> file-&gt;f_mapping;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">inode</span> *<span class="title">inode</span> =</span> mapping-&gt;host;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 确保所有由本进程产生的脏页都已写回磁盘，保证数据一致性。</span></span><br><span class="line">		retval = kiocb_write_and_wait(iocb, count);</span><br><span class="line">		<span class="keyword">if</span> (retval &lt; <span class="number">0</span>)</span><br><span class="line">			<span class="keyword">return</span> retval;</span><br><span class="line">		</span><br><span class="line">		file_accessed(file); <span class="comment">// 更新文件访问时间。</span></span><br><span class="line"></span><br><span class="line">		<span class="comment">// 调用底层文件/设备驱动提供的 a_ops-&gt;direct_IO 方法。</span></span><br><span class="line">		retval = mapping-&gt;a_ops-&gt;direct_IO(iocb, iter);</span><br><span class="line">		<span class="keyword">if</span> (retval &gt;= <span class="number">0</span>) &#123;</span><br><span class="line">			<span class="comment">// 如果成功读取，更新文件指针位置和剩余字节数。</span></span><br><span class="line">			iocb-&gt;ki_pos += retval;</span><br><span class="line">			count -= retval;</span><br><span class="line">		&#125;</span><br><span class="line">		<span class="comment">// 如果direct_IO不是异步返回，就需要回退iter，使其反映真实情况。</span></span><br><span class="line">		<span class="keyword">if</span> (retval != -EIOCBQUEUED)</span><br><span class="line">			iov_iter_revert(iter, count - iov_iter_count(iter));</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 特殊处理：某些文件系统（如Btrfs的压缩文件）可能只完成部分DIO读取。</span></span><br><span class="line"><span class="comment">		 * 如果：1. 发生错误；2. 已读完所有请求的数据；3. 是DAX文件；</span></span><br><span class="line"><span class="comment">		 * 就直接返回。</span></span><br><span class="line"><span class="comment">		 * 4. 如果到达文件末尾，也返回。</span></span><br><span class="line"><span class="comment">		 * 否则，将落入(fallthrough)到下面的缓冲I/O，继续读取剩余部分。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (retval &lt; <span class="number">0</span> || !count || IS_DAX(inode))</span><br><span class="line">			<span class="keyword">return</span> retval;</span><br><span class="line">		<span class="keyword">if</span> (iocb-&gt;ki_pos &gt;= i_size_read(inode))</span><br><span class="line">			<span class="keyword">return</span> retval;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 对于普通缓冲I/O，或者DIO回退的情况，调用filemap_read。</span></span><br><span class="line">	<span class="comment">// filemap_read是处理页缓存读的核心函数。</span></span><br><span class="line">	<span class="comment">// retval作为输入参数，记录了DIO部分可能已经读取的字节数。</span></span><br><span class="line">	<span class="keyword">return</span> filemap_read(iocb, iter, retval);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 导出符号，使得其他内核模块（主要是文件系统驱动）可以调用这个函数。</span></span><br><span class="line">EXPORT_SYMBOL(generic_file_read_iter);</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/662716e7/">https://wdfk-prog.space/posts/662716e7/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/mm/">mm</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/08.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1">[TOC] Linux 内存模型之基石：FLATMEM 深度解析FLATMEM 是 Linux 内核中最基础、最常用，也是最高效的内存模型。正如其名，“平坦内存”模型假定系统的物理内存是一个单一、连续、不存在大间隙的地址空间。  一、 核心原理：mem_map 数组FLATMEM 模型的全部精髓都围绕着一个核心数据结构：一个巨大的、全局的 struct page 数组，通常被称为 mem_map。  什么是 struct page？  在 Linux 内核中，物理内存不是按字节管理的，而是按固定大小的块来管理的，这个块被称为页帧 (Page Frame)（通常是 4KB）。 内核为每一个物理页帧都分配了一个 struct page 描述符。这个结构体包含了该物理页帧的所有元数据，例如：它的引用计数、它是否是脏页、是否被锁定、属于哪个地址空间映射等。   mem_map 的作用  FLATMEM 模型在内核启动的极早期，会分配一个足够大的连续内存区域，用来存放一个 struct page 数组。这个数组的大小足以覆盖从物理地址 0（或某个起始偏移）到系统最大物理内存地址之间的所有页...</div></div></div></a><a class="pagination-related" href="/posts/9269e9bc/" title="list_lru"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">list_lru</div></div><div class="info-2"><div class="info-item-1">  [TOC]  list_lru: Linux内核的可扩展对象缓存管理器list_lru 是 Linux 内核提供的一套可扩展的、近似 LRU (Least Recently Used) 缓存列表管理机制。它专门设计用来高效地管理大量、小型、生命周期不一的内核对象，例如目录项缓存（dentries）和索引节点缓存（inodes）。 可以将其想象成一个特殊的“图书馆卡片目录系统”，这个系统需要被许多图书管理员（CPU核心）同时、频繁地访问，并且需要一种高效的方式来找出那些最久未被使用的卡片（对象）以便回收。  一、 核心问题：为什么需要 list_lru？在理解 list_lru 的设计之前，必须先明白它要解决的核心问题：在多核环境下的锁竞争。 一个朴素的 LRU 列表实现通常是这样的：  维护一个全局的双向链表。 当一个对象被访问时，将它从链表中的当前位置移到链表头（表示最新使用）。 当需要回收内存时，从链表尾部（表示最久未使用）开始移除对象。  这种实现在单核系统上工作得很好。但在现代多核系统中，会产生一个巨大的性能瓶颈：所有 CPU 核心都必须竞争同一个全局锁来修改这个链表...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1"> [TOC] init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的 i...</div></div></div></a><a class="pagination-related" href="/posts/0/" title="workingset"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">workingset</div></div><div class="info-2"><div class="info-item-1">  [toc]  mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制历史与背景这项技术是为了解决什么特定问题而诞生的？mm/workingset.c 中的代码是为了解决传统页面回收算法（如vmscan.c中的两阶段LRU）的一个核心痛点：无法精确区分真正的“工作集”和短暂的、非核心的内存使用。 工作集（Working Set）指的是一个进程在当前阶段为了高效运行而需要频繁访问的内存页面集合。传统LRU算法通过active&#x2F;inactive链表来近似这个集合，但存在以下问题：  抖动（Thrashing）：当内存压力增大时，一个暂时不活动的进程（例如，用户切换到了另一个窗口），其工作集页面可能会被从active链表老化到inactive链表，并最终被回收。当用户切回该进程时，进程会遭遇大量的缺页中断（page faults），需要从磁盘或交换空间重新读取其工作集，导致系统响应缓慢，磁盘I&#x2F;O飙升。workingset.c 的核心目标就是识别并保护这些被错误回收的工作集页面，从而抑...</div></div></div></a><a class="pagination-related" href="/posts/e8ec9031/" title="vmscan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">vmscan</div></div><div class="info-2"><div class="info-item-1">   [toc]  mm&#x2F;vmscan.c 页面回收(Page Reclaim) 内核内存管理的核心压力调节器历史与背景这项技术是为了解决什么特定问题而诞生的？mm/vmscan.c 中的代码是为了解决计算机科学中最基本的问题之一：物理内存是一种有限资源。当系统运行的应用程序和内核本身需要的内存总量超过了可用的物理RAM时，操作系统必须有一种机制来释放一些当前已分配但“不那么重要”的内存，以便为新的、更紧迫的内存请求腾出空间。 如果没有页面回收机制，系统在内存耗尽时唯一的选择就是拒绝新的内存分配请求，这将导致应用程序崩溃或系统完全停止响应。vmscan.c 实现的页面回收（Page Reclaim）算法，其核心目标是在内存压力（Memory Pressure）下，智能地选择并回收内存页面，从而保证系统的持续运行和响应能力。 它的发展经历了哪些重要的里程碑或版本迭代？Linux的页面回收算法经历了重大的演进，以适应不断变化的硬件和工作负载：  早期的LRU：最初的Linux内核使用了相当简单的“最近最少使用”（Least Recently Used, LRU）算法。 两阶...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/e5a511c0/" title="mmzone"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">mmzone</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;vmscan.c lruvec 结构体 页面回收的核心数据结构lruvec 是 Linux 内核中用于管理 LRU（Least Recently Used，最近最少使用）页面列表的一个核心数据结构。它是内存管理子系统的一部分，定义于 mm/vmscan.c 相关头文件中，主要作用是在页面回收（Page Reclamation）过程中，对不同类型、不同状态的内存页面进行分组和跟踪，是内核决定回收哪些页面的关键依据。 历史与背景这项技术是为了解决什么特定问题而诞生的？lruvec 的诞生是为了解决在现代计算机体系结构下，如何高效、精确、可扩展地管理内存页面以供回收的问题。  区分页面类型：不同类型的内存页面回收成本和策略完全不同。例如，文件页（File-backed pages）如果内容未被修改（是干净的），可以直接丢弃，需要时再从磁盘读回；而匿名页（Anonymous pages，如进程堆栈、malloc分配的内存）则必须先交换到交换空间（Swap Area）才能释放，成本更高。lruvec 需要将它们分开管理。 近似LRU算法：真正的LRU算法要求跟踪...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-filemap-c-Linux-%E9%A1%B5%E7%BC%93%E5%AD%98-Page-Cache-%E7%9A%84%E5%BF%83%E8%84%8F"><span class="toc-number">1.</span> <span class="toc-text">mm&#x2F;filemap.c: Linux 页缓存 (Page Cache) 的心脏</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E3%80%81-%E6%A0%B8%E5%BF%83%E8%81%8C%E8%B4%A3"><span class="toc-number">1.0.1.</span> <span class="toc-text">一、 核心职责</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BA%8C%E3%80%81-%E6%A0%B8%E5%BF%83%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84%E4%B8%8E%E6%9C%BA%E5%88%B6"><span class="toc-number">1.0.2.</span> <span class="toc-text">二、 核心数据结构与机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E3%80%81-%E5%85%B3%E9%94%AE%E6%BA%90%E7%A0%81%E5%87%BD%E6%95%B0%E8%A7%A3%E6%9E%90"><span class="toc-number">1.0.3.</span> <span class="toc-text">三、 关键源码函数解析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9B%E3%80%81-%E5%9C%BA%E6%99%AF%E8%B4%AF%E7%A9%BF%EF%BC%9A%E7%AC%AC%E4%B8%80%E6%AC%A1%E8%AF%BB%E5%8F%96%E4%B8%80%E4%B8%AA%E6%96%87%E4%BB%B6"><span class="toc-number">1.0.4.</span> <span class="toc-text">四、 场景贯穿：第一次读取一个文件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BA%94%E3%80%81-%E6%80%BB%E7%BB%93"><span class="toc-number">1.0.5.</span> <span class="toc-text">五、 总结</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-pagemap-h"><span class="toc-number">2.</span> <span class="toc-text">include&#x2F;linux&#x2F;pagemap.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#mapping-shrinkable-%E6%A3%80%E6%9F%A5%E9%A1%B5%E9%9D%A2%E7%BC%93%E5%AD%98%EF%BC%88page-cache%EF%BC%89%E7%9A%84%E7%8A%B6%E6%80%81%EF%BC%8C%E4%BB%A5%E7%A1%AE%E5%AE%9A%E6%98%AF%E5%90%A6%E5%85%81%E8%AE%B8%E5%9B%9E%E6%94%B6-inode"><span class="toc-number">2.1.</span> <span class="toc-text">mapping_shrinkable 检查页面缓存（page cache）的状态，以确定是否允许回收 inode</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#filemap-fdatawait-%E7%AD%89%E5%BE%85%E5%86%99%E5%9B%9E%E5%AE%8C%E6%88%90"><span class="toc-number">2.2.</span> <span class="toc-text">filemap_fdatawait 等待写回完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Folio%E7%8A%B6%E6%80%81%E6%A3%80%E6%9F%A5%E4%B8%8E%E9%94%81%E5%AE%9A%EF%BC%9A%E5%86%85%E5%AD%98%E9%A1%B5%E6%93%8D%E4%BD%9C%E7%9A%84%E5%9F%BA%E7%A1%80%E5%8E%9F%E8%AF%AD"><span class="toc-number">2.3.</span> <span class="toc-text">Folio状态检查与锁定：内存页操作的基础原语</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">2.3.1.</span> <span class="toc-text">实现原理分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#folio-trylock"><span class="toc-number">2.3.1.1.</span> <span class="toc-text">folio_trylock</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#folio-contains"><span class="toc-number">2.3.1.2.</span> <span class="toc-text">folio_contains</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">2.3.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-mm-h"><span class="toc-number">3.</span> <span class="toc-text">include&#x2F;linux&#x2F;mm.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#folio-nr-pages-%E8%AE%A1%E7%AE%97%E4%B8%80%E4%B8%AA-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89%E4%B8%AD%E5%8C%85%E5%90%AB%E7%9A%84%E9%A1%B5%E9%9D%A2%E6%95%B0%E9%87%8F"><span class="toc-number">3.1.</span> <span class="toc-text">folio_nr_pages 计算一个 folio（页面的抽象表示）中包含的页面数量</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-filemap-c"><span class="toc-number">4.</span> <span class="toc-text">mm&#x2F;filemap.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#find-get-entry-%E5%9C%A8-xa-state%EF%BC%88XArray-%E7%8A%B6%E6%80%81%EF%BC%89%E4%B8%AD%E6%9F%A5%E6%89%BE%E4%B8%8E%E6%8C%87%E5%AE%9A%E6%9D%A1%E4%BB%B6%E5%8C%B9%E9%85%8D%E7%9A%84-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89"><span class="toc-number">4.1.</span> <span class="toc-text">find_get_entry 在 xa_state（XArray 状态）中查找与指定条件匹配的 folio（页面的抽象表示）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#filemap-get-folios-tag-%E4%BB%8E%E6%8C%87%E5%AE%9A%E7%9A%84%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%EF%BC%88address-space%EF%BC%89%E4%B8%AD%E8%8E%B7%E5%8F%96%E4%B8%80%E6%89%B9%E4%B8%8E%E7%89%B9%E5%AE%9A%E6%A0%87%E7%AD%BE%EF%BC%88tag%EF%BC%89%E5%8C%B9%E9%85%8D%E7%9A%84-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89"><span class="toc-number">4.2.</span> <span class="toc-text">filemap_get_folios_tag 从指定的地址空间（address_space）中获取一批与特定标签（tag）匹配的 folio（页面的抽象表示）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#filemap-fdatawait-range-%E7%94%A8%E4%BA%8E%E7%AD%89%E5%BE%85%E6%8C%87%E5%AE%9A%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%EF%BC%88address-space%EF%BC%89%E4%B8%AD%E6%9F%90%E4%B8%AA%E8%8C%83%E5%9B%B4%E5%86%85%E7%9A%84%E9%A1%B5%E9%9D%A2%E5%AE%8C%E6%88%90%E5%86%99%E5%9B%9E%E6%93%8D%E4%BD%9C"><span class="toc-number">4.3.</span> <span class="toc-text">__filemap_fdatawait_range 用于等待指定地址空间（address_space）中某个范围内的页面完成写回操作</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#filemap-check-errors-%E7%94%A8%E4%BA%8E%E6%A3%80%E6%9F%A5-address-space%EF%BC%88%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%EF%BC%89%E7%BB%93%E6%9E%84%E4%B8%AD%E6%98%AF%E5%90%A6%E5%AD%98%E5%9C%A8%E6%9C%AA%E5%A4%84%E7%90%86%E7%9A%84%E5%86%99%E5%85%A5%E9%94%99%E8%AF%AF%EF%BC%8C%E5%B9%B6%E8%BF%94%E5%9B%9E%E7%9B%B8%E5%BA%94%E7%9A%84%E9%94%99%E8%AF%AF%E4%BB%A3%E7%A0%81"><span class="toc-number">4.4.</span> <span class="toc-text">filemap_check_errors 用于检查 address_space（地址空间）结构中是否存在未处理的写入错误，并返回相应的错误代码</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#folio-waitqueue-%E7%94%A8%E4%BA%8E%E8%8E%B7%E5%8F%96%E4%B8%8E-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89%E7%9B%B8%E5%85%B3%E8%81%94%E7%9A%84%E7%AD%89%E5%BE%85%E9%98%9F%E5%88%97"><span class="toc-number">4.5.</span> <span class="toc-text">folio_waitqueue 用于获取与 folio（页面的抽象表示）相关联的等待队列</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wake-page-function-%E5%A4%84%E7%90%86%E7%AD%89%E5%BE%85%E9%98%9F%E5%88%97%E4%B8%AD%E7%9A%84%E5%94%A4%E9%86%92%E9%80%BB%E8%BE%91"><span class="toc-number">4.6.</span> <span class="toc-text">wake_page_function 处理等待队列中的唤醒逻辑</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#folio-wait-bit-common-%E7%AD%89%E5%BE%85-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89%E4%B8%8A%E7%9A%84%E7%89%B9%E5%AE%9A%E6%A0%87%E5%BF%97%E4%BD%8D%EF%BC%88bit-nr%EF%BC%89%E8%A2%AB%E6%B8%85%E9%99%A4"><span class="toc-number">4.7.</span> <span class="toc-text">folio_wait_bit_common 等待 folio（页面的抽象表示）上的特定标志位（bit_nr）被清除</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#folio-wait-bit-%E7%94%A8%E4%BA%8E%E7%AD%89%E5%BE%85-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89%E4%B8%8A%E7%9A%84%E6%8C%87%E5%AE%9A%E6%A0%87%E5%BF%97%E4%BD%8D%EF%BC%88bit-nr%EF%BC%89%E8%A2%AB%E6%B8%85%E9%99%A4"><span class="toc-number">4.8.</span> <span class="toc-text">folio_wait_bit 用于等待 folio（页面的抽象表示）上的指定标志位（bit_nr）被清除</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#filemap-fdatawait-range-%E7%AD%89%E5%BE%85%E5%86%99%E5%9B%9E%E5%AE%8C%E6%88%90"><span class="toc-number">4.9.</span> <span class="toc-text">filemap_fdatawait_range 等待写回完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#pagecache-init-%E5%88%9D%E5%A7%8B%E5%8C%96%E9%A1%B5%E9%9D%A2%E7%BC%93%E5%AD%98%E7%9B%B8%E5%85%B3%E7%9A%84%E7%BB%93%E6%9E%84%E5%92%8C%E7%B3%BB%E7%BB%9F%E6%8E%A7%E5%88%B6%E5%8F%82%E6%95%B0"><span class="toc-number">4.10.</span> <span class="toc-text">pagecache_init 初始化页面缓存相关的结构和系统控制参数</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%A1%B5%E7%BC%93%E5%AD%98%E6%89%B9%E5%A4%84%E7%90%86%E6%9F%A5%E6%89%BE%E4%B8%8E%E9%94%81%E5%AE%9A%EF%BC%9A%E9%AB%98%E6%95%88%E6%A3%80%E7%B4%A2%E5%8F%AF%E6%93%8D%E4%BD%9C%E7%9A%84%E7%BC%93%E5%AD%98%E9%A1%B5"><span class="toc-number">4.11.</span> <span class="toc-text">页缓存批处理查找与锁定：高效检索可操作的缓存页</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-1"><span class="toc-number">4.11.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-1"><span class="toc-number">4.11.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Folio-%E8%A7%A3%E9%94%81%E5%92%8C%E5%94%A4%E9%86%92%EF%BC%9A%E9%87%8A%E6%94%BE%E9%A1%B5%E9%9D%A2%E9%94%81%E5%B9%B6%E9%80%9A%E7%9F%A5%E6%9C%8D%E5%8A%A1%E5%91%98"><span class="toc-number">4.12.</span> <span class="toc-text">Folio 解锁和唤醒：释放页面锁并通知服务员</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-2"><span class="toc-number">4.12.1.</span> <span class="toc-text">实现原理分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#folio-unlock"><span class="toc-number">4.12.1.1.</span> <span class="toc-text">folio_unlock</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#folio-wake-bit"><span class="toc-number">4.12.1.2.</span> <span class="toc-text">folio_wake_bit</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-2"><span class="toc-number">4.12.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Folio-%E7%AD%89%E5%BE%85%E9%98%9F%E5%88%97%EF%BC%9A%E9%AB%98%E6%95%88%E5%9C%B0%E7%AE%A1%E7%90%86%E5%AF%B9%E5%86%85%E5%AD%98%E9%A1%B5%E7%9A%84%E5%B9%B6%E5%8F%91%E8%AE%BF%E9%97%AE"><span class="toc-number">4.13.</span> <span class="toc-text">Folio 等待队列：高效地管理对内存页的并发访问</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-3"><span class="toc-number">4.13.1.</span> <span class="toc-text">实现原理分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#VFS%E9%80%9A%E7%94%A8%E6%96%87%E4%BB%B6%E8%AF%BB%E5%8F%96%E4%BE%8B%E7%A8%8B%EF%BC%9A%E5%9F%BA%E4%BA%8E%E9%A1%B5%E7%BC%93%E5%AD%98%E7%9A%84%E6%A0%87%E5%87%86%E8%AF%BB%E5%8F%96%E5%AE%9E%E7%8E%B0"><span class="toc-number">4.14.</span> <span class="toc-text">VFS通用文件读取例程：基于页缓存的标准读取实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-4"><span class="toc-number">4.14.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-3"><span class="toc-number">4.14.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/08.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'b9f789d8dfe903855557a3db1eeab2f5'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

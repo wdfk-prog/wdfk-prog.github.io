@@ -1,0 +1,1424 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>rcu | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC] kernel&#x2F;rcu Read-Copy Update (RCU) 高性能的内核同步机制历史与背景这项技术是为了解决什么特定问题而诞生的？Read-Copy Update (RCU) 技术的诞生，是为了解决在多核处理器系统中，对**读多写少（Read-mostly）**类型共享数据进行同步时遇到的性能瓶颈问题。 传统的同步机制，如读写锁（Reader-Writer Locks">
+<meta property="og:type" content="article">
+<meta property="og:title" content="rcu">
+<meta property="og:url" content="https://wdfk-prog.space/posts/c68bd8fb/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC] kernel&#x2F;rcu Read-Copy Update (RCU) 高性能的内核同步机制历史与背景这项技术是为了解决什么特定问题而诞生的？Read-Copy Update (RCU) 技术的诞生，是为了解决在多核处理器系统中，对**读多写少（Read-mostly）**类型共享数据进行同步时遇到的性能瓶颈问题。 传统的同步机制，如读写锁（Reader-Writer Locks">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/09.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:29.225Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="kernel">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="rcu">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/09.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "rcu",
+  "url": "https://wdfk-prog.space/posts/c68bd8fb/",
+  "image": "https://wdfk-prog.space/images/covers/09.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:29.225Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/c68bd8fb/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'rcu',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/09.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">rcu</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">rcu<a class="post-edit-link" href="null_posts/linux/kernel/rcu/RCU.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:29.225Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/">kernel</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/rcu/">rcu</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">11.4k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>39分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/c68bd8fb/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:29&quot;}" hidden></div><p>[TOC]</p>
+<h1 id="kernel-rcu-Read-Copy-Update-RCU-高性能的内核同步机制"><a href="#kernel-rcu-Read-Copy-Update-RCU-高性能的内核同步机制" class="headerlink" title="kernel&#x2F;rcu Read-Copy Update (RCU) 高性能的内核同步机制"></a>kernel&#x2F;rcu Read-Copy Update (RCU) 高性能的内核同步机制</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p>Read-Copy Update (RCU) 技术的诞生，是为了解决在多核处理器系统中，对**读多写少（Read-mostly）**类型共享数据进行同步时遇到的性能瓶颈问题。</p>
+<p>传统的同步机制，如读写锁（Reader-Writer Locks），虽然允许多个读者同时访问数据，但存在以下问题：</p>
+<ol>
+<li><strong>读者开销</strong>：即使是读取操作，读者也必须获取一个锁（或至少执行原子操作来增加引用计数）。在多核环境下，这会导致缓存行在CPU之间频繁“弹跳”（cache line bouncing），造成严重的性能下降和扩展性问题。</li>
+<li><strong>锁争用</strong>：当写者需要获取锁时，它可能会被已有的读者阻塞，或者需要等待新的读者完成。反之，写者持有锁时，所有读者都必须等待。这种争用在高并发读取场景下尤为突出。</li>
+</ol>
+<p>RCU 的核心目标就是<strong>让读者几乎零开销（wait-free）</strong>。它允许读者在访问数据时完全不需要获取任何锁、自旋锁或执行原子指令，从而消除了读者端的同步开销和扩展性瓶颈，极大地提升了读取性能。</p>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p>RCU 最初在DYNIX&#x2F;ptx操作系统中被提出，由Paul E. McKenney等人引入并推广到Linux内核。</p>
+<ul>
+<li><strong>经典RCU (Classic RCU)</strong>：这是最早被合并到Linux内核的RCU实现。它要求RCU读侧临界区（read-side critical section）必须是不可抢占的，并且不能在其中睡眠。</li>
+<li><strong>可抢占RCU (Preemptible RCU)</strong>：为了解决经典RCU中读侧临界区禁止抢占对系统延迟造成的影响，内核引入了可抢占RCU。它允许在RCU读侧临界区中被抢占，通过更复杂的追踪机制来确定宽限期（Grace Period）。这对于桌面和实时系统至关重要。</li>
+<li><strong>可睡眠RCU (Sleepable RCU, SRCU)</strong>：经典RCU的读侧临界区不允许睡眠。为了满足某些需要在持有“锁”期间睡眠的场景（例如，需要从用户空间拷贝数据），SRCU被发明出来。它有自己独立的API和宽限期管理，代价是比常规RCU稍慢。</li>
+<li><strong>Tree RCU</strong>：随着CPU核心数量的爆炸式增长（成百上千个核心），原始RCU中用于检测宽限期的全局状态机成为了新的瓶颈。Tree RCU将CPU组织成一棵树，状态查询和更新在树的层级中进行，极大地提高了在超大规模多核系统上的扩展性。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p>RCU是现代Linux内核中<strong>最核心、最基础的同步机制之一</strong>，其重要性与自旋锁、互斥锁相当。</p>
+<ul>
+<li><strong>主流应用</strong>：它被内核中对性能要求最高的、读多写少的子系统广泛使用，包括：<ul>
+<li><strong>网络子系统</strong>：路由表的查找（读远多于更新）。</li>
+<li><strong>虚拟文件系统 (VFS)</strong>：目录项缓存（dcache）的查找。</li>
+<li><strong>进程管理</strong>：通过PID查找<code>task_struct</code>。</li>
+<li><strong>模块管理</strong>：内核模块列表的遍历。</li>
+<li><strong>安全子系统</strong>：如SELinux的访问向量缓存（AVC）。</li>
+</ul>
+</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p>RCU的原理可以概括为：<strong>通过延迟销毁来换取无锁读取</strong>。它将更新过程分解为**移除（Removal）<strong>和</strong>回收（Reclamation）**两个阶段。</p>
+<ol>
+<li><p><strong>读者 (Readers)</strong>：</p>
+<ul>
+<li>读者通过 <code>rcu_read_lock()</code> 和 <code>rcu_read_unlock()</code> 来界定一个<strong>读侧临界区</strong>。</li>
+<li>这两个函数在大多数RCU变体中<strong>不会产生任何锁操作</strong>。它们通常只是禁用&#x2F;启用抢占或做一些标记，以告知RCU的回收机制：“我正在读取，请不要释放我可能正在引用的数据”。</li>
+<li>在临界区内，读者通过 <code>rcu_dereference()</code> 安全地获取一个指向共享数据的指针，并可以自由地访问该数据。</li>
+</ul>
+</li>
+<li><p><strong>更新者 (Updaters &#x2F; Writers)</strong>：</p>
+<ul>
+<li>当需要修改数据时，更新者<strong>不会在原地修改</strong>，而是：<br>a. <strong>复制 (Copy)</strong>：创建一个要修改数据的新副本。<br>b. <strong>更新 (Update)</strong>：在新副本上进行所有修改。<br>c. <strong>发布 (Publish)</strong>：使用 <code>rcu_assign_pointer()</code> 等原子操作，将指向共享数据的全局指针切换到指向新的、修改后的副本。这一步是原子的，保证了读者要么看到旧数据，要么看到新数据，绝不会看到修改到一半的数据。</li>
+</ul>
+</li>
+<li><p><strong>内存回收 (Reclamation) - RCU的精髓</strong>：</p>
+<ul>
+<li>在发布新数据后，旧数据不能被立即释放，因为可能还有读者正在其上操作。</li>
+<li>更新者需要等待一个<strong>宽限期 (Grace Period)</strong> 过去。</li>
+<li><strong>宽限期</strong>被定义为：从更新者发起回收请求开始，到系统中<strong>所有</strong>CPU都至少经历过一次<strong>静止状态 (Quiescent State)</strong> 的时间段。</li>
+<li><strong>静止状态</strong>是指CPU可以保证它不再持有任何在宽限期开始之前获取的RCU保护的引用的状态（例如，发生了上下文切换、进入了idle状态或执行到用户空间）。</li>
+<li>一旦一个宽限期结束，RCU机制就可以保证，所有在<strong>更新发生之前</strong>进入读侧临界区的读者，现在肯定已经退出了。因此，此时释放旧数据是安全的。</li>
+<li>更新者通过调用 <code>synchronize_rcu()</code> (阻塞等待宽限期结束) 或 <code>call_rcu()</code> (注册一个在宽限期结束后执行的回调函数来释放内存) 来触发这个回收过程。</li>
+</ul>
+</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>极高的读取性能</strong>：读侧几乎没有同步开销，提供了极佳的性能和可扩展性。</li>
+<li><strong>无死锁</strong>：读者不会被阻塞，因此不会与更新者或其他读者产生死锁。</li>
+<li><strong>实时性友好</strong>：读侧的无锁特性使其非常适合实时系统（特别是可抢占RCU）。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>写者开销</strong>：更新操作相对复杂，并且 <code>synchronize_rcu()</code> 会阻塞，可能引入较长的延迟。</li>
+<li><strong>内存延迟回收</strong>：内存的释放被推迟到宽限期之后，这可能会在写操作频繁的场景下导致瞬时内存占用增加。</li>
+<li><strong>使用限制</strong>：<ul>
+<li>经典RCU的读侧临界区内不允许睡眠。</li>
+<li>RCU主要保护的是通过指针访问的动态分配数据，对于需要原地修改的大块数据结构（如数组）不适用。</li>
+</ul>
+</li>
+<li><strong>编程复杂性</strong>：正确使用RCU比使用传统的锁要复杂，需要开发者理解其背后的原理。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p>RCU是<strong>读多写少</strong>场景下无可争议的性能王者。</p>
+<ul>
+<li><strong>网络路由表</strong>：数据包转发（读取路由表）的频率远高于路由更新（写入路由表）。使用RCU可以确保数据包转发路径几乎没有同步开销。</li>
+<li><strong>VFS目录项缓存</strong>：文件路径查找（<code>lookup</code>）是极其频繁的读取操作，而文件重命名或删除是相对较少的写入操作。</li>
+<li><strong>IDR&#x2F;IDA机制</strong>：内核中用于将一个整数ID映射到一个指针的机制，其查找操作由RCU保护。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>写密集型负载</strong>：如果写入操作和读取操作一样频繁，甚至更频繁，那么RCU的写者开销和内存延迟回收的缺点会变得非常突出。此时，使用自旋锁或读写锁可能更合适。</li>
+<li><strong>需要原地修改</strong>：当共享数据是一个大数组，且更新操作只是修改其中几个元素时，为整个数组创建副本的开销是不可接受的。</li>
+<li><strong>读者需要长时间睡眠</strong>：如果读者在临界区内需要长时间睡眠，即使是SRCU，也可能导致宽限期被过度延长，从而使待释放的内存大量堆积。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">RCU (Read-Copy Update)</th>
+<th align="left">读写锁 (<code>rwlock_t</code>)</th>
+<th align="left">Seqlocks (顺序锁)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>读者开销</strong></td>
+<td align="left"><strong>几乎为零</strong>。通常只是禁用抢占或内存屏障。</td>
+<td align="left"><strong>中等</strong>。需要执行原子操作来获取读锁。</td>
+<td align="left"><strong>低</strong>。读取一个序列号，但可能需要重试。</td>
+</tr>
+<tr>
+<td align="left"><strong>写者开销</strong></td>
+<td align="left"><strong>高</strong>。需要复制数据并等待宽限期。</td>
+<td align="left"><strong>中等</strong>。需要获取排他锁。</td>
+<td align="left"><strong>低</strong>。只需要获取一个自旋锁并更新序列号。</td>
+</tr>
+<tr>
+<td align="left"><strong>读-写并发</strong></td>
+<td align="left"><strong>允许</strong>。读者和写者可以完全并发执行。</td>
+<td align="left"><strong>不允许</strong>。写者会阻塞所有读者，反之亦然。</td>
+<td align="left"><strong>允许</strong> (乐观地)。但如果读期间有写，读者必须重试。</td>
+</tr>
+<tr>
+<td align="left"><strong>写-写并发</strong></td>
+<td align="left"><strong>不允许</strong>。写者之间需要外部锁来同步。</td>
+<td align="left"><strong>不允许</strong>。</td>
+<td align="left"><strong>不允许</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>饥饿问题</strong></td>
+<td align="left">读者<strong>永远不会</strong>饿死写者。</td>
+<td align="left">写者可能饿死读者，反之亦然。</td>
+<td align="left">写者可能饿死读者 (读者不断重试)。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left"><strong>读远多于写</strong>的指针链接数据结构。</td>
+<td align="left">读多于写，但对写性能和内存占用有一定要求。</td>
+<td align="left">读非常多，写非常少，且数据结构简单（通常是些数值）。</td>
+</tr>
+</tbody></table>
+<h1 id="include-linux-rcupdate-h"><a href="#include-linux-rcupdate-h" class="headerlink" title="include&#x2F;linux&#x2F;rcupdate.h"></a>include&#x2F;linux&#x2F;rcupdate.h</h1><h2 id="rcu-read-lock-标记-RCU（Read-Copy-Update）读侧临界区的开始"><a href="#rcu-read-lock-标记-RCU（Read-Copy-Update）读侧临界区的开始" class="headerlink" title="rcu_read_lock 标记 RCU（Read-Copy-Update）读侧临界区的开始"></a>rcu_read_lock 标记 RCU（Read-Copy-Update）读侧临界区的开始</h2><p>这段代码定义了 <code>rcu_read_lock()</code> 函数，并通过详细的注释解释了其功能和使用规则。<code>rcu_read_lock()</code> 是一种内核同步机制，用于标记 RCU（Read-Copy-Update）读侧临界区的开始。RCU 是 Linux 内核中一种高效的同步机制，允许读操作与写操作并发进行，同时确保数据一致性。</p>
+<hr>
+<h3 id="功能概述"><a href="#功能概述" class="headerlink" title="功能概述"></a>功能概述</h3><p><code>rcu_read_lock()</code> 的主要作用是保护 RCU 读侧临界区，使得在该区域内的代码可以安全地访问共享数据，而无需担心数据被其他线程修改或释放。它与 <code>synchronize_rcu()</code> 和 <code>call_rcu()</code> 配合使用，确保写操作不会在读侧临界区未完成时破坏数据一致性。例如：</p>
+<ul>
+<li>当 <code>synchronize_rcu()</code> 被调用时，它会阻塞，直到所有 CPU 都退出其 RCU 读侧临界区。</li>
+<li>当 <code>call_rcu()</code> 被调用时，RCU 回调函数的执行会被延迟，直到所有 CPU 的 RCU 读侧临界区结束。</li>
+</ul>
+<hr>
+<h3 id="并发行为"><a href="#并发行为" class="headerlink" title="并发行为"></a>并发行为</h3><p>RCU 的一个重要特性是，RCU 回调函数可以与新的 RCU 读侧临界区并发运行。这种行为通过以下场景说明：</p>
+<ol>
+<li>CPU 0 进入 RCU 读侧临界区。</li>
+<li>CPU 1 调用 <code>call_rcu()</code> 注册一个 RCU 回调。</li>
+<li>CPU 0 退出 RCU 读侧临界区。</li>
+<li>CPU 2 进入新的 RCU 读侧临界区。</li>
+<li>RCU 回调被执行。</li>
+</ol>
+<p>这种设计确保了高效的并发性，同时保证了在回调执行前，所有可能引用被释放资源的读侧临界区都已完成。</p>
+<hr>
+<h3 id="嵌套支持"><a href="#嵌套支持" class="headerlink" title="嵌套支持"></a>嵌套支持</h3><p>RCU 读侧临界区可以嵌套使用。只有当最外层的 RCU 读侧临界区结束时，任何延迟的操作（如回调执行）才会被处理。这种嵌套支持为复杂的代码路径提供了灵活性。</p>
+<hr>
+<h3 id="使用限制"><a href="#使用限制" class="headerlink" title="使用限制"></a>使用限制</h3><p>注释中强调了在不同类型的 RCU 实现中，RCU 读侧临界区的限制：</p>
+<ol>
+<li>在非抢占式 RCU 实现（如 TREE_RCU 和 TINY_RCU）中，禁止在 RCU 读侧临界区内阻塞。</li>
+<li>在支持抢占的 RCU 实现（PREEMPT_RCU）中，读侧临界区可以被抢占，但显式阻塞仍然是非法的。</li>
+<li>在实时内核（带有 -rt 补丁）的 RCU 实现中，读侧临界区可以被抢占并阻塞，但仅限于获取支持优先级继承的自旋锁时。</li>
+</ol>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">rcu_preempt_read_enter</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	WRITE_ONCE(current-&gt;rcu_read_lock_nesting, READ_ONCE(current-&gt;rcu_read_lock_nesting) + <span class="number">1</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * rcu_read_lock（） 的抢占式 RCU 实现。</span></span><br><span class="line"><span class="comment"> * 只需增加 -&gt;rcu_read_lock_nesting，如果我们阻止，共享状态将更新。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> __rcu_read_lock(<span class="type">void</span>)</span><br><span class="line">&#123;</span><br><span class="line">	rcu_preempt_read_enter();</span><br><span class="line">	<span class="keyword">if</span> (IS_ENABLED(CONFIG_PROVE_LOCKING))</span><br><span class="line">		WARN_ON_ONCE(rcu_preempt_depth() &gt; RCU_NEST_PMAX);</span><br><span class="line">	<span class="keyword">if</span> (IS_ENABLED(CONFIG_RCU_STRICT_GRACE_PERIOD) &amp;&amp; rcu_state.gp_kthread)</span><br><span class="line">		WRITE_ONCE(current-&gt;rcu_read_unlock_special.b.need_qs, <span class="literal">true</span>);</span><br><span class="line">	barrier();  <span class="comment">/* critical section after entry code. */</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> __always_inline <span class="type">void</span> <span class="title function_">rcu_read_lock</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	__rcu_read_lock();</span><br><span class="line">	__acquire(RCU);</span><br><span class="line">	rcu_lock_acquire(&amp;rcu_lock_map);</span><br><span class="line">	RCU_LOCKDEP_WARN(!rcu_is_watching(),</span><br><span class="line">			 <span class="string">&quot;rcu_read_lock() used illegally while idle&quot;</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="rcu-read-unlock-标记-RCU-读侧临界区的结束"><a href="#rcu-read-unlock-标记-RCU-读侧临界区的结束" class="headerlink" title="rcu_read_unlock 标记 RCU 读侧临界区的结束"></a>rcu_read_unlock 标记 RCU 读侧临界区的结束</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">rcu_preempt_read_exit</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> ret = READ_ONCE(current-&gt;rcu_read_lock_nesting) - <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">	WRITE_ONCE(current-&gt;rcu_read_lock_nesting, ret);</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * rcu_read_unlock（） 的抢占式 RCU 实现。递减 -&gt;rcu_read_lock_nesting。 </span></span><br><span class="line"><span class="comment"> * 如果结果为零（最外层的 rcu_read_unlock（））且 -&gt;rcu_read_unlock_special 为非零，则调用 rcu_read_unlock_special（） 在 RCU 读取端关键部分和其他特殊情况下进行上下文切换后进行清理。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> __rcu_read_unlock(<span class="type">void</span>)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> *<span class="title">t</span> =</span> current;</span><br><span class="line"></span><br><span class="line">	barrier();  <span class="comment">// critical section before exit code.</span></span><br><span class="line">	<span class="keyword">if</span> (rcu_preempt_read_exit() == <span class="number">0</span>) &#123;</span><br><span class="line">		barrier();  <span class="comment">// critical-section exit before .s check.</span></span><br><span class="line">      <span class="comment">/* 此时存在特殊标志（rcu_read_unlock_special），则调用 rcu_read_unlock_special() 进行清理操作 */</span></span><br><span class="line">		<span class="keyword">if</span> (unlikely(READ_ONCE(t-&gt;rcu_read_unlock_special.s)))</span><br><span class="line">			rcu_read_unlock_special(t);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">if</span> (IS_ENABLED(CONFIG_PROVE_LOCKING)) &#123;</span><br><span class="line">		<span class="type">int</span> rrln = rcu_preempt_depth();</span><br><span class="line"></span><br><span class="line">		WARN_ON_ONCE(rrln &lt; <span class="number">0</span> || rrln &gt; RCU_NEST_PMAX);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * RCU 并没有提供 rcu_write_lock()，因为 RCU 的设计目标是允许读操作和写操作并发运行，而不需要写操作阻塞读操作。</span></span><br><span class="line"><span class="comment"> * 这种设计是 RCU 高性能的核心原因之一。</span></span><br><span class="line"><span class="comment"> * 虽然 RCU 不负责协调写操作之间的冲突，但开发者可以使用自旋锁（spinlock）或其他同步机制来确保写操作的互斥性。R</span></span><br><span class="line"><span class="comment"> * RCU 的重点是提供高效的读操作，而写操作的同步由开发者自行管理。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * rcu_read_unlock() 的主要作用是标记 RCU 读侧临界区的结束。它通知 RCU 机制，当前线程已完成对共享数据的访问。与 rcu_read_lock() 一样，rcu_read_unlock() 的设计也考虑了高效性和安全性：</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">它几乎不会引发死锁，因为它的实现避免了与调度器运行队列和优先级继承自旋锁的冲突。</span></span><br><span class="line"><span class="comment">即使在中断被禁用的情况下调用，rcu_read_unlock() 也能通过延迟进入静止状态（quiescent state）来避免潜在问题。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">rcu_read_unlock</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	RCU_LOCKDEP_WARN(!rcu_is_watching(),</span><br><span class="line">			 <span class="string">&quot;rcu_read_unlock() used illegally while idle&quot;</span>);</span><br><span class="line">	rcu_lock_release(&amp;rcu_lock_map); <span class="comment">/* Keep acq info for rls diags. */</span></span><br><span class="line">	__release(RCU);</span><br><span class="line">	__rcu_read_unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="rcu-assign-pointer-RCU写入更新"><a href="#rcu-assign-pointer-RCU写入更新" class="headerlink" title="rcu_assign_pointer RCU写入更新"></a>rcu_assign_pointer RCU写入更新</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * RCU_INITIALIZER() - statically initialize an RCU-protected global variable</span></span><br><span class="line"><span class="comment"> * @v: The value to statically initialize with.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> RCU_INITIALIZER(v) (typeof(*(v)) __force __rcu *)(v)</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * rcu_assign_pointer（） - 分配给受 RCU 保护的指针</span></span><br><span class="line"><span class="comment"> * @p：要分配给的指针</span></span><br><span class="line"><span class="comment"> * @v：要分配的值（发布）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 将指定的值分配给指定的受 RCU 保护的指针，确保任何并发 RCU 读取器都可以看到任何先前的初始化。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 在需要内存屏障的体系结构（大多数体系结构）上插入内存屏障，并且还阻止编译器在指针赋值后对初始化结构的代码重新排序。 更重要的是，此调用记录了 RCU 读取端代码将取消引用哪些指针。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment">* 在某些特殊情况下，您可以使用 RCU_INIT_POINTER（） 而不是 rcu_assign_pointer（）。 </span></span><br><span class="line"><span class="comment">RCU_INIT_POINTER（） 的速度要快一些，因为它既不约束 CPU 也不约束编译器。也就是说，在你应该使用 RCU_INIT_POINTER（） 的情况下使用 rcu_assign_pointer（） 是一件非常糟糕的事情，会导致无法诊断的内存损坏。 所以请小心。有关详细信息，请参阅 RCU_INIT_POINTER（） 注释标头。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 请注意，rcu_assign_pointer（） 只计算其每个参数一次，尽管表面上如此。 其中一个 “额外” 评估在 typeof（） 中，另一个仅对 sparse （__CHECKER__） 可见，这两个值实际上都不执行参数。 与大多数 cpp 宏一样，此 execute-arguments-only-once 属性很重要，因此在更改 rcu_assign_pointer（） 及其调用的其他宏时请小心。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> rcu_assign_pointer(p, v)					      \</span></span><br><span class="line"><span class="meta">do &#123;									      \</span></span><br><span class="line"><span class="meta">	uintptr_t _r_a_p__v = (uintptr_t)(v);				      \</span></span><br><span class="line"><span class="meta">	rcu_check_sparse(p, __rcu);					      \</span></span><br><span class="line"><span class="meta">									      \</span></span><br><span class="line"><span class="meta">	<span class="keyword">if</span> (__builtin_constant_p(v) &amp;&amp; (_r_a_p__v) == (uintptr_t)NULL)	      \</span></span><br><span class="line"><span class="meta">		WRITE_ONCE((p), (typeof(p))(_r_a_p__v));		      \</span></span><br><span class="line"><span class="meta">	<span class="keyword">else</span>								      \</span></span><br><span class="line"><span class="meta">   <span class="comment">/* smp_store_release 是一个内存屏障操作，用于确保在赋值之前的所有内存操作都已完成 */</span></span></span><br><span class="line">		smp_store_release(&amp;p, RCU_INITIALIZER((<span class="keyword">typeof</span>(p))_r_a_p__v)); \</span><br><span class="line">&#125; <span class="keyword">while</span> (<span class="number">0</span>)</span><br></pre></td></tr></table></figure>
+
+<h2 id="synchronize-rcu-RCU同步"><a href="#synchronize-rcu-RCU同步" class="headerlink" title="synchronize_rcu RCU同步"></a>synchronize_rcu RCU同步</h2><ul>
+<li>用于等待一个 RCU 宽限期（grace period）结束。宽限期的结束意味着所有当前正在执行的 RCU 读侧临界区（RCU read-side critical sections）都已经完成</li>
+<li>函数目的: synchronize_rcu 的主要作用是确保在调用它之前开始的所有 RCU 读侧临界区都已完成。这对于需要安全地释放或修改被 RCU 保护的数据结构的写侧代码至关重要。调用该函数后，调用者可以确信没有任何 RCU 读侧代码仍在访问相关数据。</li>
+<li>RCU 读侧临界区由 rcu_read_lock() 和 rcu_read_unlock() 包围，或者在某些情况下由禁用中断、软中断或抢占的代码段隐式定义。宽限期的结束意味着所有这些读侧临界区都已退出。</li>
+<li>synchronize_rcu 提供了强大的内存排序保证：在多 CPU 系统中，当 synchronize_rcu 返回时，每个 CPU 都会在其最后一个 RCU 读侧临界区结束后执行一个完整的内存屏障。<br> 如果某个 CPU 的 RCU 读侧临界区在 synchronize_rcu 返回后仍在运行，则该 CPU 必须在 synchronize_rcu 开始和该读侧临界区开始之间执行一个完整的内存屏障。<br> 即使在单 CPU 系统中，调用 synchronize_rcu 的 CPU 也会在函数执行期间执行一个完整的内存屏障。<br> 这些内存屏障确保了数据的正确性和一致性，特别是在并发环境中。</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">synchronize_rcu</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rcu_node</span> *<span class="title">rnp</span>;</span></span><br><span class="line"></span><br><span class="line">	RCU_LOCKDEP_WARN(lock_is_held(&amp;rcu_bh_lock_map) ||</span><br><span class="line">			 lock_is_held(&amp;rcu_lock_map) ||</span><br><span class="line">			 lock_is_held(&amp;rcu_sched_lock_map),</span><br><span class="line">			 <span class="string">&quot;Illegal synchronize_rcu() in RCU read-side critical section&quot;</span>);</span><br><span class="line">	<span class="keyword">if</span> (!rcu_blocking_is_gp()) &#123;</span><br><span class="line">		<span class="keyword">if</span> (rcu_gp_is_expedited())</span><br><span class="line">			synchronize_rcu_expedited();</span><br><span class="line">		<span class="keyword">else</span></span><br><span class="line">			synchronize_rcu_normal();</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 上下文允许空洞的宽限期。</span></span><br><span class="line"><span class="comment">	请注意，此代码使用 ！抢占 &amp; &amp; ！SMP 的。</span></span><br><span class="line"><span class="comment">	此外，所有推进宽限期的代码都在进程级别运行。 因此，这个正常的 GP 与其他正常的 GP 重叠，只是因为它们完全嵌套在它们中，这允许重复使用 -&gt;gp_seq_polled_snap。 */</span></span><br><span class="line">	rcu_poll_gp_seq_start_unlocked(&amp;rcu_state.gp_seq_polled_snap);</span><br><span class="line">	rcu_poll_gp_seq_end_unlocked(&amp;rcu_state.gp_seq_polled_snap);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*    更新正常的 grace-period 计数器以记录此宽限期，但仅记录引导 CPU 使用的宽限期。</span></span><br><span class="line"><span class="comment">	rcu_scheduler_starting（） 将处理其余的这些计数器。 */</span></span><br><span class="line">	local_irq_save(flags);</span><br><span class="line">	WARN_ON_ONCE(num_online_cpus() &gt; <span class="number">1</span>);</span><br><span class="line">	<span class="comment">/* 记录了一个新的宽限期的开始。这种设计允许宽限期序列号以高效的方式递增，同时为其他 RCU 操作提供一致性保证 */</span></span><br><span class="line">	rcu_state.gp_seq += (<span class="number">1</span> &lt;&lt; RCU_SEQ_CTR_SHIFT);</span><br><span class="line">	<span class="comment">/* 遍历当前 CPU 的 RCU 数据结构（rcu_data）中的节点链表（mynode），</span></span><br><span class="line"><span class="comment">	将每个节点的 gp_seq 和 gp_seq_needed 更新为全局宽限期序列号。</span></span><br><span class="line"><span class="comment">	这些计数器用于跟踪每个节点的宽限期状态，确保 RCU 的同步机制能够正确地覆盖所有节点</span></span><br><span class="line"><span class="comment">	this_cpu_ptr(&amp;rcu_data): 获取当前 CPU 的 RCU 数据指针。</span></span><br><span class="line"><span class="comment">	mynode: 指向当前 CPU 所属的 RCU 节点。</span></span><br><span class="line"><span class="comment">	rnp-&gt;parent: 遍历节点的父节点，直到根节点。</span></span><br><span class="line"><span class="comment">	*/</span></span><br><span class="line">	<span class="keyword">for</span> (rnp = this_cpu_ptr(&amp;rcu_data)-&gt;mynode; rnp; rnp = rnp-&gt;parent)</span><br><span class="line">		rnp-&gt;gp_seq_needed = rnp-&gt;gp_seq = rcu_state.gp_seq;</span><br><span class="line">	local_irq_restore(flags);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL_GPL(synchronize_rcu);</span><br></pre></td></tr></table></figure>
+
+<h2 id="rcu-preempt-depth-获取-RCU-预处理嵌套深度"><a href="#rcu-preempt-depth-获取-RCU-预处理嵌套深度" class="headerlink" title="rcu_preempt_depth 获取 RCU 预处理嵌套深度"></a>rcu_preempt_depth 获取 RCU 预处理嵌套深度</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Defined as a macro as it is a very low level header included from</span></span><br><span class="line"><span class="comment"> * areas that don&#x27;t even know about current.  This gives the rcu_read_lock()</span></span><br><span class="line"><span class="comment"> * nesting depth, but makes sense only if CONFIG_PREEMPT_RCU -- in other</span></span><br><span class="line"><span class="comment"> * types of kernel builds, the rcu_read_lock() nesting depth is unknowable.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> rcu_preempt_depth() READ_ONCE(current-&gt;rcu_read_lock_nesting)</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="include-linux-rculist-h"><a href="#include-linux-rculist-h" class="headerlink" title="include&#x2F;linux&#x2F;rculist.h"></a>include&#x2F;linux&#x2F;rculist.h</h1><h2 id="list-add-rcu-插入新条目到-RCU-保护的链表中"><a href="#list-add-rcu-插入新条目到-RCU-保护的链表中" class="headerlink" title="__list_add_rcu 插入新条目到 RCU 保护的链表中"></a>__list_add_rcu 插入新条目到 RCU 保护的链表中</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Insert a new entry between two known consecutive entries.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * This is only for internal list manipulation where we know</span></span><br><span class="line"><span class="comment"> * the prev/next entries already!</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> __list_add_rcu(<span class="keyword">struct</span> list_head *new,</span><br><span class="line">		<span class="keyword">struct</span> list_head *prev, <span class="keyword">struct</span> list_head *next)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (!__list_add_valid(new, prev, next))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	new-&gt;next = next;</span><br><span class="line">	new-&gt;prev = prev;</span><br><span class="line">	rcu_assign_pointer(list_next_rcu(prev), new);</span><br><span class="line">	next-&gt;prev = new;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * list_add_rcu - add a new entry to rcu-protected list</span></span><br><span class="line"><span class="comment"> * @new: new entry to be added</span></span><br><span class="line"><span class="comment"> * @head: list head to add it after</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Insert a new entry after the specified head.</span></span><br><span class="line"><span class="comment"> * This is good for implementing stacks.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * The caller must take whatever precautions are necessary</span></span><br><span class="line"><span class="comment"> * (such as holding appropriate locks) to avoid racing</span></span><br><span class="line"><span class="comment"> * with another list-mutation primitive, such as list_add_rcu()</span></span><br><span class="line"><span class="comment"> * or list_del_rcu(), running on this same list.</span></span><br><span class="line"><span class="comment"> * However, it is perfectly legal to run concurrently with</span></span><br><span class="line"><span class="comment"> * the _rcu list-traversal primitives, such as</span></span><br><span class="line"><span class="comment"> * list_for_each_entry_rcu().</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">list_add_rcu</span><span class="params">(<span class="keyword">struct</span> list_head *new, <span class="keyword">struct</span> list_head *head)</span></span><br><span class="line">&#123;</span><br><span class="line">	__list_add_rcu(new, head, head-&gt;next);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * list_add_tail_rcu - add a new entry to rcu-protected list</span></span><br><span class="line"><span class="comment"> * @new: new entry to be added</span></span><br><span class="line"><span class="comment"> * @head: list head to add it before</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Insert a new entry before the specified head.</span></span><br><span class="line"><span class="comment"> * This is useful for implementing queues.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * The caller must take whatever precautions are necessary</span></span><br><span class="line"><span class="comment"> * (such as holding appropriate locks) to avoid racing</span></span><br><span class="line"><span class="comment"> * with another list-mutation primitive, such as list_add_tail_rcu()</span></span><br><span class="line"><span class="comment"> * or list_del_rcu(), running on this same list.</span></span><br><span class="line"><span class="comment"> * However, it is perfectly legal to run concurrently with</span></span><br><span class="line"><span class="comment"> * the _rcu list-traversal primitives, such as</span></span><br><span class="line"><span class="comment"> * list_for_each_entry_rcu().</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">list_add_tail_rcu</span><span class="params">(<span class="keyword">struct</span> list_head *new,</span></span><br><span class="line"><span class="params">					<span class="keyword">struct</span> list_head *head)</span></span><br><span class="line">&#123;</span><br><span class="line">	__list_add_rcu(new, head-&gt;prev, head);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<h1 id="include-linux-rcuwait-h"><a href="#include-linux-rcuwait-h" class="headerlink" title="include&#x2F;linux&#x2F;rcuwait.h"></a>include&#x2F;linux&#x2F;rcuwait.h</h1><h2 id="rcuwait-wait-event-阻塞等待条件满足与状态满足"><a href="#rcuwait-wait-event-阻塞等待条件满足与状态满足" class="headerlink" title="___rcuwait_wait_event 阻塞等待条件满足与状态满足"></a>___rcuwait_wait_event 阻塞等待条件满足与状态满足</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">finish_rcuwait</span><span class="params">(<span class="keyword">struct</span> rcuwait *w)</span></span><br><span class="line">&#123;</span><br><span class="line">	rcu_assign_pointer(w-&gt;task, <span class="literal">NULL</span>);</span><br><span class="line">	__set_current_state(TASK_RUNNING);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * The caller is responsible for locking around rcuwait_wait_event(),</span></span><br><span class="line"><span class="comment"> * and [prepare_to/finish]_rcuwait() such that writes to @task are</span></span><br><span class="line"><span class="comment"> * properly serialized.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">prepare_to_rcuwait</span><span class="params">(<span class="keyword">struct</span> rcuwait *w)</span></span><br><span class="line">&#123;</span><br><span class="line">	rcu_assign_pointer(w-&gt;task, current);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> ___rcuwait_wait_event(w, condition, state, ret, cmd)		\</span></span><br><span class="line"><span class="meta">(&#123;									\</span></span><br><span class="line"><span class="meta">	long __ret = ret;						\</span></span><br><span class="line"><span class="meta">	prepare_to_rcuwait(w);						\</span></span><br><span class="line"><span class="meta">	for (;;) &#123;							\</span></span><br><span class="line"><span class="meta">		<span class="comment">/*							\</span></span></span><br><span class="line"><span class="comment"><span class="meta">		 * Implicit barrier (A) pairs with (B) in		\</span></span></span><br><span class="line"><span class="comment"><span class="meta">		 * rcuwait_wake_up().					\</span></span></span><br><span class="line"><span class="comment"><span class="meta">		 */</span>							\</span></span><br><span class="line"><span class="meta">		set_current_state(state);				\</span></span><br><span class="line"><span class="meta">		<span class="keyword">if</span> (condition)						\</span></span><br><span class="line"><span class="meta">			break;						\</span></span><br><span class="line"><span class="meta">									\</span></span><br><span class="line"><span class="meta">		<span class="keyword">if</span> (signal_pending_state(state, current)) &#123;		\</span></span><br><span class="line"><span class="meta">			__ret = -EINTR;					\</span></span><br><span class="line"><span class="meta">			break;						\</span></span><br><span class="line"><span class="meta">		&#125;							\</span></span><br><span class="line"><span class="meta">									\</span></span><br><span class="line"><span class="meta">		cmd;							\</span></span><br><span class="line"><span class="meta">	&#125;								\</span></span><br><span class="line"><span class="meta">	finish_rcuwait(w);						\</span></span><br><span class="line"><span class="meta">	__ret;								\</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="rcuwait-wait-event-阻塞等待条件满足与状态满足-1"><a href="#rcuwait-wait-event-阻塞等待条件满足与状态满足-1" class="headerlink" title="rcuwait_wait_event 阻塞等待条件满足与状态满足"></a>rcuwait_wait_event 阻塞等待条件满足与状态满足</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> rcuwait_wait_event(w, condition, state)				\</span></span><br><span class="line"><span class="meta">	___rcuwait_wait_event(w, condition, state, 0, schedule())</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="rcuwait-init-初始化-rcuwait-结构体"><a href="#rcuwait-init-初始化-rcuwait-结构体" class="headerlink" title="rcuwait_init 初始化 rcuwait 结构体"></a>rcuwait_init 初始化 rcuwait 结构体</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">rcuwait_init</span><span class="params">(<span class="keyword">struct</span> rcuwait *w)</span></span><br><span class="line">&#123;</span><br><span class="line">	w-&gt;task = <span class="literal">NULL</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-rcu-rcu-h"><a href="#kernel-rcu-rcu-h" class="headerlink" title="kernel&#x2F;rcu&#x2F;rcu.h"></a>kernel&#x2F;rcu&#x2F;rcu.h</h1><h2 id="rcu-init-levelspread-计算每层的扇出"><a href="#rcu-init-levelspread-计算每层的扇出" class="headerlink" title="rcu_init_levelspread 计算每层的扇出"></a>rcu_init_levelspread 计算每层的扇出</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Compute the per-level fanout, either using the exact fanout specified</span></span><br><span class="line"><span class="comment"> * or balancing the tree, depending on the rcu_fanout_exact boot parameter.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">rcu_init_levelspread</span><span class="params">(<span class="type">int</span> *levelspread, <span class="type">const</span> <span class="type">int</span> *levelcnt)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> i;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; RCU_NUM_LVLS; i++)</span><br><span class="line">		levelspread[i] = INT_MIN;</span><br><span class="line">	<span class="keyword">if</span> (rcu_fanout_exact) &#123;</span><br><span class="line">		levelspread[rcu_num_lvls - <span class="number">1</span>] = rcu_fanout_leaf;</span><br><span class="line">		<span class="keyword">for</span> (i = rcu_num_lvls - <span class="number">2</span>; i &gt;= <span class="number">0</span>; i--)</span><br><span class="line">			levelspread[i] = RCU_FANOUT;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="comment">/* 如果 rcu_fanout_exact 未设置，则根据 CPU 数量和每层的节点数量动态平衡树的结构 */</span></span><br><span class="line">		<span class="type">int</span> ccur;</span><br><span class="line">		<span class="type">int</span> cprv;</span><br><span class="line">		<span class="comment">/* 从最底层开始，逐层向上计算每层的扇出值。</span></span><br><span class="line"><span class="comment">			使用公式 (cprv + ccur - 1) / ccur 计算扇出值，其中：</span></span><br><span class="line"><span class="comment">			cprv 表示上一层的节点数量。</span></span><br><span class="line"><span class="comment">			ccur 表示当前层的节点数量。</span></span><br><span class="line"><span class="comment">			该公式确保扇出值向上取整，避免节点不足。 */</span></span><br><span class="line">		cprv = nr_cpu_ids;</span><br><span class="line">		<span class="keyword">for</span> (i = rcu_num_lvls - <span class="number">1</span>; i &gt;= <span class="number">0</span>; i--) &#123;</span><br><span class="line">			ccur = levelcnt[i];</span><br><span class="line">			levelspread[i] = (cprv + ccur - <span class="number">1</span>) / ccur;</span><br><span class="line">			cprv = ccur;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="rcu-seq-done-exact-精确判断-RCU（Read-Copy-Update）序列号是否已经完成更新操作"><a href="#rcu-seq-done-exact-精确判断-RCU（Read-Copy-Update）序列号是否已经完成更新操作" class="headerlink" title="rcu_seq_done_exact 精确判断 RCU（Read-Copy-Update）序列号是否已经完成更新操作"></a>rcu_seq_done_exact 精确判断 RCU（Read-Copy-Update）序列号是否已经完成更新操作</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 根据来自 rcu_seq_snap() 的快照，确定是否发生了完整的更新操作，但不允许使用 (ULONG_MAX / 2) 的安全因子/防护带。</span></span><br><span class="line"><span class="comment"> * 该函数通过比较当前序列号和给定的快照序列号，确定是否已经发生了完整的更新操作</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">rcu_seq_done_exact</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span> *sp, <span class="type">unsigned</span> <span class="type">long</span> s)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> cur_s = READ_ONCE(*sp);</span><br><span class="line">	<span class="comment">/* 如果当前序列号 cur_s 大于或等于快照序列号 s</span></span><br><span class="line"><span class="comment">	 * 如果当前序列号 cur_s 小于 s - (3 * RCU_SEQ_STATE_MASK + 1)（ULONG_CMP_LT(cur_s, s - (3 * RCU_SEQ_STATE_MASK + 1))），</span></span><br><span class="line"><span class="comment">	 * 则也认为更新操作已完成。这种情况通常用于处理序列号的回绕（wraparound）</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> ULONG_CMP_GE(cur_s, s) || ULONG_CMP_LT(cur_s, s - (<span class="number">3</span> * RCU_SEQ_STATE_MASK + <span class="number">1</span>));</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="rcu-for-each-node-breadth-first-对-rcu-node-结构进行广度优先遍历"><a href="#rcu-for-each-node-breadth-first-对-rcu-node-结构进行广度优先遍历" class="headerlink" title="rcu_for_each_node_breadth_first 对 rcu_node 结构进行广度优先遍历"></a>rcu_for_each_node_breadth_first 对 rcu_node 结构进行广度优先遍历</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 对指定状态结构（用于SRCU）或唯一的rcu_state结构（用于RCU）</span></span><br><span class="line"><span class="comment"> * 的&#123;s,&#125;rcu_node结构进行全面的广度优先扫描。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> _rcu_for_each_node_breadth_first(sp, rnp) \</span></span><br><span class="line"><span class="meta">	<span class="comment">/* 从数组的第一个节点 */</span></span></span><br><span class="line">	<span class="keyword">for</span> ((rnp) = &amp;(sp)-&gt;node[<span class="number">0</span>]; \</span><br><span class="line">		<span class="comment">/* 直到最后一个节点 sp-&gt;node[rcu_num_nodes - 1] */</span></span><br><span class="line">	     (rnp) &lt; &amp;(sp)-&gt;node[rcu_num_nodes]; (rnp)++)</span><br><span class="line"><span class="meta">#<span class="keyword">define</span> rcu_for_each_node_breadth_first(rnp) \</span></span><br><span class="line"><span class="meta">	_rcu_for_each_node_breadth_first(&amp;rcu_state, rnp)</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-rcu-update-c"><a href="#kernel-rcu-update-c" class="headerlink" title="kernel&#x2F;rcu&#x2F;update.c"></a>kernel&#x2F;rcu&#x2F;update.c</h1><h2 id="rcu-set-runtime-mode-设置运行模式"><a href="#rcu-set-runtime-mode-设置运行模式" class="headerlink" title="rcu_set_runtime_mode 设置运行模式"></a>rcu_set_runtime_mode 设置运行模式</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Test each non-SRCU synchronous grace-period wait API.  This is</span></span><br><span class="line"><span class="comment"> * useful just after a change in mode for these primitives, and</span></span><br><span class="line"><span class="comment"> * during early boot.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">rcu_test_sync_prims</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (!IS_ENABLED(CONFIG_PROVE_RCU))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	pr_info(<span class="string">&quot;Running RCU synchronous self tests\n&quot;</span>);</span><br><span class="line">	synchronize_rcu();</span><br><span class="line">	synchronize_rcu_expedited();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !defined(CONFIG_TINY_RCU)</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Switch to run-time mode once RCU has fully initialized.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __init <span class="title function_">rcu_set_runtime_mode</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	rcu_test_sync_prims();</span><br><span class="line">	rcu_scheduler_active = RCU_SCHEDULER_RUNNING;</span><br><span class="line">	kfree_rcu_scheduler_running();</span><br><span class="line">	rcu_test_sync_prims();</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line">core_initcall(rcu_set_runtime_mode);</span><br></pre></td></tr></table></figure>
+
+<h2 id="rcu-test-sync-prims-测试-RCU-同步原语"><a href="#rcu-test-sync-prims-测试-RCU-同步原语" class="headerlink" title="rcu_test_sync_prims 测试 RCU 同步原语"></a>rcu_test_sync_prims 测试 RCU 同步原语</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 测试每个非SRCU同步宽限期等待API。</span></span><br><span class="line"><span class="comment"> * 这在这些原语的模式更改后以及早期启动期间非常有用。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">rcu_test_sync_prims</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (!IS_ENABLED(CONFIG_PROVE_RCU))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	pr_info(<span class="string">&quot;Running RCU synchronous self tests\n&quot;</span>);</span><br><span class="line">	synchronize_rcu();</span><br><span class="line">	synchronize_rcu_expedited();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-rcu-sync-c-RCU同步等待-RCU-Synchronous-Waiting-实现优雅周期完成的阻塞机制"><a href="#kernel-rcu-sync-c-RCU同步等待-RCU-Synchronous-Waiting-实现优雅周期完成的阻塞机制" class="headerlink" title="kernel&#x2F;rcu&#x2F;sync.c RCU同步等待(RCU Synchronous Waiting) 实现优雅周期完成的阻塞机制"></a>kernel&#x2F;rcu&#x2F;sync.c RCU同步等待(RCU Synchronous Waiting) 实现优雅周期完成的阻塞机制</h1><h3 id="历史与背景-1"><a href="#历史与背景-1" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？-1"><a href="#这项技术是为了解决什么特定问题而诞生的？-1" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p>这项技术是RCU（Read-Copy Update）机制的核心组成部分，它为了解决一个根本性的问题：<strong>当一个写者（Updater）用新数据替换了旧数据后，它必须等待多长时间才能安全地释放（free）旧数据的内存？</strong></p>
+<p>RCU的核心思想是允许读者在访问共享数据时无需获取任何锁，从而实现极高的读性能和伸缩性。但这也带来了内存回收的难题：当一个写者通过原子操作（如指针替换）更新了数据后，可能仍有读者正在引用旧版本的数据。如果写者立即释放旧数据，这些读者就会遇到“使用已释放内存”（Use-After-Free）的严重错误。</p>
+<p><code>kernel/rcu/sync.c</code> 中实现的 <code>synchronize_rcu()</code> 及其变体，就是为了提供一个<strong>同步的、阻塞式的等待机制</strong>，来解决这个问题。它能保证当函数返回时，所有在更新操作之前就已经存在的读者（pre-existing readers）都已经完成了它们的读侧临界区。这个等待的“时间段”被称为<strong>优雅周期（Grace Period）</strong>。</p>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？-1"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？-1" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p><code>synchronize_rcu()</code> 的发展与RCU机制本身的演进紧密相连，由Paul E. McKenney主导。</p>
+<ul>
+<li><strong>经典RCU (Classic RCU)</strong>：早期的RCU实现中，优雅周期的检测相对简单，主要依赖于观察所有CPU是否都经历了一次上下文切换。</li>
+<li><strong>抢占式RCU (Preemptible RCU)</strong>：为了满足实时性需求，内核引入了<code>CONFIG_PREEMPT_RCU</code>。这使得在RCU读侧临界区内也可以被抢占。这极大地复杂化了优雅周期的检测，因为一个持有旧数据引用的线程可能被抢占并长时间睡眠。<code>sync.c</code>的内部逻辑需要与更复杂的RCU状态机（如dytick-idle处理、CPU热插拔等）进行交互来正确地检测优雅周期的结束。</li>
+<li><strong>性能优化</strong>：<code>synchronize_rcu()</code> 本身可能成为性能瓶颈，如果被频繁调用，会引发所谓的“GP-storm”（优雅周期风暴）。内核开发者们对RCU的批处理（batching）机制进行了大量优化，使得多个<code>synchronize_rcu()</code>的请求可以被合并到同一个优雅周期中，从而降低开销。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？-1"><a href="#目前该技术的社区活跃度和主流应用情况如何？-1" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p><code>synchronize_rcu()</code> 是Linux内核中一个基础、稳定且被广泛使用的同步原语。RCU是内核数据结构保护的基石之一，而<code>synchronize_rcu()</code>是RCU提供的两种核心等待机制之一（另一种是异步的<code>call_rcu()</code>）。它的代码库非常稳定，社区的活跃度主要体现在对RCU整体性能的优化、以及对新硬件架构和内核特性的适应性调整上。它被内核中大量需要在可睡眠上下文中进行RCU同步的子系统所使用。</p>
+<h3 id="核心原理与设计-1"><a href="#核心原理与设计-1" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？-1"><a href="#它的核心工作原理是什么？-1" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p><code>synchronize_rcu()</code> 的核心原理是<strong>发起并等待一个完整的RCU优雅周期的结束</strong>。</p>
+<p>一个RCU优雅周期的定义是：从某个时间点开始，直到系统中所有CPU都至少经历了一次**静止状态（Quiescent State）**为止的这段时间。静止状态是指CPU保证不再持有任何在该优雅周期开始前获取的RCU读侧临界区引用的状态。常见的静止状态包括：</p>
+<ul>
+<li>上下文切换</li>
+<li>进入idle循环</li>
+<li>从内核态返回用户态</li>
+</ul>
+<p><code>synchronize_rcu()</code> 的工作流程如下：</p>
+<ol>
+<li><strong>调用</strong>：当一个内核线程调用 <code>synchronize_rcu()</code> 时，它向RCU核心子系统注册一个“我需要等待一个优雅周期”的请求。</li>
+<li><strong>阻塞</strong>：该线程随后被置于睡眠（<code>TASK_UNINTERRUPTIBLE</code>）状态并从CPU上调度出去。</li>
+<li><strong>优雅周期检测</strong>：RCU核心的状态机在后台持续工作。它会检测并记录每个CPU是否已经通过了一个静止状态。</li>
+<li><strong>优雅周期结束</strong>：当RCU核心确认所有在线CPU都已经历过至少一次静止状态后，它就认为一个优雅周期已经结束。</li>
+<li><strong>唤醒</strong>：RCU核心会唤醒所有正在等待该优雅周期结束的线程，包括那个调用 <code>synchronize_rcu()</code> 的线程。</li>
+<li><strong>返回</strong>：<code>synchronize_rcu()</code> 函数返回，此时调用者可以确信，在它调用该函数之前进入RCU读临界区的所有读者都已经退出了，因此现在释放旧数据是安全的。</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？-1"><a href="#它的主要优势体现在哪些方面？-1" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>接口简单</strong>：提供了一个简单明了的阻塞式API。开发者只需像调用<code>mutex_lock()</code>一样调用它，无需处理复杂的回调逻辑。</li>
+<li><strong>编程模型直接</strong>：代码流程是线性的。等待完成后，代码继续向下执行，这符合大多数同步场景的直观逻辑。</li>
+<li><strong>健壮性</strong>：由RCU核心保证了其正确性，为内核开发者提供了一个强大而可靠的内存回收屏障。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？-1"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？-1" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>阻塞行为</strong>：这是其最主要的限制。调用<code>synchronize_rcu()</code>的线程会睡眠，等待时间可能很长（通常是毫秒级，但可能更长），具体取决于系统中其他任务的行为。</li>
+<li><strong>上下文限制</strong>：由于会引起睡眠，<code>synchronize_rcu()</code> <strong>绝对不能</strong>在原子上下文（atomic context）中使用，例如：<ul>
+<li>中断处理程序 (Interrupt handlers)</li>
+<li>软中断 (Softirqs)</li>
+<li>持有自旋锁 (spinlock) 的临界区</li>
+</ul>
+</li>
+<li><strong>性能开销</strong>：频繁地调用<code>synchronize_rcu()</code>会给RCU子系统带来压力，可能导致系统吞吐量下降。</li>
+</ul>
+<h3 id="使用场景-1"><a href="#使用场景-1" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"></a>在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</h4><p>它适用于那些需要在<strong>可睡眠的（preemptible）内核上下文</strong>中，进行RCU保护的数据结构更新后，<strong>必须同步等待</strong>直到可以安全释放旧资源才能继续下一步操作的场景。</p>
+<ul>
+<li><strong>内核模块卸载</strong>：这是<code>synchronize_rcu()</code>最经典的用例。当一个内核模块被卸载时（<code>rmmod</code>），其<code>module_exit</code>函数必须确保没有其他内核线程仍在使用该模块提供的回调函数或数据结构（这些通常是用RCU保护的）。因此，<code>module_exit</code>函数在释放模块内存之前，通常会调用<code>synchronize_rcu()</code>，以确保所有之前的“用户”都已经离开。</li>
+<li><strong>网络协议栈中的路由表更新</strong>：当一个路由条目被删除时，内核需要确保所有正在使用该旧路由条目进行数据包转发的CPU都已经完成操作，然后才能释放该路由条目的内存。如果删除操作是在一个可以睡眠的进程上下文中进行的，就可以使用<code>synchronize_rcu()</code>。</li>
+<li><strong>某些配置的同步更新</strong>：当需要更改一个全局配置，并且后续的初始化步骤依赖于旧配置完全不再被使用时，可以使用<code>synchronize_rcu()</code>来等待。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？-1"><a href="#是否有不推荐使用该技术的场景？为什么？-1" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>原子上下文</strong>：如上所述，在任何不能睡眠的上下文中使用<code>synchronize_rcu()</code>都是一个严重的编程错误，会导致系统崩溃或死锁。</li>
+<li><strong>高性能、高并发的更新路径</strong>：在需要频繁更新RCU保护数据的热点路径上，使用<code>synchronize_rcu()</code>会导致大量的阻塞和上下文切换，严重影响性能。在这种场景下，异步的<code>call_rcu()</code>是唯一的正确选择。</li>
+<li><strong>只需要释放内存的简单场景</strong>：如果更新操作之后唯一要做的就是释放旧数据的内存，而没有其他必须同步等待才能执行的逻辑，那么使用<code>call_rcu()</code>通常是更高效的选择，因为它不会阻塞当前线程。</li>
+</ul>
+<h3 id="对比分析-1"><a href="#对比分析-1" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。-1"><a href="#请将其-与-其他相似技术-进行详细对比。-1" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><p><strong><code>synchronize_rcu()</code> vs. <code>call_rcu()</code></strong></p>
+<p>这是RCU更新者最重要的选择，也是<code>fs/rcu/sync.c</code>与RCU回调机制的核心对比。</p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left"><code>synchronize_rcu()</code></th>
+<th align="left"><code>call_rcu()</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>工作模式</strong></td>
+<td align="left"><strong>同步 (Synchronous)</strong> &#x2F; <strong>阻塞 (Blocking)</strong></td>
+<td align="left"><strong>异步 (Asynchronous)</strong> &#x2F; <strong>非阻塞 (Non-blocking)</strong></td>
+</tr>
+<tr>
+<td align="left"><strong>实现方式</strong></td>
+<td align="left">调用者线程进入睡眠，等待一个优雅周期结束后被唤醒。</td>
+<td align="left">调用者注册一个回调函数和数据指针，然后<strong>立即返回</strong>。RCU核心会在一个优雅周期结束后，在某个软中断上下文中调用该回调函数。</td>
+</tr>
+<tr>
+<td align="left"><strong>编程模型</strong></td>
+<td align="left">简单、线性的代码流。</td>
+<td align="left">基于回调，逻辑被分割。</td>
+</tr>
+<tr>
+<td align="left"><strong>上下文限制</strong></td>
+<td align="left"><strong>只能</strong>在可睡眠的上下文中使用。</td>
+<td align="left"><strong>可以</strong>在任何上下文中使用，包括原子上下文。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能影响</strong></td>
+<td align="left">可能阻塞关键路径，引起上下文切换，对吞吐量有影响。</td>
+<td align="left">不会阻塞调用者，对调用路径的性能影响极小。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left">模块卸载等需要同步等待才能继续清理工作的场景。</td>
+<td align="left">高性能数据路径、原子上下文中的更新，以及所有简单的“更新后释放内存”场景。</td>
+</tr>
+</tbody></table>
+<p><strong><code>synchronize_rcu()</code> vs. <code>mutex_lock()</code> &#x2F; <code>rwsem</code></strong></p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left"><code>synchronize_rcu()</code></th>
+<th align="left">Mutex &#x2F; Read-Write Semaphore</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>保护对象</strong></td>
+<td align="left">保护的是<strong>写者和读者之间的关系</strong>，确保内存回收安全。它<strong>不提供</strong>写者之间的互斥。</td>
+<td align="left">提供<strong>读者之间、写者之间、以及读写者之间的互斥</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>读者开销</strong></td>
+<td align="left"><strong>几乎为零</strong>。读者无需写内存，是RCU的核心优势。</td>
+<td align="left">读者需要修改锁的共享状态，存在缓存争用，有性能开销。</td>
+</tr>
+<tr>
+<td align="left"><strong>写者模型</strong></td>
+<td align="left">写者通常需要配合自旋锁或互斥锁来保证写操作的原子性，然后调用<code>synchronize_rcu()</code>来等待读者。</td>
+<td align="left">一个锁同时完成了写者互斥和等待读者的功能。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left">读多写少的场景，读性能至关重要。</td>
+<td align="left">读写平衡或写操作频繁的场景，或者读者需要阻塞写者的场景。</td>
+</tr>
+</tbody></table>
+<h2 id="rcu-sync-init-初始化一个-rcu-sync-结构"><a href="#rcu-sync-init-初始化一个-rcu-sync-结构" class="headerlink" title="rcu_sync_init 初始化一个 rcu_sync 结构"></a>rcu_sync_init 初始化一个 rcu_sync 结构</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* rcu_sync_init() - 初始化一个 rcu_sync 结构</span></span><br><span class="line"><span class="comment">* @rsp: 指向要初始化的 rcu_sync 结构的指针</span></span><br><span class="line"><span class="comment">*/</span>  </span><br><span class="line"><span class="type">void</span> <span class="title function_">rcu_sync_init</span><span class="params">(<span class="keyword">struct</span> rcu_sync *rsp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="built_in">memset</span>(rsp, <span class="number">0</span>, <span class="keyword">sizeof</span>(*rsp));</span><br><span class="line">	init_waitqueue_head(&amp;rsp-&gt;gp_wait);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="RCU-SYNC-状态机：协调读者快慢路径转换的同步原语"><a href="#RCU-SYNC-状态机：协调读者快慢路径转换的同步原语" class="headerlink" title="RCU_SYNC 状态机：协调读者快慢路径转换的同步原语"></a>RCU_SYNC 状态机：协调读者快慢路径转换的同步原语</h2><p>本代码片段定义了一个名为 <code>rcu_sync</code> 的同步原语。其核心功能是实现一个复杂的状态机，用于协调写者（updater）和大量读者（reader）之间的同步。写者通过调用<code>rcu_sync_enter</code>来“宣告”一个更新周期的开始，强制所有后续读者进入“慢速路径”；通过调用<code>rcu_sync_exit</code>来宣告更新周期的结束，允许读者在经过一个RCU宽限期后返回“快速路径”。这个机制的设计目标是：既要保证正确性（即在更新期间读者必须走慢路径），又要通过状态压缩和回调重放等技巧，<strong>最大限度地减少因频繁的快慢路径切换而导致的宽限期等待</strong>，从而提高性能。</p>
+<h3 id="实现原理分析"><a href="#实现原理分析" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>rcu_sync</code>的核心是一个五状态的状态机（<code>GP_IDLE</code>, <code>GP_ENTER</code>, <code>GP_PASSED</code>, <code>GP_EXIT</code>, <code>GP_REPLAY</code>）和一个引用计数器 <code>gp_count</code>。</p>
+<ul>
+<li><strong><code>gp_count</code></strong>: 这是一个嵌套计数器。每次调用<code>rcu_sync_enter</code>时它加一，每次调用<code>rcu_sync_exit</code>时它减一。这允许多个写者可以嵌套地进入“写模式”。只有当最后一个写者退出时（<code>gp_count</code>变为0），才真正开始让读者返回快速路径的流程。</li>
+<li><strong>状态机 (<code>gp_state</code>)</strong>:<ul>
+<li><strong><code>GP_IDLE</code></strong>: 空闲状态。所有读者都可以走快速路径。</li>
+<li><strong><code>GP_ENTER</code></strong>: 第一个写者进入。已启动一个宽限期等待，以确保所有CPU都观察到状态变化，从而阻止新的读者走快速路径。</li>
+<li><strong><code>GP_PASSED</code></strong>: 宽限期已过。现在可以保证，系统中的所有读者都已经观察到了<code>GP_IDLE</code> -&gt; <code>GP_ENTER</code>的转变，因此要么已经退出，要么正在走慢速路径。</li>
+<li><strong><code>GP_EXIT</code></strong>: 最后一个写者已退出。启动一个新的宽限期，以确保所有CPU都能观察到写者临界区的所有内存修改。</li>
+<li><strong><code>GP_REPLAY</code></strong>: 一个优化状态。如果在<code>GP_EXIT</code>状态的宽限期内，又有一个新的写者进入并退出了，就进入此状态，表示需要“重放”一次<code>GP_EXIT</code>的宽限期回调。</li>
+</ul>
+</li>
+</ul>
+<p><strong>工作流程剖析:</strong></p>
+<ol>
+<li><p><strong>第一个写者进入 (<code>rcu_sync_enter</code>)</strong>:</p>
+<ul>
+<li>系统处于<code>GP_IDLE</code>。</li>
+<li><code>gp_count</code>从0变为1。</li>
+<li>状态变为<code>GP_ENTER</code>。</li>
+<li><strong>关键</strong>：<code>rcu_sync_enter</code>会调用<code>synchronize_rcu()</code>，这是一个<strong>阻塞</strong>操作，它会<strong>立即等待</strong>一个完整的RCU宽限期结束。</li>
+<li>宽限期结束后，调用<code>rcu_sync_func</code>，状态变为<code>GP_PASSED</code>。</li>
+<li><code>rcu_sync_enter</code>返回。此时，写者可以确信，所有读者都已经看到了状态变化。</li>
+</ul>
+</li>
+<li><p><strong>嵌套的写者进入</strong>:</p>
+<ul>
+<li>系统已处于<code>GP_PASSED</code>状态。</li>
+<li>新的写者调用<code>rcu_sync_enter</code>。</li>
+<li><code>gp_count</code>递增。</li>
+<li>由于状态已是<code>GP_PASSED</code>，<code>wait_event</code>条件立即满足，函数<strong>几乎无开销地立即返回</strong>。这是对嵌套写者的重要优化。</li>
+</ul>
+</li>
+<li><p><strong>最后一个写者退出 (<code>rcu_sync_exit</code>)</strong>:</p>
+<ul>
+<li><code>gp_count</code>从1减为0。</li>
+<li>系统处于<code>GP_PASSED</code>状态。</li>
+<li>状态变为<code>GP_EXIT</code>。</li>
+<li>调用<code>rcu_sync_call</code>，它会<strong>异步地</strong>在未来的一个宽限期结束后，调用<code>rcu_sync_func</code>。</li>
+</ul>
+</li>
+<li><p><strong>RCU回调 (<code>rcu_sync_func</code>)</strong>:</p>
+<ul>
+<li>这是状态机的驱动核心，它总是在一个宽限期之后被调用。</li>
+<li><strong>场景1 (来自<code>GP_EXIT</code>)</strong>: 如果当前状态是<code>GP_EXIT</code>，说明自最后一个写者退出以来，至少经过了一个宽限期。现在可以安全地让读者返回快速路径了。它将状态设置回<code>GP_IDLE</code>。</li>
+<li><strong>场景2 (优化 - 来自<code>GP_REPLAY</code>)</strong>: 如果在<code>GP_EXIT</code>的宽限期内，有新的写者进入又退出，状态会变为<code>GP_REPLAY</code>。当回调发生时，它发现状态是<code>GP_REPLAY</code>，就明白需要再启动一个新的宽限期来服务那个新的退出者。它将状态变回<code>GP_EXIT</code>并重新调用<code>rcu_sync_call</code>。这避免了为每个退出都启动一个独立的、可能重叠的宽限期。</li>
+</ul>
+</li>
+</ol>
+<h3 id="特定场景分析：单核、无MMU的STM32H750平台"><a href="#特定场景分析：单核、无MMU的STM32H750平台" class="headerlink" title="特定场景分析：单核、无MMU的STM32H750平台"></a>特定场景分析：单核、无MMU的STM32H750平台</h3><h4 id="硬件交互与MMU"><a href="#硬件交互与MMU" class="headerlink" title="硬件交互与MMU"></a>硬件交互与MMU</h4><p>此机制是纯软件的同步原语，与硬件或MMU无关。</p>
+<h4 id="单核环境下的RCU"><a href="#单核环境下的RCU" class="headerlink" title="单核环境下的RCU"></a>单核环境下的RCU</h4><p>RCU (Read-Copy-Update) 机制在单核系统上依然有效，但其实现会退化。</p>
+<ul>
+<li><strong>宽限期 (Grace Period)</strong>: 在多核系统中，一个RCU宽限期是“等待所有CPU都经过一次上下文切换”的时间。在单核<strong>可抢占</strong>内核中，一个宽限期就是“等待所有已存在的读端临界区都完成执行”的时间，这通常通过等待一个调度器时钟节拍来近似。在单核<strong>非抢占</strong>内核中，RCU的读端临界区不会被抢占，因此宽限期几乎是瞬时的。</li>
+<li><strong><code>synchronize_rcu()</code></strong>: 在单核系统上，此函数仍然会阻塞，以确保所有在调用前已经开始的RCU读端临-临界区都已完成。</li>
+<li><strong><code>call_rcu()</code></strong>: 仍然会注册一个回调，该回调会在一个宽限期之后被执行。</li>
+</ul>
+<h4 id="实际意义"><a href="#实际意义" class="headerlink" title="实际意义"></a>实际意义</h4><p><code>percpu_rw_semaphore</code>依赖<code>rcu_sync</code>来保证其正确性。因此，即使在STM32H750上，<code>rcu_sync</code>的这套复杂逻辑也是<strong>必需的</strong>。</p>
+<ul>
+<li><code>rcu_sync_enter</code>中的<code>synchronize_rcu()</code>保证了当写者开始等待读者计数器清零时，不会有新的读者再进入快速路径。</li>
+<li><code>rcu_sync_exit</code>中的<code>call_rcu()</code>保证了在读者被允许返回快速路径之前，写者临界区的所有内存修改对系统中的所有任务都已可见。</li>
+</ul>
+<p><strong>结论</strong>：<code>rcu_sync</code>是<code>percpu_rw_semaphore</code>能够安全工作的理论基石。它通过RCU的宽限期保证，将写者对“快慢路径开关”（即<code>sem-&gt;block</code>标志）的修改，安全地广播给所有潜在的读者。在单核STM32H750上，这套机制依然通过管理抢占和调度，正确地实现了其同步语义。</p>
+<h3 id="代码分析"><a href="#代码分析" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// rcu_sync_enter: 强制读者进入慢速路径。</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">rcu_sync_enter</span><span class="params">(<span class="keyword">struct</span> rcu_sync *rsp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> gp_state;</span><br><span class="line"></span><br><span class="line">	spin_lock_irq(&amp;rsp-&gt;rss_lock);</span><br><span class="line">	gp_state = rsp-&gt;gp_state;</span><br><span class="line">	<span class="comment">// 关键路径：第一个写者进入。</span></span><br><span class="line">	<span class="keyword">if</span> (gp_state == GP_IDLE) &#123;</span><br><span class="line">		WRITE_ONCE(rsp-&gt;gp_state, GP_ENTER);</span><br><span class="line">		<span class="comment">// ... (一些优化相关的注释) ...</span></span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// 引用计数加一，支持嵌套。</span></span><br><span class="line">	rsp-&gt;gp_count++;</span><br><span class="line">	spin_unlock_irq(&amp;rsp-&gt;rss_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 仅当是第一个写者时，才需要阻塞等待一个宽限期。</span></span><br><span class="line">	<span class="keyword">if</span> (gp_state == GP_IDLE) &#123;</span><br><span class="line">		<span class="comment">// 阻塞等待一个RCU宽限期。</span></span><br><span class="line">		synchronize_rcu();</span><br><span class="line">		<span class="comment">// 手动调用回调函数来将状态推进到GP_PASSED。</span></span><br><span class="line">		rcu_sync_func(&amp;rsp-&gt;cb_head);</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 对于嵌套的写者，只需等待状态变为GP_PASSED即可，通常会立即满足。</span></span><br><span class="line">	wait_event(rsp-&gt;gp_wait, READ_ONCE(rsp-&gt;gp_state) &gt;= GP_PASSED);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// rcu_sync_exit: 允许读者在宽限期后返回快速路径。</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">rcu_sync_exit</span><span class="params">(<span class="keyword">struct</span> rcu_sync *rsp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// ... (一些警告检查) ...</span></span><br><span class="line"></span><br><span class="line">	spin_lock_irq(&amp;rsp-&gt;rss_lock);</span><br><span class="line">	<span class="comment">// 引用计数减一。</span></span><br><span class="line">	<span class="keyword">if</span> (!--rsp-&gt;gp_count) &#123;</span><br><span class="line">		<span class="comment">// 关键路径：最后一个写者退出。</span></span><br><span class="line">		<span class="keyword">if</span> (rsp-&gt;gp_state == GP_PASSED) &#123;</span><br><span class="line">			<span class="comment">// 状态变为GP_EXIT，并异步注册回调。</span></span><br><span class="line">			WRITE_ONCE(rsp-&gt;gp_state, GP_EXIT);</span><br><span class="line">			rcu_sync_call(rsp);</span><br><span class="line">		&#125; <span class="keyword">else</span> <span class="keyword">if</span> (rsp-&gt;gp_state == GP_EXIT) &#123;</span><br><span class="line">			<span class="comment">// 优化：如果在GP_EXIT的宽限期内又有写者进入并退出，</span></span><br><span class="line">			<span class="comment">// 将状态设为GP_REPLAY，以便在回调中“重放”一次宽限期。</span></span><br><span class="line">			WRITE_ONCE(rsp-&gt;gp_state, GP_REPLAY);</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">	spin_unlock_irq(&amp;rsp-&gt;rss_lock);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// rcu_sync_func: RCU回调，状态机的核心驱动。</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">rcu_sync_func</span><span class="params">(<span class="keyword">struct</span> rcu_head *rhp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// ... (获取rsp指针和锁) ...</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 情况1: 来自第一个写者的synchronize_rcu()</span></span><br><span class="line">	<span class="keyword">if</span> (rsp-&gt;gp_count) &#123;</span><br><span class="line">		<span class="comment">// 宽限期已过，写者可以安全地继续。</span></span><br><span class="line">		WRITE_ONCE(rsp-&gt;gp_state, GP_PASSED);</span><br><span class="line">		wake_up_locked(&amp;rsp-&gt;gp_wait); <span class="comment">// 唤醒enter函数。</span></span><br><span class="line">	&#125; </span><br><span class="line">	<span class="comment">// 情况3 (优化): 来自GP_EXIT，但期间有新的退出。</span></span><br><span class="line">	<span class="keyword">else</span> <span class="keyword">if</span> (rsp-&gt;gp_state == GP_REPLAY) &#123;</span><br><span class="line">		<span class="comment">// 重置状态为GP_EXIT并重新注册回调，相当于合并了宽限期。</span></span><br><span class="line">		WRITE_ONCE(rsp-&gt;gp_state, GP_EXIT);</span><br><span class="line">		rcu_sync_call(rsp);</span><br><span class="line">	&#125; </span><br><span class="line">	<span class="comment">// 情况2: 来自最后一个写者的rcu_sync_exit()</span></span><br><span class="line">	<span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="comment">// 宽限期已过，写者的修改已对所有CPU可见。</span></span><br><span class="line">		<span class="comment">// 安全地将状态重置为IDLE，允许读者返回快速路径。</span></span><br><span class="line">		WRITE_ONCE(rsp-&gt;gp_state, GP_IDLE);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// ... (释放锁) ...</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="RCU-SYNC-析构函数：确保所有RCU回调完成"><a href="#RCU-SYNC-析构函数：确保所有RCU回调完成" class="headerlink" title="RCU_SYNC 析构函数：确保所有RCU回调完成"></a>RCU_SYNC 析构函数：确保所有RCU回调完成</h2><p>本代码片段定义了 <code>rcu_sync_dtor</code> 函数，它是 <code>rcu_sync</code> 状态机的<strong>析构函数（Destructor）</strong>。当一个包含 <code>rcu_sync</code> 结构体的对象（例如 <code>percpu_rw_semaphore</code>）即将被销毁时，必须调用此函数。其核心功能是<strong>确保所有由该 <code>rcu_sync</code> 实例注册的、可能还在等待执行的RCU回调都已经全部完成</strong>。这是一个强力的同步屏障，用于防止在对象被释放后，仍有“游荡”的RCU回调尝试访问该对象的内存，从而避免 use-after-free 错误。</p>
+<h3 id="实现原理分析-1"><a href="#实现原理分析-1" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>rcu_sync_dtor</code> 的实现依赖于一个非常强力的RCU同步原语：<code>rcu_barrier()</code>。</p>
+<ol>
+<li><p><strong>状态检查与警告</strong>:</p>
+<ul>
+<li><code>WARN_ON_ONCE(READ_ONCE(rsp-&gt;gp_state) == GP_PASSED)</code>: 函数首先检查状态是否为 <code>GP_PASSED</code>。这个状态意味着有写者正处于其临界区中（<code>rcu_sync_enter</code>已完成，但<code>rcu_sync_exit</code>尚未调用）。在这种状态下销毁 <code>rcu_sync</code> 结构是严重的逻辑错误，因为它破坏了锁的协议，因此会触发一个内核警告。</li>
+<li><code>WARN_ON_ONCE(rsp-&gt;gp_count)</code>: 在锁的保护下，它再次检查引用计数 <code>gp_count</code>。如果计数不为零，同样意味着有未配对的 <code>enter</code>&#x2F;<code>exit</code> 调用，也是一个逻辑错误。</li>
+</ul>
+</li>
+<li><p><strong>处理 <code>GP_REPLAY</code> 状态</strong>:</p>
+<ul>
+<li><code>if (rsp-&gt;gp_state == GP_REPLAY) WRITE_ONCE(rsp-&gt;gp_state, GP_EXIT);</code></li>
+<li>这是一个微妙的清理步骤。<code>GP_REPLAY</code> 是一个瞬态，表示“需要重放一次 <code>GP_EXIT</code> 回调”。如果在销毁时恰好处于这个状态，直接将其强制拨回 <code>GP_EXIT</code> 状态。这样做简化了 <code>rcu_barrier</code> 的处理逻辑，因为 <code>rcu_barrier</code> 只需要关心是否有处于 <code>GP_EXIT</code> 状态的回调即可。</li>
+</ul>
+</li>
+<li><p><strong>核心同步屏障 (<code>rcu_barrier</code>)</strong>:</p>
+<ul>
+<li><code>if (gp_state != GP_IDLE) { rcu_barrier(); ... }</code></li>
+<li>这是整个函数的关键。如果 <code>rcu_sync</code> 状态机不处于 <code>GP_IDLE</code>（空闲）状态，就意味着它<strong>至少</strong>处于 <code>GP_EXIT</code> 状态，即有一个 <code>rcu_sync_call</code> 注册的回调函数正在等待未来的某个RCU宽限期结束后被执行。</li>
+<li><code>rcu_barrier()</code> 是一个<strong>阻塞函数</strong>。它会<strong>一直等待，直到系统中所有已注册的RCU回调都已经执行完毕</strong>。</li>
+<li>通过调用 <code>rcu_barrier()</code>，<code>rcu_sync_dtor</code> 强制等待那个挂起的 <code>rcu_sync_func</code> 回调执行。当 <code>rcu_sync_func</code> 执行时，它会将状态最终转换回 <code>GP_IDLE</code>。</li>
+<li>因此，当 <code>rcu_barrier()</code> 返回时，可以<strong>百分之百地保证</strong> <code>rsp-&gt;gp_state</code> 已经被回调函数设置为 <code>GP_IDLE</code>。</li>
+</ul>
+</li>
+<li><p><strong>最终状态断言</strong>:</p>
+<ul>
+<li><code>WARN_ON_ONCE(rsp-&gt;gp_state != GP_IDLE);</code></li>
+<li>在 <code>rcu_barrier()</code> 之后，再次检查状态。如果此时状态不是 <code>GP_IDLE</code>，说明 <code>rcu_sync</code> 的状态机逻辑存在严重缺陷，会触发一个内核警告。这是一个用于验证正确性的断言。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析-1"><a href="#代码分析-1" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * rcu_sync_dtor() - 清理一个rcu_sync结构体</span></span><br><span class="line"><span class="comment"> * @rsp: 指向需要被清理的rcu_sync结构体的指针</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">rcu_sync_dtor</span><span class="params">(<span class="keyword">struct</span> rcu_sync *rsp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> gp_state;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 警告：如果在有写者处于临界区时（GP_PASSED状态）销毁，是逻辑错误。</span></span><br><span class="line">	WARN_ON_ONCE(READ_ONCE(rsp-&gt;gp_state) == GP_PASSED);</span><br><span class="line"></span><br><span class="line">	spin_lock_irq(&amp;rsp-&gt;rss_lock);</span><br><span class="line">	<span class="comment">// 警告：如果引用计数不为0，说明有未配对的enter/exit调用，是逻辑错误。</span></span><br><span class="line">	WARN_ON_ONCE(rsp-&gt;gp_count);</span><br><span class="line">	<span class="comment">// 如果处于瞬态的GP_REPLAY，将其强制拨回GP_EXIT，以简化后续处理。</span></span><br><span class="line">	<span class="keyword">if</span> (rsp-&gt;gp_state == GP_REPLAY)</span><br><span class="line">		WRITE_ONCE(rsp-&gt;gp_state, GP_EXIT);</span><br><span class="line">	gp_state = rsp-&gt;gp_state;</span><br><span class="line">	spin_unlock_irq(&amp;rsp-&gt;rss_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 如果状态不是IDLE，说明有挂起的RCU回调。</span></span><br><span class="line">	<span class="keyword">if</span> (gp_state != GP_IDLE) &#123;</span><br><span class="line">		<span class="comment">// rcu_barrier()是一个强同步点：它会阻塞，直到所有已注册的</span></span><br><span class="line">		<span class="comment">// RCU回调都执行完毕。</span></span><br><span class="line">		rcu_barrier();</span><br><span class="line">		<span class="comment">// 在rcu_barrier()返回后，我们断言状态机必须已经回到了IDLE状态。</span></span><br><span class="line">		<span class="comment">// 如果不是，说明状态机逻辑有bug。</span></span><br><span class="line">		WARN_ON_ONCE(rsp-&gt;gp_state != GP_IDLE);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/c68bd8fb/">https://wdfk-prog.space/posts/c68bd8fb/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/kernel/">kernel</a><a class="post-meta__tags" href="/tags/rcu/">rcu</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/09.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/1a1175a4/" title="rwlock"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">rwlock</div></div><div class="info-2"><div class="info-item-1">[toc] include&#x2F;linux&#x2F;rwlock.h 读写锁(Read-Write Lock) 允许多读者并发访问的同步原语历史与背景这项技术是为了解决什么特定问题而诞生的？读写锁（Read-Write Lock, rwlock）是为了解决一个非常普遍的并发访问模式的性能问题：对共享数据的访问是“读多写少”。 在使用简单的互斥锁（mutex）或自旋锁（spinlock）时，任何时候都只允许一个任务进入临界区，无论它是读取还是写入。这对于读操作来说是过度限制的，因为读操作本身不会修改数据，允许多个读者同时读取是安全的。如果一个数据结构被内核中成百上千个地方频繁地读取，而只被少数几个地方偶尔写入，那么使用互斥锁会导致所有读者被迫串行执行，极大地降低了系统的并发性能。 rwlock的诞生就是为了优化这种场景。它提供了一种更精细的锁定机制：  读锁（共享锁）：允许多个读者同时持有读锁。 写锁（排他锁）：与互斥锁一样，任何时候只允许一个写者持有写锁。 互斥规则：当有任何读者持有读锁时，写者必须等待；当有写者持有写锁时，所有读者和其他写者都必须等待。  它的发展经历了...</div></div></div></a><a class="pagination-related" href="/posts/a3bbff77/" title="debug_locks"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">debug_locks</div></div><div class="info-2"><div class="info-item-1">[TOC] debug_locks 各种锁的常用调试工具的通用位置： 自旋锁、rwlocks、mutex 和 rwsems。  debug_locks 的介绍debug_locks 是 Linux 内核中用于调试各种锁（如自旋锁、自读写锁、互斥锁和读写信号量）的工具。它提供了一种机制，用于检测锁的使用错误，并在发现问题时记录或报告相关信息。 特点 全局控制：通过全局标志 debug_locks，可以一次性启用或禁用所有锁的调试功能。 静默模式：支持通过 debug_locks_silent 实现“静默失败”，即在检测到锁错误时不打印任何信息到控制台。 原子操作：使用 xchg 等原子操作确保在多线程环境中安全地切换调试状态。 减少噪声：在检测到第一个锁错误后，可以关闭后续的调试输出，避免日志被大量错误信息淹没。   使用场景 锁错误检测：  在开发和调试阶段，用于检测锁的使用错误，例如死锁、锁未正确释放等问题。 适用于调试自旋锁（spinlock）、读写锁（rwlock）、互斥锁（mutex）和读写信号量（rwsem）等。   内核模块开发：  在开发内核模块时，debug_lo...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">dma</div></div><div class="info-2"><div class="info-item-1">[TOC] drivers&#x2F;dma DMA引擎与映射(DMA Engine &amp; Mapping) 内核统一的直接内存访问框架历史与背景这项技术是为了解决什么特定问题而诞生的？DMA（Direct Memory Access，直接内存访问）框架的诞生是为了解决一个根本性的性能瓶颈问题，并为内核提供一个统一、可移植的解决方案。  解决CPU性能瓶颈：在没有DMA的系统中，当外设（如网卡、磁盘）需要与内存交换大量数据时，CPU必须亲自担当“搬运工”的角色。这种方式被称为PIO（Programmed I&#x2F;O），CPU需要逐字节或逐字地从设备读取数据再写入内存，或者反之。对于高速设备，这会消耗大量的CPU周期，导致CPU无暇处理其他计算任务，严重影响系统整体性能。DMA技术通过引入一个专门的硬件控制器（DMAC），允许外设在没有CPU干预的情况下直接与内存进行数据传输，从而将CPU解放出来。 抽象硬件差异：不同的CPU架构和SoC平台，其DMA控制器的设计和编程接口千差万别。如果没有一个统一的软件框架，设备驱动程序的开发者将不得不为每一种不同的DMAC编写特定的...</div></div></div></a><a class="pagination-related" href="/posts/ba80502e/" title="cpu"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">cpu</div></div><div class="info-2"><div class="info-item-1">[TOC] include&#x2F;linux&#x2F;cpumask.hcpumask_check 验证当前cpu数量是否超过了配置的最大cpu数量,并返回cpu1234567891011121314151617// 验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline void cpu_max_bits_warn(unsigned int cpu, unsigned int bits)&#123;#ifdef CONFIG_DEBUG_PER_CPU_MAPS	WARN_ON_ONCE(cpu &gt;= bits);#endif /* CONFIG_DEBUG_PER_CPU_MAPS */&#125;/* verify cpu argument to cpumask_* operators *///验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline unsigned int cpumask_check(unsigned int cpu)&#123;    //small_cpumask_...</div></div></div></a><a class="pagination-related" href="/posts/57913c33/" title="SRCU"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">SRCU</div></div><div class="info-2"><div class="info-item-1">[toc] kernel&#x2F;rcu&#x2F;srcu.c Sleepable Read-Copy Update (SRCU) 允许睡眠的RCU变体历史与背景这项技术是为了解决什么特定问题而诞生的？Sleepable Read-Copy Update (SRCU) 的诞生是为了解决标准RCU（包括Classic RCU和Preemptible RCU）的一个核心限制：其读侧临界区（read-side critical section）内不允许睡眠。 标准的RCU通过监控CPU的静止状态（如上下文切换、进入idle）来确定宽限期（Grace Period），而这些监控手段都假设了读者在持有“锁”（即在rcu_read_lock()和rcu_read_unlock()之间）时不会主动放弃CPU（即睡眠）。 然而，在内核中存在很多场景，开发者需要在访问一个被RCU保护的、读多写少的数据结构的同时，执行一些可能会导致睡眠的操作。例如：  与用户空间交互：调用 copy_from_user() 或 copy_to_user()，这些函数在访问的用户内存被换出到磁盘时，会发生页错误并...</div></div></div></a><a class="pagination-related" href="/posts/b73e5edc/" title="tree"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">tree</div></div><div class="info-2"><div class="info-item-1">[toc] kernel&#x2F;rcu&#x2F;tree.c Tree RCU - 应对大规模多核系统的RCU扩展性实现历史与背景这项技術是爲了解决什么特定问题而诞生的？kernel/rcu/tree.c 并不是一种新的RCU“类型”（像SRCU那样），而是标准RCU（包括Preemptible RCU）的一种高性能、高可扩展性的实现方式。它的诞生是为了解决随着多核处理器（SMP）系统中CPU核心数量急剧增加，最初的“扁平化”RCU实现所面临的严重扩展性瓶颈问题。 RCU的核心是等待一个“宽限期”（Grace Period）结束，而宽限期的结束依赖于确认系统中所有CPU都已经经历过至少一次静止状态（Quiescent State）。在早期的、核心数较少的系统中，RCU协调器可以通过检查一个全局的数据结构来轮询或追踪每个CPU的状态。 然而，当CPU核心数从个位数增长到几十、几百甚至上千时，这种“扁平化”的管理方式导致了：  全局锁&#x2F;数据争用：所有CPU都需要向一个中心点报告自己的状态，或者由一个中心任务去检查所有CPU的状态。这会导致对同一个全局锁或缓存行的激烈争...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-rcu-Read-Copy-Update-RCU-%E9%AB%98%E6%80%A7%E8%83%BD%E7%9A%84%E5%86%85%E6%A0%B8%E5%90%8C%E6%AD%A5%E6%9C%BA%E5%88%B6"><span class="toc-number">1.</span> <span class="toc-text">kernel&#x2F;rcu Read-Copy Update (RCU) 高性能的内核同步机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-rcupdate-h"><span class="toc-number">2.</span> <span class="toc-text">include&#x2F;linux&#x2F;rcupdate.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-read-lock-%E6%A0%87%E8%AE%B0-RCU%EF%BC%88Read-Copy-Update%EF%BC%89%E8%AF%BB%E4%BE%A7%E4%B8%B4%E7%95%8C%E5%8C%BA%E7%9A%84%E5%BC%80%E5%A7%8B"><span class="toc-number">2.1.</span> <span class="toc-text">rcu_read_lock 标记 RCU（Read-Copy-Update）读侧临界区的开始</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8A%9F%E8%83%BD%E6%A6%82%E8%BF%B0"><span class="toc-number">2.1.1.</span> <span class="toc-text">功能概述</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B9%B6%E5%8F%91%E8%A1%8C%E4%B8%BA"><span class="toc-number">2.1.2.</span> <span class="toc-text">并发行为</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B5%8C%E5%A5%97%E6%94%AF%E6%8C%81"><span class="toc-number">2.1.3.</span> <span class="toc-text">嵌套支持</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E9%99%90%E5%88%B6"><span class="toc-number">2.1.4.</span> <span class="toc-text">使用限制</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-read-unlock-%E6%A0%87%E8%AE%B0-RCU-%E8%AF%BB%E4%BE%A7%E4%B8%B4%E7%95%8C%E5%8C%BA%E7%9A%84%E7%BB%93%E6%9D%9F"><span class="toc-number">2.2.</span> <span class="toc-text">rcu_read_unlock 标记 RCU 读侧临界区的结束</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-assign-pointer-RCU%E5%86%99%E5%85%A5%E6%9B%B4%E6%96%B0"><span class="toc-number">2.3.</span> <span class="toc-text">rcu_assign_pointer RCU写入更新</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#synchronize-rcu-RCU%E5%90%8C%E6%AD%A5"><span class="toc-number">2.4.</span> <span class="toc-text">synchronize_rcu RCU同步</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-preempt-depth-%E8%8E%B7%E5%8F%96-RCU-%E9%A2%84%E5%A4%84%E7%90%86%E5%B5%8C%E5%A5%97%E6%B7%B1%E5%BA%A6"><span class="toc-number">2.5.</span> <span class="toc-text">rcu_preempt_depth 获取 RCU 预处理嵌套深度</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-rculist-h"><span class="toc-number">3.</span> <span class="toc-text">include&#x2F;linux&#x2F;rculist.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#list-add-rcu-%E6%8F%92%E5%85%A5%E6%96%B0%E6%9D%A1%E7%9B%AE%E5%88%B0-RCU-%E4%BF%9D%E6%8A%A4%E7%9A%84%E9%93%BE%E8%A1%A8%E4%B8%AD"><span class="toc-number">3.1.</span> <span class="toc-text">__list_add_rcu 插入新条目到 RCU 保护的链表中</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-rcuwait-h"><span class="toc-number">4.</span> <span class="toc-text">include&#x2F;linux&#x2F;rcuwait.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#rcuwait-wait-event-%E9%98%BB%E5%A1%9E%E7%AD%89%E5%BE%85%E6%9D%A1%E4%BB%B6%E6%BB%A1%E8%B6%B3%E4%B8%8E%E7%8A%B6%E6%80%81%E6%BB%A1%E8%B6%B3"><span class="toc-number">4.1.</span> <span class="toc-text">___rcuwait_wait_event 阻塞等待条件满足与状态满足</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcuwait-wait-event-%E9%98%BB%E5%A1%9E%E7%AD%89%E5%BE%85%E6%9D%A1%E4%BB%B6%E6%BB%A1%E8%B6%B3%E4%B8%8E%E7%8A%B6%E6%80%81%E6%BB%A1%E8%B6%B3-1"><span class="toc-number">4.2.</span> <span class="toc-text">rcuwait_wait_event 阻塞等待条件满足与状态满足</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcuwait-init-%E5%88%9D%E5%A7%8B%E5%8C%96-rcuwait-%E7%BB%93%E6%9E%84%E4%BD%93"><span class="toc-number">4.3.</span> <span class="toc-text">rcuwait_init 初始化 rcuwait 结构体</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-rcu-rcu-h"><span class="toc-number">5.</span> <span class="toc-text">kernel&#x2F;rcu&#x2F;rcu.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-init-levelspread-%E8%AE%A1%E7%AE%97%E6%AF%8F%E5%B1%82%E7%9A%84%E6%89%87%E5%87%BA"><span class="toc-number">5.1.</span> <span class="toc-text">rcu_init_levelspread 计算每层的扇出</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-seq-done-exact-%E7%B2%BE%E7%A1%AE%E5%88%A4%E6%96%AD-RCU%EF%BC%88Read-Copy-Update%EF%BC%89%E5%BA%8F%E5%88%97%E5%8F%B7%E6%98%AF%E5%90%A6%E5%B7%B2%E7%BB%8F%E5%AE%8C%E6%88%90%E6%9B%B4%E6%96%B0%E6%93%8D%E4%BD%9C"><span class="toc-number">5.2.</span> <span class="toc-text">rcu_seq_done_exact 精确判断 RCU（Read-Copy-Update）序列号是否已经完成更新操作</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-for-each-node-breadth-first-%E5%AF%B9-rcu-node-%E7%BB%93%E6%9E%84%E8%BF%9B%E8%A1%8C%E5%B9%BF%E5%BA%A6%E4%BC%98%E5%85%88%E9%81%8D%E5%8E%86"><span class="toc-number">5.3.</span> <span class="toc-text">rcu_for_each_node_breadth_first 对 rcu_node 结构进行广度优先遍历</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-rcu-update-c"><span class="toc-number">6.</span> <span class="toc-text">kernel&#x2F;rcu&#x2F;update.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-set-runtime-mode-%E8%AE%BE%E7%BD%AE%E8%BF%90%E8%A1%8C%E6%A8%A1%E5%BC%8F"><span class="toc-number">6.1.</span> <span class="toc-text">rcu_set_runtime_mode 设置运行模式</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-test-sync-prims-%E6%B5%8B%E8%AF%95-RCU-%E5%90%8C%E6%AD%A5%E5%8E%9F%E8%AF%AD"><span class="toc-number">6.2.</span> <span class="toc-text">rcu_test_sync_prims 测试 RCU 同步原语</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-rcu-sync-c-RCU%E5%90%8C%E6%AD%A5%E7%AD%89%E5%BE%85-RCU-Synchronous-Waiting-%E5%AE%9E%E7%8E%B0%E4%BC%98%E9%9B%85%E5%91%A8%E6%9C%9F%E5%AE%8C%E6%88%90%E7%9A%84%E9%98%BB%E5%A1%9E%E6%9C%BA%E5%88%B6"><span class="toc-number">7.</span> <span class="toc-text">kernel&#x2F;rcu&#x2F;sync.c RCU同步等待(RCU Synchronous Waiting) 实现优雅周期完成的阻塞机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF-1"><span class="toc-number">7.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F-1"><span class="toc-number">7.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F-1"><span class="toc-number">7.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F-1"><span class="toc-number">7.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1-1"><span class="toc-number">7.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F-1"><span class="toc-number">7.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F-1"><span class="toc-number">7.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F-1"><span class="toc-number">7.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF-1"><span class="toc-number">7.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E3%80%82"><span class="toc-number">7.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F-1"><span class="toc-number">7.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90-1"><span class="toc-number">7.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82-1"><span class="toc-number">7.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rcu-sync-init-%E5%88%9D%E5%A7%8B%E5%8C%96%E4%B8%80%E4%B8%AA-rcu-sync-%E7%BB%93%E6%9E%84"><span class="toc-number">7.1.</span> <span class="toc-text">rcu_sync_init 初始化一个 rcu_sync 结构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#RCU-SYNC-%E7%8A%B6%E6%80%81%E6%9C%BA%EF%BC%9A%E5%8D%8F%E8%B0%83%E8%AF%BB%E8%80%85%E5%BF%AB%E6%85%A2%E8%B7%AF%E5%BE%84%E8%BD%AC%E6%8D%A2%E7%9A%84%E5%90%8C%E6%AD%A5%E5%8E%9F%E8%AF%AD"><span class="toc-number">7.2.</span> <span class="toc-text">RCU_SYNC 状态机：协调读者快慢路径转换的同步原语</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">7.2.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E5%88%86%E6%9E%90%EF%BC%9A%E5%8D%95%E6%A0%B8%E3%80%81%E6%97%A0MMU%E7%9A%84STM32H750%E5%B9%B3%E5%8F%B0"><span class="toc-number">7.2.2.</span> <span class="toc-text">特定场景分析：单核、无MMU的STM32H750平台</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%A1%AC%E4%BB%B6%E4%BA%A4%E4%BA%92%E4%B8%8EMMU"><span class="toc-number">7.2.2.1.</span> <span class="toc-text">硬件交互与MMU</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8D%95%E6%A0%B8%E7%8E%AF%E5%A2%83%E4%B8%8B%E7%9A%84RCU"><span class="toc-number">7.2.2.2.</span> <span class="toc-text">单核环境下的RCU</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E9%99%85%E6%84%8F%E4%B9%89"><span class="toc-number">7.2.2.3.</span> <span class="toc-text">实际意义</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">7.2.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#RCU-SYNC-%E6%9E%90%E6%9E%84%E5%87%BD%E6%95%B0%EF%BC%9A%E7%A1%AE%E4%BF%9D%E6%89%80%E6%9C%89RCU%E5%9B%9E%E8%B0%83%E5%AE%8C%E6%88%90"><span class="toc-number">7.3.</span> <span class="toc-text">RCU_SYNC 析构函数：确保所有RCU回调完成</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-1"><span class="toc-number">7.3.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-1"><span class="toc-number">7.3.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/09.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '5b566e7fd64310ef9086d1196533c481'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

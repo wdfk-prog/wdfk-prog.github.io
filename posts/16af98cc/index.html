@@ -1,0 +1,1189 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>tick | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[toc] kernel&#x2F;time&#x2F;tick-*.c 内核时钟滴答(The Kernel Tick) 驱动时间流逝与进程抢占历史与背景这项技术是为了解决什么特定问题而诞生的？kernel&#x2F;time&#x2F;tick-*.c 目录下的文件集合构成了内核时钟滴答（Kernel Tick）的底层实现。这项技术是所有分时操作系统的心跳（Heartbeat），它的诞生是为了解决两个最根本的问题：">
+<meta property="og:type" content="article">
+<meta property="og:title" content="tick">
+<meta property="og:url" content="https://wdfk-prog.space/posts/16af98cc/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[toc] kernel&#x2F;time&#x2F;tick-*.c 内核时钟滴答(The Kernel Tick) 驱动时间流逝与进程抢占历史与背景这项技术是为了解决什么特定问题而诞生的？kernel&#x2F;time&#x2F;tick-*.c 目录下的文件集合构成了内核时钟滴答（Kernel Tick）的底层实现。这项技术是所有分时操作系统的心跳（Heartbeat），它的诞生是为了解决两个最根本的问题：">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/01.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:29.300Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="kernel">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="time">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/01.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "tick",
+  "url": "https://wdfk-prog.space/posts/16af98cc/",
+  "image": "https://wdfk-prog.space/images/covers/01.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:29.300Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/16af98cc/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'tick',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/01.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">tick</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">tick<a class="post-edit-link" href="null_posts/linux/kernel/time/tick.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:29.300Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/">kernel</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/time/">time</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>21分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/16af98cc/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:29&quot;}" hidden></div><p>[toc]</p>
+<h1 id="kernel-time-tick-c-内核时钟滴答-The-Kernel-Tick-驱动时间流逝与进程抢占"><a href="#kernel-time-tick-c-内核时钟滴答-The-Kernel-Tick-驱动时间流逝与进程抢占" class="headerlink" title="kernel&#x2F;time&#x2F;tick-*.c 内核时钟滴答(The Kernel Tick) 驱动时间流逝与进程抢占"></a>kernel&#x2F;time&#x2F;tick-*.c 内核时钟滴答(The Kernel Tick) 驱动时间流逝与进程抢占</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p><code>kernel/time/tick-*.c</code> 目录下的文件集合构成了<strong>内核时钟滴答（Kernel Tick）<strong>的底层实现。这项技术是所有分时操作系统的</strong>心跳（Heartbeat）</strong>，它的诞生是为了解决两个最根本的问题：</p>
+<ol>
+<li><strong>时间流逝的度量</strong>：内核需要一个机制来驱动内部的时间概念。没有一个周期性的“滴答”，像<code>jiffies</code>这样的计数器将无法更新，基于<code>jiffies</code>的传统定时器（<code>timer_list</code>）也将永远不会到期。</li>
+<li><strong>强制性进程抢占（Preemptive Multitasking）</strong>：在一个协作式多任务系统中，一个进程会一直运行直到它自愿放弃CPU。这会导致一个死循环的进程就能锁死整个系统。为了实现抢占式多任务，内核需要一个周期性的、不可抗拒的事件来中断当前正在运行的进程，并给调度器一个机会去检查是否有其他进程应该运行。这个事件就是<strong>时钟滴答中断</strong>。</li>
+</ol>
+<p>简而言之，内核滴答是<strong>调度器得以强制执行时间片轮转</strong>和<strong>内核传统时间得以向前流逝</strong>的基础驱动力。</p>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p>内核滴答的实现方式经历了从简单到复杂的巨大演进，其核心驱动力是<strong>节能</strong>和<strong>降低操作系统抖动（OS Jitter）</strong>。</p>
+<ul>
+<li><strong>固定周期性滴答（Periodic Tick）</strong>：这是最原始、最简单的模型。一个硬件定时器被设置为以固定的<code>HZ</code>频率（例如每秒100、250或1000次）周期性地产生中断。这种模型的优点是实现简单、行为恒定。但其致命缺点是：<strong>即使系统完全空闲，CPU也会被这个中断毫无意义地、频繁地唤醒</strong>，这会阻止CPU进入深度睡眠状态，造成巨大的能源浪费。</li>
+<li><strong>无滴答空闲（Tickless Idle &#x2F; <code>NO_HZ_IDLE</code>）</strong>：这是内核电源管理领域的一次革命。其核心思想是：当一个CPU核心即将进入空闲状态时，内核会<strong>取消</strong>周期性的滴答中断。取而代之，它会计算出下一个需要处理的定时事件（无论是<code>timer_list</code>还是<code>hrtimer</code>）的精确时间点，然后使用高精度定时器（<code>hrtimer</code>）来编程一个**一次性（one-shot）**的中断，恰好在那个时间点触发。这使得空闲的CPU可以深度睡眠数秒甚至更长时间，极大地节省了功耗。</li>
+<li><strong>完全无滴答（Full Tickless &#x2F; <code>NO_HZ_FULL</code>）</strong>：这是<code>NO_HZ</code>的进一步演进。<code>NO_HZ_IDLE</code>只在CPU完全空闲时才停止滴答。但对于某些特定负载，如高性能计算（HPC）或硬实时任务，即使CPU上正忙于运行一个<strong>单一的用户空间进程</strong>，内核滴答本身也会构成一种不必要的干扰（OS Jitter）。<code>NO_HZ_FULL</code>允许在这种情况下也停止滴答，从而为该进程提供一个几乎“无干扰”的运行环境，将CPU完全让给应用程序。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p>内核滴答是内核时间子系统的<strong>绝对基础</strong>。其现代的、可配置的（周期性 vs. 无滴答）实现是所有现代Linux系统的标准配置。</p>
+<ul>
+<li><strong>主流应用</strong>：<ul>
+<li><code>NO_HZ_IDLE</code>是几乎所有现代桌面、服务器和移动Linux系统的<strong>默认配置</strong>，是实现出色能效的关键。</li>
+<li><code>NO_HZ_FULL</code>则是一个更专业的选项，被用于延迟敏感的高性能计算、高频交易和硬实时系统中，以追求极致的低延迟和可预测性。</li>
+</ul>
+</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p>内核滴答的实现被分散在<code>tick-common.c</code>, <code>tick-sched.c</code>, <code>tick-broadcast.c</code>, <code>tick-oneshot.c</code>等文件中，其核心是围绕<code>struct tick_sched</code>对象展开的，并由高精度定时器（<code>hrtimer</code>）驱动。</p>
+<ol>
+<li><p><strong>滴答的“引擎”——<code>tick_sched_timer</code></strong>：</p>
+<ul>
+<li>在现代内核中，周期性滴答不再由一个独立的、低分辨率的硬件定时器驱动。取而代之的是，内核为每个CPU启动一个<strong>周期性的高精度定时器（<code>hrtimer</code>）</strong>，名为<code>tick_sched_timer</code>。</li>
+<li>这个<code>hrtimer</code>的回调函数是<code>tick_sched_timer()</code>，它就是<strong>滴答事件的核心处理函数</strong>。</li>
+</ul>
+</li>
+<li><p><strong>滴答事件处理 (<code>tick_sched_timer()</code> &#x2F; <code>tick_handle_periodic()</code>)</strong>：</p>
+<ul>
+<li>当这个<code>hrtimer</code>到期时，它的回调函数会执行一系列关键的周期性任务：<br>a. <strong>更新<code>jiffies</code></strong>：调用<code>do_timer()</code>来增加全局的<code>jiffies</code>计数。<br>b. <strong>运行传统定时器</strong>：检查并运行当前<code>jiffies</code>值对应的所有到期的<code>timer_list</code>定时器。<br>c. <strong>通知调度器</strong>：调用<strong>调度器</strong>的<code>scheduler_tick()</code>函数。这是CFS实现时间片轮转的关键，<code>scheduler_tick()</code>会更新当前进程的<code>vruntime</code>，并检查是否需要设置<code>TIF_NEED_RESCHED</code>标志以触发抢占。<br>d. <strong>更新进程记账</strong>：更新当前进程所消耗的CPU时间统计（用户态&#x2F;内核态）。</li>
+</ul>
+</li>
+<li><p><strong>无滴答（Tickless）模式的实现</strong>：</p>
+<ul>
+<li><strong>进入空闲&#x2F;隔离</strong>：当CPU进入空闲（<code>NO_HZ_IDLE</code>）或隔离（<code>NO_HZ_FULL</code>）状态时，内核会调用<code>tick_stop_idle()</code>或<code>tick_nohz_start_tick()</code>等函数。这些函数的核心操作就是<strong>取消</strong>那个周期性的<code>tick_sched_timer</code>。</li>
+<li><strong>编程下一个事件</strong>：接着，内核会查询所有定时器子系统（<code>hrtimer</code>, <code>timer_list</code>），找出<strong>下一个最早需要触发的事件</strong>的时间点。</li>
+<li>然后，它会使用一个<strong>一次性（one-shot）的<code>hrtimer</code></strong>，将硬件编程为在那个精确的时间点触发中断。</li>
+<li><strong>退出</strong>：当CPU被唤醒时（无论是被那个一次性定时器还是其他外部中断唤醒），内核会调用<code>tick_check_idle()</code>或<code>tick_nohz_stop_tick()</code>等函数，<strong>重新启动</strong>周期性的<code>tick_sched_timer</code>。</li>
+</ul>
+</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>提供基础节拍</strong>：为所有依赖于周期性检查的传统内核子系统提供了驱动力。</li>
+<li><strong>实现抢占</strong>：是调度器实现公平性的基础。</li>
+<li><strong>节能</strong>：通过<code>NO_HZ</code>机制，在不牺牲功能的前提下，实现了巨大的功耗节省。</li>
+<li><strong>降低抖动</strong>：通过<code>NO_HZ_FULL</code>，为性能敏感的应用提供了更稳定、可预测的运行环境。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>固定开销（周期性模式下）</strong>：在传统的周期性模式下，无论系统负载如何，滴答中断都会持续产生固定的CPU开销。</li>
+<li><strong>精度限制</strong>：滴答的频率<code>HZ</code>决定了<code>jiffies</code>的时间粒度，所有依赖它的子系统都无法实现比<code>1/HZ</code>秒更高的精度。</li>
+<li><strong>复杂性（无滴答模式下）</strong>：<code>NO_HZ</code>的实现逻辑，特别是<code>NO_HZ_FULL</code>，涉及到复杂的定时器管理、CPU间状态同步和记账，是内核中一个相当复杂的领域。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p>内核滴答是一个<strong>内核内部的基础设施</strong>，用户或内核开发者不直接“选择”它，而是选择依赖于它的上层API。</p>
+<ul>
+<li>任何使用<code>jiffies</code>或<code>timer_list</code>的代码，都隐式地依赖于内核滴答来驱动它们。</li>
+<li>任何以<code>SCHED_NORMAL</code>（CFS）运行的进程，都依赖于内核滴答来保证其时间片能够被公平地轮转。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><p>这个问题应该理解为“何时应该避免依赖滴答的行为？”</p>
+<ul>
+<li><strong>高精度定时</strong>：任何需要亚毫秒级精度的场景，都<strong>不应该</strong>依赖<code>jiffies</code>或滴答周期，而应该直接使用**<code>hrtimers</code>**。</li>
+<li><strong>高性能追踪</strong>：不应通过在循环中检查<code>jiffies</code>变化来进行性能测量，而应使用<code>sched_clock()</code>或<code>ktime</code>。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">内核滴答 (Kernel Tick)</th>
+<th align="left"><code>hrtimer</code> (高精度定时器)</th>
+<th align="left"><code>sched_clock()</code> (调度器时钟)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>核心用途</strong></td>
+<td align="left">提供一个<strong>周期性的系统节拍</strong>，驱动低分辨率时间并触发抢占。</td>
+<td align="left">提供<strong>高精度的、一次性或周期性的未来事件调度</strong>。</td>
+<td align="left">提供一个<strong>极低开销的、高精度的当前时间戳</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>角色关系</strong></td>
+<td align="left"><strong>是<code>hrtimer</code>的客户</strong>。现代滴答是通过一个周期性的<code>hrtimer</code>实现的。</td>
+<td align="left"><strong>是滴答的底层引擎</strong>。为滴答提供精确的触发能力。</td>
+<td align="left">与滴答<strong>互补</strong>。滴答是“事件”，<code>sched_clock</code>是“时间源”。</td>
+</tr>
+<tr>
+<td align="left"><strong>分辨率</strong></td>
+<td align="left"><strong>低</strong> (<code>1/HZ</code>秒，毫秒级)。</td>
+<td align="left"><strong>高</strong> (纳秒级)。</td>
+<td align="left"><strong>高</strong> (纳秒级)。</td>
+</tr>
+<tr>
+<td align="left"><strong>功能</strong></td>
+<td align="left"><strong>触发</strong>一系列周期性任务。</td>
+<td align="left"><strong>调度</strong>一个特定的回调函数在未来执行。</td>
+<td align="left"><strong>读取</strong>当前时间。</td>
+</tr>
+<tr>
+<td align="left"><strong>开销</strong></td>
+<td align="left"><strong>中等</strong> (在周期性模式下是固定开aho销)。</td>
+<td align="left"><strong>较高</strong> (比<code>timer_list</code>高)。</td>
+<td align="left"><strong>极低</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left">内核的“心跳”，驱动<code>jiffies</code>和CFS时间片。</td>
+<td align="left"><code>nanosleep</code>，实时应用，精确超时。</td>
+<td align="left">内核内部的性能测量和高精度记账。</td>
+</tr>
+</tbody></table>
+<h1 id="kernel-time-tick-internal-h"><a href="#kernel-time-tick-internal-h" class="headerlink" title="kernel&#x2F;time&#x2F;tick-internal.h"></a>kernel&#x2F;time&#x2F;tick-internal.h</h1><h2 id="tick-set-periodic-handler-设置周期性处理程序"><a href="#tick-set-periodic-handler-设置周期性处理程序" class="headerlink" title="tick_set_periodic_handler 设置周期性处理程序"></a>tick_set_periodic_handler 设置周期性处理程序</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * tick_set_periodic_handler - 设置周期性处理程序</span></span><br><span class="line"><span class="comment"> * @dev：时钟事件设备</span></span><br><span class="line"><span class="comment"> * @broadcast：是否广播</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 设置周期性处理程序。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">tick_set_periodic_handler</span><span class="params">(<span class="keyword">struct</span> clock_event_device *dev, <span class="type">int</span> broadcast)</span></span><br><span class="line">&#123;</span><br><span class="line">	dev-&gt;event_handler = tick_handle_periodic;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-time-tick-common-c"><a href="#kernel-time-tick-common-c" class="headerlink" title="kernel&#x2F;time&#x2F;tick-common.c"></a>kernel&#x2F;time&#x2F;tick-common.c</h1><h2 id="tick-do-timer-cpu-存储负责调用-do-timer-的-CPU-编号"><a href="#tick-do-timer-cpu-存储负责调用-do-timer-的-CPU-编号" class="headerlink" title="tick_do_timer_cpu 存储负责调用 do_timer() 的 CPU 编号"></a>tick_do_timer_cpu 存储负责调用 <code>do_timer()</code> 的 CPU 编号</h2><ul>
+<li><code>tick_do_timer_cpu</code> 是一个内核定时器核心的内部变量，用于存储负责调用 <code>do_timer()</code> 的 CPU 编号（CPU NR）。<code>do_timer()</code> 是一个与时间管理相关的函数，负责更新系统的时间信息。该变量的主要作用是协调多核系统中与时间管理相关的任务分配，避免资源竞争并支持动态的 CPU 状态变化</li>
+</ul>
+<ol>
+<li>防止“惊群效应”：<ul>
+<li>在多核系统中，如果没有协调机制，可能会有大量 CPU 同时尝试获取时间管理相关的锁（如时间保持锁 timekeeping lock），导致“惊群效应”（thundering herd problem）。</li>
+<li>tick_do_timer_cpu 通过指定一个特定的 CPU 来负责 do_timer() 的调用，避免了多个 CPU 同时争抢锁的情况，从而提高了系统的效率</li>
+</ul>
+</li>
+<li>支持 NOHZ 空闲模式<ul>
+<li>在 NOHZ（No HZ）模式下，当 CPU 进入空闲状态时，tick_do_timer_cpu 的值会被设置为 TICK_DO_TIMER_NONE，表示当前没有 CPU 负责时间管理任务</li>
+<li>这种设计允许下一个检查该变量的 CPU 自动接管时间管理任务，确保系统的时间保持功能不会中断</li>
+<li>这种机制还支持 CPU 热插拔（hotplug），即当某个 CPU 被移除或添加时，时间管理任务可以动态地分配给其他 CPU。</li>
+</ul>
+</li>
+</ol>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* 表示在系统启动时，默认的时间管理任务由引导 CPU（boot CPU）负责 */</span></span><br><span class="line"><span class="type">int</span> tick_do_timer_cpu __read_mostly = TICK_DO_TIMER_BOOT;</span><br></pre></td></tr></table></figure>
+
+<h2 id="clockevents-program-min-delta-将时钟事件设备设置为最小延迟"><a href="#clockevents-program-min-delta-将时钟事件设备设置为最小延迟" class="headerlink" title="clockevents_program_min_delta 将时钟事件设备设置为最小延迟"></a>clockevents_program_min_delta 将时钟事件设备设置为最小延迟</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * clockevents_program_min_delta - 将时钟事件设备设置为最小延迟。</span></span><br><span class="line"><span class="comment"> * @dev：设备到程序</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 成功时返回 0，重试循环失败时返回 -ETIME。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">clockevents_program_min_delta</span><span class="params">(<span class="keyword">struct</span> clock_event_device *dev)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> <span class="type">long</span> clc;</span><br><span class="line">	<span class="type">int64_t</span> delta = <span class="number">0</span>;</span><br><span class="line">	<span class="type">int</span> i;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; <span class="number">10</span>; i++) &#123;</span><br><span class="line">		delta += dev-&gt;min_delta_ns;</span><br><span class="line">		dev-&gt;next_event = ktime_add_ns(ktime_get(), delta);</span><br><span class="line"></span><br><span class="line">		<span class="keyword">if</span> (clockevent_state_shutdown(dev))</span><br><span class="line">			<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">		dev-&gt;retries++;</span><br><span class="line">		clc = ((<span class="type">unsigned</span> <span class="type">long</span> <span class="type">long</span>) delta * dev-&gt;mult) &gt;&gt; dev-&gt;shift;</span><br><span class="line">		<span class="keyword">if</span> (dev-&gt;set_next_event((<span class="type">unsigned</span> <span class="type">long</span>) clc, dev) == <span class="number">0</span>)</span><br><span class="line">			<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> -ETIME;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-setup-periodic-设置为周期时钟"><a href="#tick-setup-periodic-设置为周期时钟" class="headerlink" title="tick_setup_periodic 设置为周期时钟"></a>tick_setup_periodic 设置为周期时钟</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 为周期性滴答声设置设备</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_setup_periodic</span><span class="params">(<span class="keyword">struct</span> clock_event_device *dev, <span class="type">int</span> broadcast)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* //在非广播模式下设置周期性处理程序</span></span><br><span class="line"><span class="comment">	static inline void tick_set_periodic_handler(struct clock_event_device *dev, int broadcast)</span></span><br><span class="line"><span class="comment">	&#123;</span></span><br><span class="line"><span class="comment">		dev-&gt;event_handler = tick_handle_periodic;</span></span><br><span class="line"><span class="comment">	&#125; */</span></span><br><span class="line">	tick_set_periodic_handler(dev, broadcast);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 调用 tick_device_is_functional 检查设备是否处于功能正常的状态。</span></span><br><span class="line"><span class="comment">	 * 如果设备不可用，直接返回，不进行进一步配置。 </span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!tick_device_is_functional(dev))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 如果设备支持周期模式（CLOCK_EVT_FEAT_PERIODIC）且当前未处于广播单次触发模式 */</span></span><br><span class="line">	<span class="keyword">if</span> ((dev-&gt;features &amp; CLOCK_EVT_FEAT_PERIODIC) &amp;&amp;</span><br><span class="line">	    !tick_broadcast_oneshot_active()) &#123;</span><br><span class="line">		<span class="comment">/* 将设备的状态切换为周期模式 </span></span><br><span class="line"><span class="comment">			在这种模式下，设备会自动生成周期性中断，无需进一步手动编程*/</span></span><br><span class="line">		clockevents_switch_state(dev, CLOCK_EVT_STATE_PERIODIC);</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="comment">/* 配置为单次触发模式 */</span></span><br><span class="line">		<span class="type">unsigned</span> <span class="type">int</span> seq;</span><br><span class="line">		<span class="type">ktime_t</span> next;</span><br><span class="line">		<span class="comment">/* 使用序列计数器（jiffies_seq）读取 tick_next_period 的值，确保读取操作的一致性 */</span></span><br><span class="line">		<span class="keyword">do</span> &#123;</span><br><span class="line">			seq = read_seqcount_begin(&amp;jiffies_seq);</span><br><span class="line">			next = tick_next_period;</span><br><span class="line">		&#125; <span class="keyword">while</span> (read_seqcount_retry(&amp;jiffies_seq, seq));</span><br><span class="line">		<span class="comment">/* 切换设备状态为单次触发模式： */</span></span><br><span class="line">		clockevents_switch_state(dev, CLOCK_EVT_STATE_ONESHOT);</span><br><span class="line"></span><br><span class="line">		<span class="keyword">for</span> (;;) &#123;</span><br><span class="line">			<span class="comment">/* 为设备设置下一个触发时间点。如果编程成功，退出循环*/</span></span><br><span class="line">			<span class="keyword">if</span> (!clockevents_program_event(dev, next, <span class="literal">false</span>))</span><br><span class="line">				<span class="keyword">return</span>;</span><br><span class="line">			<span class="comment">/* 使用 ktime_add_ns 将当前触发时间点 next 增加一个滴答周期（TICK_NSEC），为下一个事件计算新的触发时间。 */</span></span><br><span class="line">			next = ktime_add_ns(next, TICK_NSEC);</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="检查新设备是否比-curdev-更合适"><a href="#检查新设备是否比-curdev-更合适" class="headerlink" title="检查新设备是否比 curdev 更合适"></a>检查新设备是否比 curdev 更合适</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">bool</span> <span class="title function_">tick_check_percpu</span><span class="params">(<span class="keyword">struct</span> clock_event_device *curdev,</span></span><br><span class="line"><span class="params">			      <span class="keyword">struct</span> clock_event_device *newdev, <span class="type">int</span> cpu)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (!cpumask_test_cpu(cpu, newdev-&gt;cpumask))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	<span class="keyword">if</span> (cpumask_equal(newdev-&gt;cpumask, cpumask_of(cpu)))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">	<span class="comment">/* Check if irq affinity can be set */</span></span><br><span class="line">	<span class="keyword">if</span> (newdev-&gt;irq &gt;= <span class="number">0</span> &amp;&amp; !irq_can_set_affinity(newdev-&gt;irq))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	<span class="comment">/* Prefer an existing cpu local device */</span></span><br><span class="line">	<span class="keyword">if</span> (curdev &amp;&amp; cpumask_equal(curdev-&gt;cpumask, cpumask_of(cpu)))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">bool</span> <span class="title function_">tick_check_preferred</span><span class="params">(<span class="keyword">struct</span> clock_event_device *curdev,</span></span><br><span class="line"><span class="params">				 <span class="keyword">struct</span> clock_event_device *newdev)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 更喜欢一击即发的设备e */</span></span><br><span class="line">	<span class="keyword">if</span> (!(newdev-&gt;features &amp; CLOCK_EVT_FEAT_ONESHOT)) &#123;</span><br><span class="line">		<span class="keyword">if</span> (curdev &amp;&amp; (curdev-&gt;features &amp; CLOCK_EVT_FEAT_ONESHOT))</span><br><span class="line">			<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">		<span class="keyword">if</span> (tick_oneshot_mode_active())</span><br><span class="line">			<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * Use the higher rated one, but prefer a CPU local device with a lower</span></span><br><span class="line"><span class="comment">	 * rating than a non-CPU local device</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> !curdev ||</span><br><span class="line">		newdev-&gt;rating &gt; curdev-&gt;rating ||</span><br><span class="line">	       !cpumask_equal(curdev-&gt;cpumask, newdev-&gt;cpumask);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 检查新设备是否比 curdev 更合适。curdev 可以是 NULL ！</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">bool</span> <span class="title function_">tick_check_replacement</span><span class="params">(<span class="keyword">struct</span> clock_event_device *curdev,</span></span><br><span class="line"><span class="params">			    <span class="keyword">struct</span> clock_event_device *newdev)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (!tick_check_percpu(curdev, newdev, smp_processor_id()))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> tick_check_preferred(curdev, newdev);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-setup-device-设置时钟事件设备"><a href="#tick-setup-device-设置时钟事件设备" class="headerlink" title="tick_setup_device 设置时钟事件设备"></a>tick_setup_device 设置时钟事件设备</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Setup the tick device</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">tick_setup_device</span><span class="params">(<span class="keyword">struct</span> tick_device *td,</span></span><br><span class="line"><span class="params">			      <span class="keyword">struct</span> clock_event_device *newdev, <span class="type">int</span> cpu,</span></span><br><span class="line"><span class="params">			      <span class="type">const</span> <span class="keyword">struct</span> cpumask *cpumask)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">void</span> (*handler)(<span class="keyword">struct</span> clock_event_device *) = <span class="literal">NULL</span>;</span><br><span class="line">	<span class="type">ktime_t</span> next_event = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 首次设置设备 ？</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!td-&gt;evtdev) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果没有 cpu 进行do_timer更新，请将其分配给此 cpu：</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (READ_ONCE(tick_do_timer_cpu) == TICK_DO_TIMER_BOOT) &#123;</span><br><span class="line">			WRITE_ONCE(tick_do_timer_cpu, cpu);</span><br><span class="line">			<span class="comment">/* 获取当前时间并设置 */</span></span><br><span class="line">			tick_next_period = ktime_get();</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 首先以周期模式启动。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		td-&gt;mode = TICKDEV_MODE_PERIODIC;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		handler = td-&gt;evtdev-&gt;event_handler;</span><br><span class="line">		next_event = td-&gt;evtdev-&gt;next_event;</span><br><span class="line">		td-&gt;evtdev-&gt;event_handler = clockevents_handle_noop;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	td-&gt;evtdev = newdev;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 *更新设备和中断亲和性</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!cpumask_equal(newdev-&gt;cpumask, cpumask))</span><br><span class="line">		<span class="comment">/* 将中断绑定到当前 CPU */</span></span><br><span class="line">		irq_set_affinity(newdev-&gt;irq, cpumask);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* </span></span><br><span class="line"><span class="comment">	 * 当全局广播处于活动状态时，检查当前设备是否注册为广播模式的占位符。</span></span><br><span class="line"><span class="comment">	 * 这允许我们以通用方式处理这个 x86 错误特性。</span></span><br><span class="line"><span class="comment">	 * 当我们保持此 CPU 的当前活动广播状态时，此函数也会返回 ！=0。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 检查新设备是否被注册为广播模式的占位符。如果是，则直接返回 */</span></span><br><span class="line">	<span class="keyword">if</span> (tick_device_uses_broadcast(newdev, cpu))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 根据设备模式（周期模式或单次触发模式），调用相应的设置函数 */</span></span><br><span class="line">	<span class="keyword">if</span> (td-&gt;mode == TICKDEV_MODE_PERIODIC)</span><br><span class="line">		tick_setup_periodic(newdev, <span class="number">0</span>);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		tick_setup_oneshot(newdev, handler, next_event);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-check-new-device-检查是否应使用新注册的设备"><a href="#tick-check-new-device-检查是否应使用新注册的设备" class="headerlink" title="tick_check_new_device 检查是否应使用新注册的设备"></a>tick_check_new_device 检查是否应使用新注册的设备</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 检查是否应使用新注册的设备。在保持 clockevents_lock 并禁用中断的情况下调用。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_check_new_device</span><span class="params">(<span class="keyword">struct</span> clock_event_device *newdev)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">clock_event_device</span> *<span class="title">curdev</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">tick_device</span> *<span class="title">td</span>;</span></span><br><span class="line">	<span class="type">int</span> cpu;</span><br><span class="line"></span><br><span class="line">	cpu = smp_processor_id();</span><br><span class="line">	td = &amp;per_cpu(tick_cpu_device, cpu);</span><br><span class="line">	curdev = td-&gt;evtdev;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 检查设备替换条件 */</span></span><br><span class="line">	<span class="keyword">if</span> (!tick_check_replacement(curdev, newdev))</span><br><span class="line">		<span class="keyword">goto</span> out_bc;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!try_module_get(newdev-&gt;owner))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 用 newdevice 替换最终存在的设备。</span></span><br><span class="line"><span class="comment">	 * 如果当前设备是广播设备，请不要将其返回给 clockevents 层！</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (tick_is_broadcast_device(curdev)) &#123;</span><br><span class="line">		clockevents_shutdown(curdev);</span><br><span class="line">		curdev = <span class="literal">NULL</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	clockevents_exchange_device(curdev, newdev);</span><br><span class="line">	tick_setup_device(td, newdev, cpu, cpumask_of(cpu));</span><br><span class="line">	<span class="keyword">if</span> (newdev-&gt;features &amp; CLOCK_EVT_FEAT_ONESHOT)</span><br><span class="line">		tick_oneshot_notify();</span><br><span class="line">	<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">out_bc:</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 新设备可以用作广播设备吗？</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	tick_install_broadcast_device(newdev, cpu);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-periodic-处理周期性时钟事件"><a href="#tick-periodic-处理周期性时钟事件" class="headerlink" title="tick_periodic 处理周期性时钟事件"></a>tick_periodic 处理周期性时钟事件</h2><ul>
+<li>tick_periodic是Linux内核中周期性时钟节拍（periodic tick）的核心处理函数。在配置为传统tick模式的系统上，这个函数在每一次硬件定时器中断发生时，都会被tick_handle_periodic回调函数调用。<br>它的核心作用是：推进系统的jiffies计数，并触发所有与tick相关的周期性任务，如进程时间统计和性能剖析。</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 下一次滴答事件：跟踪滴答时间。</span></span><br><span class="line"><span class="comment"> * 它由处理滴答事件的CPU更新，并且受到 jiffies_lock 的保护。</span></span><br><span class="line"><span class="comment"> * 对于它来说，不需要在写操作时持有 jiffies 的 seqcount。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">ktime_t</span> tick_next_period;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 这是一个静态函数，是周期性tick的核心处理逻辑。</span></span><br><span class="line"><span class="comment"> * 它在每个tick中断中被tick_handle_periodic调用。</span></span><br><span class="line"><span class="comment"> * @cpu: 当前正在执行此中断的CPU的编号。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">tick_periodic</span><span class="params">(<span class="type">int</span> cpu)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查当前CPU是否是被指定负责更新全局jiffies的那个CPU。</span></span><br><span class="line"><span class="comment">	 * tick_do_timer_cpu是一个全局变量，在启动时被设为某个固定的CPU。</span></span><br><span class="line"><span class="comment">	 * READ_ONCE用于确保原子地读取这个可能被并发访问的变量。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (READ_ONCE(tick_do_timer_cpu) == cpu) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 进入jiffies更新的临界区。</span></span><br><span class="line"><span class="comment">		 * 获取专门保护jiffies_64的自旋锁。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		raw_spin_lock(&amp;jiffies_lock);</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 开始一次序列计数器的写操作。它会使jiffies_seq变为奇数，</span></span><br><span class="line"><span class="comment">		 * 以通知所有乐观的读者，数据正在被修改。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		write_seqcount_begin(&amp;jiffies_seq);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* 注释：追踪下一个tick事件。*/</span></span><br><span class="line">		<span class="comment">/* 将下一个周期性tick的预期时间戳向前推进一个tick周期。*/</span></span><br><span class="line">		tick_next_period = ktime_add_ns(tick_next_period, TICK_NSEC);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 调用do_timer宏，它会将全局的jiffies_64计数器加1。</span></span><br><span class="line"><span class="comment">		 * 这是jiffies增长的直接执行点。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		do_timer(<span class="number">1</span>);</span><br><span class="line">		<span class="comment">/* 结束序列计数器的写操作，将计数器值加1使其变回偶数。*/</span></span><br><span class="line">		write_seqcount_end(&amp;jiffies_seq);</span><br><span class="line">		<span class="comment">/* 释放自旋锁。*/</span></span><br><span class="line">		raw_spin_unlock(&amp;jiffies_lock);</span><br><span class="line">		<span class="comment">/* 调用update_wall_time，根据流逝的tick，更新系统的墙上时间。*/</span></span><br><span class="line">		update_wall_time();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 以下是每个CPU在每次tick时都必须执行的本地操作。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用update_process_times，更新当前CPU上正在运行的任务的时间统计。</span></span><br><span class="line"><span class="comment">	 * user_mode(get_irq_regs())会判断中断发生时CPU是处于用户态还是内核态，</span></span><br><span class="line"><span class="comment">	 * 以便将时间正确地记在utime或stime上。</span></span><br><span class="line"><span class="comment">	 * 此函数还会减少任务的时间片。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	update_process_times(user_mode(get_irq_regs()));</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用profile_tick，如果内核开启了性能剖析，此函数会进行采样。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="comment">// profile_tick(CPU_PROFILING);</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-handle-periodic-处理周期性时钟事件"><a href="#tick-handle-periodic-处理周期性时钟事件" class="headerlink" title="tick_handle_periodic 处理周期性时钟事件"></a>tick_handle_periodic 处理周期性时钟事件</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Event handler for periodic ticks</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_handle_periodic</span><span class="params">(<span class="keyword">struct</span> clock_event_device *dev)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">int</span> cpu = smp_processor_id(); <span class="comment">// 获取当前 CPU ID</span></span><br><span class="line">    <span class="type">ktime_t</span> next = dev-&gt;next_event; <span class="comment">// 获取下一个时钟事件的时间</span></span><br><span class="line"></span><br><span class="line">    tick_periodic(cpu); <span class="comment">// 处理当前时钟中断</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 检查是否启用了 TICK_ONESHOT 配置并且事件处理函数是否改变</span></span><br><span class="line">    <span class="keyword">if</span> (IS_ENABLED(CONFIG_TICK_ONESHOT) &amp;&amp; dev-&gt;event_handler != tick_handle_periodic)</span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 检查时钟事件设备是否处于单次模式</span></span><br><span class="line">    <span class="keyword">if</span> (!clockevent_state_oneshot(dev))</span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">for</span> (;;) &#123;</span><br><span class="line">        <span class="comment">// 设置下一个周期事件</span></span><br><span class="line">        next = ktime_add_ns(next, TICK_NSEC);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 尝试编程时钟事件设备</span></span><br><span class="line">        <span class="keyword">if</span> (!clockevents_program_event(dev, next, <span class="literal">false</span>))</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 检查时间保持有效性，确保使用真实的硬件时钟源</span></span><br><span class="line">        <span class="keyword">if</span> (timekeeping_valid_for_hres())</span><br><span class="line">            tick_periodic(cpu);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-time-tick-oneshot-c"><a href="#kernel-time-tick-oneshot-c" class="headerlink" title="kernel&#x2F;time&#x2F;tick-oneshot.c"></a>kernel&#x2F;time&#x2F;tick-oneshot.c</h1><h2 id="tick-oneshot-mode-active-检查系统是否处于-OneShot-模式"><a href="#tick-oneshot-mode-active-检查系统是否处于-OneShot-模式" class="headerlink" title="tick_oneshot_mode_active - 检查系统是否处于 OneShot 模式"></a>tick_oneshot_mode_active - 检查系统是否处于 OneShot 模式</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment">* tick_oneshot_mode_active - 检查系统是否处于 OneShot 模式</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 启用 nohz 或 highres 时返回 1。否则为 0。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">tick_oneshot_mode_active</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line">	<span class="type">int</span> ret;</span><br><span class="line"></span><br><span class="line">	local_irq_save(flags);</span><br><span class="line">	ret = __this_cpu_read(tick_cpu_device.mode) == TICKDEV_MODE_ONESHOT;</span><br><span class="line">	local_irq_restore(flags);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-setup-oneshot-将事件设备设置为-oneshot-模式（HRES-或-NOHZ）"><a href="#tick-setup-oneshot-将事件设备设置为-oneshot-模式（HRES-或-NOHZ）" class="headerlink" title="tick_setup_oneshot 将事件设备设置为 oneshot 模式（HRES 或 NOHZ）"></a>tick_setup_oneshot 将事件设备设置为 oneshot 模式（HRES 或 NOHZ）</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * tick_setup_oneshot - 将事件设备设置为 oneshot 模式（HRES 或 NOHZ）</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_setup_oneshot</span><span class="params">(<span class="keyword">struct</span> clock_event_device *newdev,</span></span><br><span class="line"><span class="params">			<span class="type">void</span> (*handler)(<span class="keyword">struct</span> clock_event_device *),</span></span><br><span class="line"><span class="params">			<span class="type">ktime_t</span> next_event)</span></span><br><span class="line">&#123;</span><br><span class="line">	newdev-&gt;event_handler = handler;</span><br><span class="line">	clockevents_switch_state(newdev, CLOCK_EVT_STATE_ONESHOT);</span><br><span class="line">	clockevents_program_event(newdev, next_event, <span class="literal">true</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-program-event"><a href="#tick-program-event" class="headerlink" title="tick_program_event"></a>tick_program_event</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * tick_program_event - 为下一个事件编程 CPU 本地计时器设备</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">tick_program_event</span><span class="params">(<span class="type">ktime_t</span> expires, <span class="type">int</span> force)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">clock_event_device</span> *<span class="title">dev</span> =</span> __this_cpu_read(tick_cpu_device.evtdev);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(expires == KTIME_MAX)) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 我们不再需要 clock event 设备，停止它。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		clockevents_switch_state(dev, CLOCK_EVT_STATE_ONESHOT_STOPPED);</span><br><span class="line">		dev-&gt;next_event = KTIME_MAX;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(clockevent_state_oneshot_stopped(dev))) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 我们再次需要 clock 事件，在使用它之前在 ONESHOT 模式下配置它。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		clockevents_switch_state(dev, CLOCK_EVT_STATE_ONESHOT);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> clockevents_program_event(dev, expires, force);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<h1 id="kernel-time-tick-sched-c"><a href="#kernel-time-tick-sched-c" class="headerlink" title="kernel&#x2F;time&#x2F;tick-sched.c"></a>kernel&#x2F;time&#x2F;tick-sched.c</h1><h2 id="tick-nohz-start-idle-开始空闲状态"><a href="#tick-nohz-start-idle-开始空闲状态" class="headerlink" title="tick_nohz_start_idle 开始空闲状态"></a>tick_nohz_start_idle 开始空闲状态</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">tick_nohz_start_idle</span><span class="params">(<span class="keyword">struct</span> tick_sched *ts)</span></span><br><span class="line">&#123;</span><br><span class="line">	write_seqcount_begin(&amp;ts-&gt;idle_sleeptime_seq);</span><br><span class="line">	ts-&gt;idle_entrytime = ktime_get();</span><br><span class="line">	tick_sched_flag_set(ts, TS_FLAG_IDLE_ACTIVE);</span><br><span class="line">	write_seqcount_end(&amp;ts-&gt;idle_sleeptime_seq);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// sched_clock_idle_sleep_event();</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-nohz-idle-enter-准备在当前-CPU-上进入空闲状态"><a href="#tick-nohz-idle-enter-准备在当前-CPU-上进入空闲状态" class="headerlink" title="tick_nohz_idle_enter 准备在当前 CPU 上进入空闲状态"></a>tick_nohz_idle_enter 准备在当前 CPU 上进入空闲状态</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * tick_nohz_idle_enter - 准备在当前 CPU 上进入空闲状态</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 当我们开始空闲循环时调用。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_nohz_idle_enter</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">tick_sched</span> *<span class="title">ts</span>;</span></span><br><span class="line"></span><br><span class="line">	lockdep_assert_irqs_enabled();</span><br><span class="line"></span><br><span class="line">	local_irq_disable();</span><br><span class="line"></span><br><span class="line">	ts = this_cpu_ptr(&amp;tick_cpu_sched);</span><br><span class="line"></span><br><span class="line">	WARN_ON_ONCE(ts-&gt;timer_expires_base);</span><br><span class="line"></span><br><span class="line">	tick_sched_flag_set(ts, TS_FLAG_INIDLE);</span><br><span class="line">	tick_nohz_start_idle(ts);</span><br><span class="line"></span><br><span class="line">	local_irq_enable();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-nohz-stop-idle-停止空闲状态"><a href="#tick-nohz-stop-idle-停止空闲状态" class="headerlink" title="tick_nohz_stop_idle 停止空闲状态"></a>tick_nohz_stop_idle 停止空闲状态</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">tick_nohz_stop_idle</span><span class="params">(<span class="keyword">struct</span> tick_sched *ts, <span class="type">ktime_t</span> now)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">ktime_t</span> delta;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (WARN_ON_ONCE(!tick_sched_flag_test(ts, TS_FLAG_IDLE_ACTIVE)))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	delta = ktime_sub(now, ts-&gt;idle_entrytime);</span><br><span class="line"></span><br><span class="line">	write_seqcount_begin(&amp;ts-&gt;idle_sleeptime_seq);</span><br><span class="line">	<span class="keyword">if</span> (nr_iowait_cpu(smp_processor_id()) &gt; <span class="number">0</span>)</span><br><span class="line">		ts-&gt;iowait_sleeptime = ktime_add(ts-&gt;iowait_sleeptime, delta);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		ts-&gt;idle_sleeptime = ktime_add(ts-&gt;idle_sleeptime, delta);</span><br><span class="line"></span><br><span class="line">	ts-&gt;idle_entrytime = now;</span><br><span class="line">	tick_sched_flag_clear(ts, TS_FLAG_IDLE_ACTIVE);</span><br><span class="line">	write_seqcount_end(&amp;ts-&gt;idle_sleeptime_seq);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// sched_clock_idle_wakeup_event();</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-nohz-idle-exit-在空闲任务退出时更新刻度"><a href="#tick-nohz-idle-exit-在空闲任务退出时更新刻度" class="headerlink" title="tick_nohz_idle_exit 在空闲任务退出时更新刻度"></a>tick_nohz_idle_exit 在空闲任务退出时更新刻度</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * tick_nohz_idle_exit - 在空闲任务退出时更新刻度</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 当空闲任务退出时，根据</span></span><br><span class="line"><span class="comment"> * 以下情况：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 1） 如果 CPU 未处于 nohz_full 模式（大多数情况下），则</span></span><br><span class="line"><span class="comment"> * 重新启动 Tick。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 2） 如果 CPU 处于 nohz_full 模式（极端情况）：</span></span><br><span class="line"><span class="comment"> * 2.1） 如果 tick 可以保持停止（无 tick 依赖性）</span></span><br><span class="line"><span class="comment"> * 然后重新评估下一个即时报价并尝试保持停止状态</span></span><br><span class="line"><span class="comment"> * 尽可能长。</span></span><br><span class="line"><span class="comment"> * 2.2） 如果 tick 有依赖关系，请重新启动 tick。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_nohz_idle_exit</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">tick_sched</span> *<span class="title">ts</span> =</span> this_cpu_ptr(&amp;tick_cpu_sched);</span><br><span class="line">	<span class="type">bool</span> idle_active, tick_stopped;</span><br><span class="line">	<span class="type">ktime_t</span> now;</span><br><span class="line"></span><br><span class="line">	local_irq_disable();</span><br><span class="line"></span><br><span class="line">	WARN_ON_ONCE(!tick_sched_flag_test(ts, TS_FLAG_INIDLE));</span><br><span class="line">	WARN_ON_ONCE(ts-&gt;timer_expires_base);</span><br><span class="line"></span><br><span class="line">	tick_sched_flag_clear(ts, TS_FLAG_INIDLE);</span><br><span class="line">	idle_active = tick_sched_flag_test(ts, TS_FLAG_IDLE_ACTIVE);</span><br><span class="line">	tick_stopped = tick_sched_flag_test(ts, TS_FLAG_STOPPED);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (idle_active || tick_stopped)</span><br><span class="line">		now = ktime_get();</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (idle_active)</span><br><span class="line">		tick_nohz_stop_idle(ts, now);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (tick_stopped)</span><br><span class="line">		tick_nohz_idle_update_tick(ts, now);</span><br><span class="line"></span><br><span class="line">	local_irq_enable();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="can-stop-idle-tick-检查是否可以停止空闲刻度"><a href="#can-stop-idle-tick-检查是否可以停止空闲刻度" class="headerlink" title="can_stop_idle_tick 检查是否可以停止空闲刻度"></a>can_stop_idle_tick 检查是否可以停止空闲刻度</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">bool</span> <span class="title function_">can_stop_idle_tick</span><span class="params">(<span class="type">int</span> cpu, <span class="keyword">struct</span> tick_sched *ts)</span></span><br><span class="line">&#123;</span><br><span class="line">	WARN_ON_ONCE(cpu_is_offline(cpu));</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(!tick_sched_flag_test(ts, TS_FLAG_NOHZ)))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (need_resched())</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(report_idle_softirq()))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (tick_nohz_full_enabled()) &#123;</span><br><span class="line">		<span class="type">int</span> tick_cpu = READ_ONCE(tick_do_timer_cpu);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * Keep the tick alive to guarantee timekeeping progression</span></span><br><span class="line"><span class="comment">		 * if there are full dynticks CPUs around</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (tick_cpu == cpu)</span><br><span class="line">			<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* Should not happen for nohz-full */</span></span><br><span class="line">		<span class="keyword">if</span> (WARN_ON_ONCE(tick_cpu == TICK_DO_TIMER_NONE))</span><br><span class="line">			<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-nohz-idle-stop-tick-停止空闲任务的空闲刻度"><a href="#tick-nohz-idle-stop-tick-停止空闲任务的空闲刻度" class="headerlink" title="tick_nohz_idle_stop_tick 停止空闲任务的空闲刻度"></a>tick_nohz_idle_stop_tick 停止空闲任务的空闲刻度</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * tick_nohz_idle_stop_tick - 停止空闲任务的空闲刻度</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 当下一个事件距离未来超过一个即时报价时，停止空闲即时报价</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">tick_nohz_idle_stop_tick</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">tick_sched</span> *<span class="title">ts</span> =</span> this_cpu_ptr(&amp;tick_cpu_sched);</span><br><span class="line">	<span class="type">int</span> cpu = smp_processor_id();</span><br><span class="line">	<span class="type">ktime_t</span> expires;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果 tick_nohz_get_sleep_length（） 运行 tick_nohz_next_event（），则</span></span><br><span class="line"><span class="comment">	 * Tick 计时器到期时间已知。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (ts-&gt;timer_expires_base)</span><br><span class="line">		expires = ts-&gt;timer_expires;</span><br><span class="line">	<span class="keyword">else</span> <span class="keyword">if</span> (can_stop_idle_tick(cpu, ts))</span><br><span class="line">		expires = tick_nohz_next_event(ts, cpu);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	ts-&gt;idle_calls++;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (expires &gt; <span class="number">0LL</span>) &#123;</span><br><span class="line">		<span class="type">int</span> was_stopped = tick_sched_flag_test(ts, TS_FLAG_STOPPED);</span><br><span class="line"></span><br><span class="line">		tick_nohz_stop_tick(ts, cpu);</span><br><span class="line"></span><br><span class="line">		ts-&gt;idle_sleeps++;</span><br><span class="line">		ts-&gt;idle_expires = expires;</span><br><span class="line"></span><br><span class="line">		<span class="keyword">if</span> (!was_stopped &amp;&amp; tick_sched_flag_test(ts, TS_FLAG_STOPPED)) &#123;</span><br><span class="line">			ts-&gt;idle_jiffies = ts-&gt;last_jiffies;</span><br><span class="line">			nohz_balance_enter_idle(cpu);</span><br><span class="line">		&#125;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		tick_nohz_retain_tick(ts);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="tick-check-oneshot-change-检查是否需要重新编程单次刻度"><a href="#tick-check-oneshot-change-检查是否需要重新编程单次刻度" class="headerlink" title="tick_check_oneshot_change 检查是否需要重新编程单次刻度"></a>tick_check_oneshot_change 检查是否需要重新编程单次刻度</h2><ul>
+<li>tick_check_oneshot_change是一个在内核中被周期性调用的函数（如您提供的hrtimer_run_queues中），用于检查系统条件是否已经满足，可以从传统的周期性时钟节拍（periodic tick）模式，切换到更先进的、基于单次触发（one-shot）的模式。<br>它的核心作用是：在一个安全的检查点，判断是否可以进行时钟模式的“升级”，如果可以，则返回一个信号或直接触发切换。</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 检查是否发生了可以使one-shot模式成为可能的改变。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 由hrtimer软中断（由timer软中断驱动）周期性地调用。</span></span><br><span class="line"><span class="comment"> * &#x27;allow_nohz&#x27;参数表示我们可以切换到低分辨率的NOHZ模式，因为高分辨率</span></span><br><span class="line"><span class="comment"> * 定时器被禁用了（无论是编译时还是运行时）。</span></span><br><span class="line"><span class="comment"> * 在中断禁用的情况下调用。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回值：如果可以切换到高分辨率模式，返回1；否则返回0。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">tick_check_oneshot_change</span><span class="params">(<span class="type">int</span> allow_nohz)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* ts: 指向当前CPU的tick_sched结构体，包含了所有与tick调度相关的状态。*/</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">tick_sched</span> *<span class="title">ts</span> =</span> this_cpu_ptr(&amp;tick_cpu_sched);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用test_and_clear_bit原子地检查并清除check_clocks标志的第0位。</span></span><br><span class="line"><span class="comment">	 * 如果该位原本就是0，说明没有时钟源变更事件发生，无需检查，直接返回0。</span></span><br><span class="line"><span class="comment">	 * 这是一个高效的快速路径。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!test_and_clear_bit(<span class="number">0</span>, &amp;ts-&gt;check_clocks))</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用tick_sched_flag_test检查当前CPU是否已经处于NOHZ模式。</span></span><br><span class="line"><span class="comment">	 * 如果是，则无需再次切换，返回0。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (tick_sched_flag_test(ts, TS_FLAG_NOHZ))</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查当前的时间维持（timekeeping）系统是否对高分辨率（hres）有效，</span></span><br><span class="line"><span class="comment">	 * 以及当前注册的时钟事件设备是否支持one-shot模式。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!timekeeping_valid_for_hres() || !tick_is_oneshot_available())</span><br><span class="line">		<span class="comment">/* 如果任一条件不满足，则无法切换，返回0。*/</span></span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果调用者不允许直接切换到NOHZ模式。</span></span><br><span class="line"><span class="comment">	 * (例如，hrtimer_run_queues调用时，因为高精度定时器还未禁用)</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!allow_nohz)</span><br><span class="line">		<span class="comment">/* 返回1，通知调用者：“条件已满足，你可以进行切换到高分辨率模式的操作了”。*/</span></span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果调用者允许，则直接在这里调用tick_nohz_switch_to_nohz()，</span></span><br><span class="line"><span class="comment">	 * 将当前CPU的时钟模式切换为NOHZ（tickless）。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	tick_nohz_switch_to_nohz();</span><br><span class="line">	<span class="comment">/* 在这种情况下，切换已由本函数完成，返回0。*/</span></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/16af98cc/">https://wdfk-prog.space/posts/16af98cc/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/kernel/">kernel</a><a class="post-meta__tags" href="/tags/time/">time</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/01.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/b962eb21/" title="timekeeping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">timekeeping</div></div><div class="info-2"><div class="info-item-1">[toc] kernel&#x2F;time&#x2F;timekeeping.c 内核时间保持(Kernel Timekeeping) 维护系统时间的核心与灵魂历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了解决操作系统中最基础、最核心的需求之一：以一种精确、稳定、单调的方式来跟踪和维护时间的流逝。 kernel/time/timekeeping.c所管理的时间保持子系统，具体解决了以下几个关键问题：  时间的表示与更新：需要一个核心机制来管理系统的“官方时间”。这包括“墙上时间”（Wall Time，即CLOCK_REALTIME，自1970年Epoch以来的时间，可以被用户或NTP修改），以及“单调时间”（Monotonic Time，即CLOCK_MONOTONIC，从系统启动开始单调递增，不受时间调整影响）。 时钟源的抽象：硬件提供了各种各样的时间源（Clock Sources），例如TSC（CPU的时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer等。这些时钟源的精度、稳定性和访问速度各不相同。时间保持子系统需要一个框架来抽象这些...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[toc] kernel&#x2F;time&#x2F;clocksource.c 时钟源管理(Clocksource Management) 内核时间的原始动力历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了在Linux内核中创建一个统一的、可插拔的硬件时钟源抽象层。内核需要一个可靠的方式来读取时间的流逝，而不同的硬件平台提供了种类繁多的硬件定时器&#x2F;计数器，例如x86上的TSC和HPET，ARM上的System Counter等。这些硬件在精度、稳定性、访问开销等方面都千差万别。 kernel/time/clocksource.c的诞生就是为了解决这个硬件异构性的问题：  抽象硬件差异：它提供了一个标准的struct clocksource接口，将所有不同硬件定时器的具体实现（如如何读取其计数器）封装起来，为上层的timekeeping子系统提供一个统一的、与硬件无关的视图。 选择最佳时钟源：系统中可能同时存在多个可用的时钟源。内核需要一种机制来评估它们各自的优劣（基于频率、分辨率、稳定性等），并从中自动选择一个最佳的来驱动整个系统的时间。 保证可靠性...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/df20a2f0/" title="clockevents"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">clockevents</div></div><div class="info-2"><div class="info-item-1">[TOC] kernel&#x2F;time&#x2F;clockevents.cclockevents_switch_state - 设置时钟事件设备的运行状态123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475static int __clockevents_switch_state(struct clock_event_device *dev,				      enum clock_event_state state)&#123;	if (dev-&gt;features &amp; CLOCK_EVT_FEAT_DUMMY)		return 0;	/* Transition with new state-specific callbacks */	switch (state) &#123;	case CLOCK_EVT_STATE_DETACH...</div></div></div></a><a class="pagination-related" href="/posts/18d6212c/" title="alarmtimer"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">alarmtimer</div></div><div class="info-2"><div class="info-item-1">[TOC] kernel&#x2F;time&#x2F;alarmtimer.c闹钟定时器(Alarm Timer)初始化：构建可挂起的定时器基础框架本代码片段的核心功能是初始化Linux内核中的闹钟定时器（Alarm Timer）子系统。闹钟定时器的主要特点是它们能够在系统进入挂起（suspend）等低功耗状态后，依然能够到期并唤醒系统。此初始化函数负责建立管理这些定时器的核心数据结构，将它们与具体的时钟源（如CLOCK_REALTIME和CLOCK_BOOTTIME）关联起来，并注册相应的驱动以等待与硬件设备绑定。 实现原理分析此初始化过程是闹钟定时器框架能够工作的基础，它通过配置一个预定义的alarm_bases全局数组来为不同类型的闹钟定时器提供统一的管理接口。  配置时钟源: 函数首先为REALTIME和BOOTTIME两个闹钟“基地”（alarm_bases数组的元素）分别配置其clockid和获取时间的函数指针。这使得上层代码可以通过ALARM_REALTIME类型来设置一个基于“墙上时间”（wall-clock time）的定时器，或通过ALARM_BOOTTIM...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">dma</div></div><div class="info-2"><div class="info-item-1">[TOC] drivers&#x2F;dma DMA引擎与映射(DMA Engine &amp; Mapping) 内核统一的直接内存访问框架历史与背景这项技术是为了解决什么特定问题而诞生的？DMA（Direct Memory Access，直接内存访问）框架的诞生是为了解决一个根本性的性能瓶颈问题，并为内核提供一个统一、可移植的解决方案。  解决CPU性能瓶颈：在没有DMA的系统中，当外设（如网卡、磁盘）需要与内存交换大量数据时，CPU必须亲自担当“搬运工”的角色。这种方式被称为PIO（Programmed I&#x2F;O），CPU需要逐字节或逐字地从设备读取数据再写入内存，或者反之。对于高速设备，这会消耗大量的CPU周期，导致CPU无暇处理其他计算任务，严重影响系统整体性能。DMA技术通过引入一个专门的硬件控制器（DMAC），允许外设在没有CPU干预的情况下直接与内存进行数据传输，从而将CPU解放出来。 抽象硬件差异：不同的CPU架构和SoC平台，其DMA控制器的设计和编程接口千差万别。如果没有一个统一的软件框架，设备驱动程序的开发者将不得不为每一种不同的DMAC编写特定的...</div></div></div></a><a class="pagination-related" href="/posts/ba80502e/" title="cpu"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">cpu</div></div><div class="info-2"><div class="info-item-1">[TOC] include&#x2F;linux&#x2F;cpumask.hcpumask_check 验证当前cpu数量是否超过了配置的最大cpu数量,并返回cpu1234567891011121314151617// 验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline void cpu_max_bits_warn(unsigned int cpu, unsigned int bits)&#123;#ifdef CONFIG_DEBUG_PER_CPU_MAPS	WARN_ON_ONCE(cpu &gt;= bits);#endif /* CONFIG_DEBUG_PER_CPU_MAPS */&#125;/* verify cpu argument to cpumask_* operators *///验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline unsigned int cpumask_check(unsigned int cpu)&#123;    //small_cpumask_...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-time-tick-c-%E5%86%85%E6%A0%B8%E6%97%B6%E9%92%9F%E6%BB%B4%E7%AD%94-The-Kernel-Tick-%E9%A9%B1%E5%8A%A8%E6%97%B6%E9%97%B4%E6%B5%81%E9%80%9D%E4%B8%8E%E8%BF%9B%E7%A8%8B%E6%8A%A2%E5%8D%A0"><span class="toc-number">1.</span> <span class="toc-text">kernel&#x2F;time&#x2F;tick-*.c 内核时钟滴答(The Kernel Tick) 驱动时间流逝与进程抢占</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-time-tick-internal-h"><span class="toc-number">2.</span> <span class="toc-text">kernel&#x2F;time&#x2F;tick-internal.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-set-periodic-handler-%E8%AE%BE%E7%BD%AE%E5%91%A8%E6%9C%9F%E6%80%A7%E5%A4%84%E7%90%86%E7%A8%8B%E5%BA%8F"><span class="toc-number">2.1.</span> <span class="toc-text">tick_set_periodic_handler 设置周期性处理程序</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-time-tick-common-c"><span class="toc-number">3.</span> <span class="toc-text">kernel&#x2F;time&#x2F;tick-common.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-do-timer-cpu-%E5%AD%98%E5%82%A8%E8%B4%9F%E8%B4%A3%E8%B0%83%E7%94%A8-do-timer-%E7%9A%84-CPU-%E7%BC%96%E5%8F%B7"><span class="toc-number">3.1.</span> <span class="toc-text">tick_do_timer_cpu 存储负责调用 do_timer() 的 CPU 编号</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#clockevents-program-min-delta-%E5%B0%86%E6%97%B6%E9%92%9F%E4%BA%8B%E4%BB%B6%E8%AE%BE%E5%A4%87%E8%AE%BE%E7%BD%AE%E4%B8%BA%E6%9C%80%E5%B0%8F%E5%BB%B6%E8%BF%9F"><span class="toc-number">3.2.</span> <span class="toc-text">clockevents_program_min_delta 将时钟事件设备设置为最小延迟</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-setup-periodic-%E8%AE%BE%E7%BD%AE%E4%B8%BA%E5%91%A8%E6%9C%9F%E6%97%B6%E9%92%9F"><span class="toc-number">3.3.</span> <span class="toc-text">tick_setup_periodic 设置为周期时钟</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A3%80%E6%9F%A5%E6%96%B0%E8%AE%BE%E5%A4%87%E6%98%AF%E5%90%A6%E6%AF%94-curdev-%E6%9B%B4%E5%90%88%E9%80%82"><span class="toc-number">3.4.</span> <span class="toc-text">检查新设备是否比 curdev 更合适</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-setup-device-%E8%AE%BE%E7%BD%AE%E6%97%B6%E9%92%9F%E4%BA%8B%E4%BB%B6%E8%AE%BE%E5%A4%87"><span class="toc-number">3.5.</span> <span class="toc-text">tick_setup_device 设置时钟事件设备</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-check-new-device-%E6%A3%80%E6%9F%A5%E6%98%AF%E5%90%A6%E5%BA%94%E4%BD%BF%E7%94%A8%E6%96%B0%E6%B3%A8%E5%86%8C%E7%9A%84%E8%AE%BE%E5%A4%87"><span class="toc-number">3.6.</span> <span class="toc-text">tick_check_new_device 检查是否应使用新注册的设备</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-periodic-%E5%A4%84%E7%90%86%E5%91%A8%E6%9C%9F%E6%80%A7%E6%97%B6%E9%92%9F%E4%BA%8B%E4%BB%B6"><span class="toc-number">3.7.</span> <span class="toc-text">tick_periodic 处理周期性时钟事件</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-handle-periodic-%E5%A4%84%E7%90%86%E5%91%A8%E6%9C%9F%E6%80%A7%E6%97%B6%E9%92%9F%E4%BA%8B%E4%BB%B6"><span class="toc-number">3.8.</span> <span class="toc-text">tick_handle_periodic 处理周期性时钟事件</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-time-tick-oneshot-c"><span class="toc-number">4.</span> <span class="toc-text">kernel&#x2F;time&#x2F;tick-oneshot.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-oneshot-mode-active-%E6%A3%80%E6%9F%A5%E7%B3%BB%E7%BB%9F%E6%98%AF%E5%90%A6%E5%A4%84%E4%BA%8E-OneShot-%E6%A8%A1%E5%BC%8F"><span class="toc-number">4.1.</span> <span class="toc-text">tick_oneshot_mode_active - 检查系统是否处于 OneShot 模式</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-setup-oneshot-%E5%B0%86%E4%BA%8B%E4%BB%B6%E8%AE%BE%E5%A4%87%E8%AE%BE%E7%BD%AE%E4%B8%BA-oneshot-%E6%A8%A1%E5%BC%8F%EF%BC%88HRES-%E6%88%96-NOHZ%EF%BC%89"><span class="toc-number">4.2.</span> <span class="toc-text">tick_setup_oneshot 将事件设备设置为 oneshot 模式（HRES 或 NOHZ）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-program-event"><span class="toc-number">4.3.</span> <span class="toc-text">tick_program_event</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-time-tick-sched-c"><span class="toc-number">5.</span> <span class="toc-text">kernel&#x2F;time&#x2F;tick-sched.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-nohz-start-idle-%E5%BC%80%E5%A7%8B%E7%A9%BA%E9%97%B2%E7%8A%B6%E6%80%81"><span class="toc-number">5.1.</span> <span class="toc-text">tick_nohz_start_idle 开始空闲状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-nohz-idle-enter-%E5%87%86%E5%A4%87%E5%9C%A8%E5%BD%93%E5%89%8D-CPU-%E4%B8%8A%E8%BF%9B%E5%85%A5%E7%A9%BA%E9%97%B2%E7%8A%B6%E6%80%81"><span class="toc-number">5.2.</span> <span class="toc-text">tick_nohz_idle_enter 准备在当前 CPU 上进入空闲状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-nohz-stop-idle-%E5%81%9C%E6%AD%A2%E7%A9%BA%E9%97%B2%E7%8A%B6%E6%80%81"><span class="toc-number">5.3.</span> <span class="toc-text">tick_nohz_stop_idle 停止空闲状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-nohz-idle-exit-%E5%9C%A8%E7%A9%BA%E9%97%B2%E4%BB%BB%E5%8A%A1%E9%80%80%E5%87%BA%E6%97%B6%E6%9B%B4%E6%96%B0%E5%88%BB%E5%BA%A6"><span class="toc-number">5.4.</span> <span class="toc-text">tick_nohz_idle_exit 在空闲任务退出时更新刻度</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#can-stop-idle-tick-%E6%A3%80%E6%9F%A5%E6%98%AF%E5%90%A6%E5%8F%AF%E4%BB%A5%E5%81%9C%E6%AD%A2%E7%A9%BA%E9%97%B2%E5%88%BB%E5%BA%A6"><span class="toc-number">5.5.</span> <span class="toc-text">can_stop_idle_tick 检查是否可以停止空闲刻度</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-nohz-idle-stop-tick-%E5%81%9C%E6%AD%A2%E7%A9%BA%E9%97%B2%E4%BB%BB%E5%8A%A1%E7%9A%84%E7%A9%BA%E9%97%B2%E5%88%BB%E5%BA%A6"><span class="toc-number">5.6.</span> <span class="toc-text">tick_nohz_idle_stop_tick 停止空闲任务的空闲刻度</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#tick-check-oneshot-change-%E6%A3%80%E6%9F%A5%E6%98%AF%E5%90%A6%E9%9C%80%E8%A6%81%E9%87%8D%E6%96%B0%E7%BC%96%E7%A8%8B%E5%8D%95%E6%AC%A1%E5%88%BB%E5%BA%A6"><span class="toc-number">5.7.</span> <span class="toc-text">tick_check_oneshot_change 检查是否需要重新编程单次刻度</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/01.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '779dd493a23317149590d7a20baa58dc'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

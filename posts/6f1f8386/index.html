@@ -1,0 +1,1160 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>async | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC] kernel&#x2F;async.c 内核异步函数调用(Asynchronous Function Calls) 一个简单的“发后即忘”式内核执行框架历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其实现的异步函数调用（async）框架，是为了解决内核中一个特定的并发需求：以最简单的方式，将一个函数的执行推迟到一个独立的上下文中，而调用者无需等待其完成。  优化启动时间">
+<meta property="og:type" content="article">
+<meta property="og:title" content="async">
+<meta property="og:url" content="https://wdfk-prog.space/posts/6f1f8386/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC] kernel&#x2F;async.c 内核异步函数调用(Asynchronous Function Calls) 一个简单的“发后即忘”式内核执行框架历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其实现的异步函数调用（async）框架，是为了解决内核中一个特定的并发需求：以最简单的方式，将一个函数的执行推迟到一个独立的上下文中，而调用者无需等待其完成。  优化启动时间">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/07.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:28.778Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="kernel">
+<meta property="article:tag" content="linux">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/07.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "async",
+  "url": "https://wdfk-prog.space/posts/6f1f8386/",
+  "image": "https://wdfk-prog.space/images/covers/07.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:28.778Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/6f1f8386/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'async',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/07.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">async</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">async<a class="post-edit-link" href="null_posts/linux/kernel/async.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:28.778Z" title="更新于 2025-10-03 17:23:28">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/">kernel</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">8.9k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>29分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/6f1f8386/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:28&quot;}" hidden></div><p>[TOC]</p>
+<h1 id="kernel-async-c-内核异步函数调用-Asynchronous-Function-Calls-一个简单的“发后即忘”式内核执行框架"><a href="#kernel-async-c-内核异步函数调用-Asynchronous-Function-Calls-一个简单的“发后即忘”式内核执行框架" class="headerlink" title="kernel&#x2F;async.c 内核异步函数调用(Asynchronous Function Calls) 一个简单的“发后即忘”式内核执行框架"></a>kernel&#x2F;async.c 内核异步函数调用(Asynchronous Function Calls) 一个简单的“发后即忘”式内核执行框架</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p>这项技术以及其实现的异步函数调用（async）框架，是为了解决内核中一个特定的并发需求：<strong>以最简单的方式，将一个函数的执行推迟到一个独立的上下文中，而调用者无需等待其完成</strong>。</p>
+<ul>
+<li><strong>优化启动时间</strong>：这是<code>async</code>框架诞生的最主要驱动力。在内核启动过程中，有大量的初始化调用（initcalls）。如果严格按照顺序依次执行，会非常耗时。<code>async</code>框架允许内核将那些没有严格依赖关系的、耗时的初始化函数“并行化”，将它们提交到后台异步执行，而主启动流程可以继续进行。这显著缩短了系统的总启动时间。</li>
+<li><strong>降低关键路径延迟</strong>：在某些性能敏感的代码路径中（例如一个设备驱动的<code>.probe</code>函数），可能会有一些耗时但非必需的初始化步骤。通过<code>async</code>，可以将这些步骤“发后即忘”（fire-and-forget）地交由后台处理，使得关键路径函数可以更快地返回，提高系统响应速度。</li>
+<li><strong>提供比工作队列更简单的接口</strong>：内核已经有了强大的工作队列（workqueue）机制用于延迟工作。但对于最简单的“我只想让这个函数在别处运行，别的什么都不关心”的场景，设置一个<code>work_struct</code>、初始化、然后<code>schedule_work</code>的流程还是显得有些繁琐。<code>async</code>提供了一个极其简单的单一函数调用接口（<code>async_schedule</code>），作为工作队列的一个轻量级封装。</li>
+</ul>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p><code>async</code>框架是一个小而精的工具，其发展主要体现在功能的完善上，而非大的架构变革。</p>
+<ul>
+<li><strong>基本实现</strong>：<code>async</code>最初被引入时，提供了核心的<code>async_schedule</code>功能，它本质上是对全局工作队列的一个简单封装。</li>
+<li><strong>同步点的加入</strong>：很快，开发者意识到纯粹的“发后即忘”在很多场景下是不够的。例如，在启动过程中，虽然很多initcalls可以并行执行，但在进入下一个大的启动阶段之前，必须确保之前所有的initcalls都已经完成。为此，内核加入了同步功能，即<code>async_cookie_t</code>和<code>async_synchronize_cookie()</code> &#x2F; <code>async_synchronize_full()</code>。这使得调用者可以在一个稍后的、合适的“检查点”等待一个或所有已提交的异步任务完成。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p><code>async</code>是一个非常稳定、成熟，但相对<strong>小众</strong>的内核组件。</p>
+<ul>
+<li><strong>社区活跃度</strong>：其代码库非常稳定，几乎没有改动。它被认为是“已完成”的功能，维护工作仅限于必要的bug修复。</li>
+<li><strong>主流应用</strong>：<ul>
+<li><strong>内核启动</strong>：这是它最重要和最著名的应用场景。在<code>do_initcalls()</code>中，内核会使用异步模式来并行执行模块初始化。</li>
+<li><strong>设备探测</strong>：在一些复杂的子系统（如<code>component</code>框架）或驱动中，可能会用它来异步执行一些探测或绑定的收尾工作。</li>
+<li>总体而言，它的使用场景远不如工作队列（workqueues）广泛，主要局限于那些需要批量并行化、且后续有明确同步点的流程。</li>
+</ul>
+</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p><code>async</code>的核心原理是<strong>作为内核全局工作队列的一个极简主义前端封装</strong>。</p>
+<ol>
+<li><strong>数据结构</strong>：核心是一个小的内部控制结构<code>async_entry</code>。它包含了要执行的函数指针、传递给该函数的参数、一个用于同步的<code>completion</code>对象，以及一个<code>work_struct</code>。</li>
+<li><strong>调度 (<code>async_schedule</code>)</strong>：当内核代码调用<code>async_schedule(func, data)</code>时，会发生以下事情：<ul>
+<li>从一个预先分配的slab缓存中获取一个<code>async_entry</code>对象。</li>
+<li>将传入的<code>func</code>和<code>data</code>存入这个对象。</li>
+<li>初始化该对象中的<code>completion</code>和<code>work_struct</code>。</li>
+<li>最关键的一步：调用<code>schedule_work()</code>，将这个<code>async_entry</code>中的<code>work_struct</code>放入内核的<strong>全局系统工作队列</strong>（<code>system_wq</code>）中。</li>
+<li>函数返回一个<code>async_cookie_t</code>，它实际上就是这个<code>async_entry</code>的地址。</li>
+</ul>
+</li>
+<li><strong>执行</strong>：稍后，一个内核的worker线程会从<code>system_wq</code>中取出这个<code>work_struct</code>并执行其处理函数。这个处理函数（<code>async_run_entry</code>）的作用很简单：<ul>
+<li>从<code>work_struct</code>中找到<code>async_entry</code>的地址。</li>
+<li>调用<code>async_entry</code>中存储的<code>func</code>指针，并传入<code>data</code>参数。</li>
+<li>函数执行完毕后，调用<code>complete()</code>来唤醒任何可能在等待这个任务完成的代码。</li>
+</ul>
+</li>
+<li><strong>同步</strong>：<ul>
+<li><code>async_synchronize_cookie(cookie)</code>：这个函数会调用<code>wait_for_completion()</code>，等待<code>cookie</code>所代表的那个<code>async_entry</code>中的<code>completion</code>对象被信号。</li>
+<li><code>async_synchronize_full()</code>：这个函数会遍历所有当前正在运行的异步任务，并逐个等待它们全部完成。</li>
+</ul>
+</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>极致的简单</strong>：API只有一个核心函数<code>async_schedule</code>，使用起来非常直观，隐藏了所有工作队列的实现细节。</li>
+<li><strong>低开销</strong>：对于调用者来说，开销非常小，只是一个函数调用和一次轻量级的内存分配。</li>
+<li><strong>内置同步</strong>：提供了简单的机制来等待任务完成，非常适合“并行化-同步点”模型。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>使用全局队列</strong>：所有<code>async</code>任务都共享同一个全局工作队列。这意味着无法进行优先级区分，也无法实现任务间的隔离。一个行为不当的异步任务可能会影响到系统中所有其他使用<code>async</code>框架的任务。</li>
+<li><strong>功能单一</strong>：它不支持延迟执行、不支持指定在特定CPU上运行、不支持限制并发数。</li>
+<li><strong>缺乏错误处理</strong>：这是一个“发后即忘”的框架。被调用的函数执行成功与否，原始的调用者无法直接获知。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"></a>在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</h4><p>当需要<strong>简单地、批量地并行化执行一系列无依赖的、非关键路径的函数</strong>时，<code>async</code>是首选方案。</p>
+<ul>
+<li><strong>内核初始化</strong>：这是教科书式的例子。在<code>init/main.c</code>中，<code>do_initcalls()</code>在适当的阶段会调用<code>do_initcall_async()</code>。这个函数会遍历一个initcall列表，为每个函数调用<code>async_schedule()</code>。在所有调用都提交后，它会调用<code>async_synchronize_full()</code>来等待它们全部结束，然后再继续下一阶段的启动。</li>
+<li><strong>简化驱动探测</strong>：假设一个驱动在探测时需要执行一个耗时的固件加载操作，但这个操作对于探测成功不是必需的。驱动可以在其<code>.probe</code>函数中调用<code>async_schedule(load_optional_firmware, dev)</code>，然后立即返回成功。这使得设备可以更快地变为可用状态。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>需要精细控制的任何场景</strong>：如果你需要控制任务的优先级、并发数，或者希望任务在特定的CPU上运行，那么应该使用<strong>工作队列（Workqueues）</strong>。工作队列允许你创建自己的、具有特定属性的队列。</li>
+<li><strong>需要长期运行的任务或守护进程</strong>：<code>async</code>用于短暂的、一次性的函数调用。对于需要作为后台服务长期运行的任务，应该创建专门的<strong>内核线程（kthreads）</strong>。</li>
+<li><strong>需要与硬件中断交互的延迟工作</strong>：对于中断处理的下半部（bottom-half），应该使用<strong>tasklets或softirqs</strong>，它们提供了更严格的执行上下文保证。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">异步函数调用 (<code>async.c</code>)</th>
+<th align="left">工作队列 (Workqueues)</th>
+<th align="left">内核线程 (kthreads)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>实现方式&#x2F;抽象层级</strong></td>
+<td align="left"><strong>高层封装</strong>。是对全局工作队列的极简包装。</td>
+<td align="left"><strong>中层框架</strong>。一个通用的、功能丰富的延迟工作执行框架。</td>
+<td align="left"><strong>底层原语</strong>。一个完整的、可独立调度的内核执行线程。</td>
+</tr>
+<tr>
+<td align="left"><strong>使用复杂度</strong></td>
+<td align="left"><strong>极低</strong>。单一函数调用<code>async_schedule()</code>。</td>
+<td align="left"><strong>低</strong>。需要定义<code>work_struct</code>并初始化。</td>
+<td align="left"><strong>高</strong>。需要编写线程主函数，并手动处理线程的创建、同步和退出。</td>
+</tr>
+<tr>
+<td align="left"><strong>资源开销</strong></td>
+<td align="left"><strong>极低</strong>。仅一个小的控制结构<code>async_entry</code>。</td>
+<td align="left"><strong>低</strong>。一个<code>work_struct</code>的开销。</td>
+<td align="left"><strong>高</strong>。一个完整的<code>task_struct</code>、内核栈等。</td>
+</tr>
+<tr>
+<td align="left"><strong>控制粒度</strong></td>
+<td align="left"><strong>无</strong>。所有任务共享全局队列，无优先级、无隔离。</td>
+<td align="left"><strong>高</strong>。可以创建私有工作队列，设置并发数、NUMA亲和性等。</td>
+<td align="left"><strong>完全控制</strong>。可以设置调度策略、优先级，并管理自己的状态。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left">简单的、批量的“发后即忘”式并行化，尤其适用于启动过程。</td>
+<td align="left">通用的、需要延迟或异步执行的任务，是内核中最常用的延迟机制。</td>
+<td align="left">长期运行的后台任务、守护进程或需要复杂状态管理的并发任务。</td>
+</tr>
+</tbody></table>
+<h2 id="async-init-为内核的异步函数调用（async）框架创建一个专门的、非绑定的（unbound）工作队列（workqueue）"><a href="#async-init-为内核的异步函数调用（async）框架创建一个专门的、非绑定的（unbound）工作队列（workqueue）" class="headerlink" title="async_init 为内核的异步函数调用（async）框架创建一个专门的、非绑定的（unbound）工作队列（workqueue）"></a>async_init 为内核的异步函数调用（async）框架创建一个专门的、非绑定的（unbound）工作队列（workqueue）</h2><p>之所以需要一个专门的工作队列，是因为异步框架可能会同时调度大量相互依赖的任务。如果使用默认的共享非绑定工作队列，其并发度（由min_active参数控制）可能不足，导致任务之间因等待资源而产生死锁或停滞（stall）。通过创建一个名为 “async” 的私有工作队列，并为其设置一个较高的最小活跃工作线程数（min_active），可以确保异步框架有足够的并发能力来处理这些复杂依赖的任务，从而保证系统的稳定性和性能。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 定义内核异步功能初始化函数</span></span><br><span class="line"><span class="comment">// __init 宏表示该函数仅在内核初始化阶段执行，执行完毕后其占用的内存会被释放。</span></span><br><span class="line"><span class="type">void</span> __init <span class="title function_">async_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 异步调用（Async）框架可能会调度许多相互依赖的工作项。然而，</span></span><br><span class="line"><span class="comment">	 * 非绑定的工作队列最多只能处理 min_active 个相互依赖的工作项。</span></span><br><span class="line"><span class="comment">	 * 默认的 min_active 值（通常是8）对于异步框架来说是不够的，</span></span><br><span class="line"><span class="comment">	 * 并且可能导致系统停滞。因此，我们使用一个专门的、提高了</span></span><br><span class="line"><span class="comment">	 * min_active 值的工作队列。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	</span><br><span class="line">	<span class="comment">// 分配一个新的工作队列，并将其指针赋值给全局变量 async_wq。</span></span><br><span class="line">	<span class="comment">// &quot;async&quot;: 工作队列的名称，会显示在内核日志或进程列表中。</span></span><br><span class="line">	<span class="comment">// WQ_UNBOUND: 标志，表示这是一个非绑定的工作队列，其工作线程不与特定CPU绑定。</span></span><br><span class="line">	<span class="comment">// 0: max_active 参数，设置为0表示使用默认的每个CPU最大活跃工作项数。</span></span><br><span class="line">	async_wq = alloc_workqueue(<span class="string">&quot;async&quot;</span>, WQ_UNBOUND, <span class="number">0</span>);</span><br><span class="line">	</span><br><span class="line">	<span class="comment">// 这是一个断言宏。检查 async_wq 是否为 NULL（即 alloc_workqueue 是否失败）。</span></span><br><span class="line">	<span class="comment">// 如果工作队列分配失败，这是一个致命错误，内核将打印错误信息并停止运行（panic）。</span></span><br><span class="line">	BUG_ON(!async_wq);</span><br><span class="line">	</span><br><span class="line">	<span class="comment">// 设置 async_wq 工作队列的“最小活跃工作线程数”。</span></span><br><span class="line">	<span class="comment">// WQ_DFL_ACTIVE 是一个预定义的常量，其值通常远大于默认的最小值，</span></span><br><span class="line">	<span class="comment">// 以确保该工作队列有足够多的并发工作线程。</span></span><br><span class="line">	workqueue_set_min_active(async_wq, WQ_DFL_ACTIVE);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="async-run-entry-fn-执行并清理异步任务"><a href="#async-run-entry-fn-执行并清理异步任务" class="headerlink" title="async_run_entry_fn: 执行并清理异步任务"></a>async_run_entry_fn: 执行并清理异步任务</h2><p>此函数是内核异步工作队列 (<code>workqueue</code>) 的实际执行体. 当内核的工作线程 (<code>kworker</code>) 从异步工作队列 <code>async_wq</code> 中取出一个待处理的工作项 (<code>work_struct</code>) 时, 就会调用这个函数. 它的核心职责是: 执行用户最初请求异步调用的函数, 然后清理与该任务相关的所有资源, 并通知其他可能正在等待的内核部分.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 静态函数声明: async_run_entry_fn</span></span><br><span class="line"><span class="comment"> * 此函数作为工作队列的回调函数, 用于执行一个挂起的异步任务.</span></span><br><span class="line"><span class="comment"> * @work: 指向 struct work_struct 的指针, 这是由工作队列子系统传递过来的.</span></span><br><span class="line"><span class="comment"> *        这个 work 结构体是某个 async_entry 的一部分.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">async_run_entry_fn</span><span class="params">(<span class="keyword">struct</span> work_struct *work)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用 container_of 宏, 从 work 成员的地址反向计算出其所属的父结构体 async_entry 的起始地址.</span></span><br><span class="line"><span class="comment">	 * 这是内核中从一个内嵌结构体指针获取容器结构体指针的标准做法.</span></span><br><span class="line"><span class="comment">	 * 变量 entry 现在指向代表当前要执行的整个异步任务的实体.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">async_entry</span> *<span class="title">entry</span> =</span></span><br><span class="line">		container_of(work, <span class="keyword">struct</span> async_entry, work);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个无符号长整型变量 flags, 用于保存调用 spin_lock_irqsave 时的CPU中断状态.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个 ktime_t 类型的变量 calltime. ktime_t 用于存储内核的高精度时间戳.</span></span><br><span class="line"><span class="comment">	 * 它将用于记录异步函数的执行时长, 以便调试.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">ktime_t</span> calltime;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 步骤 1: 执行用户函数 (并打印调试信息)</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用 pr_debug 打印一条调试日志. 这类日志只有在内核配置了动态调试并且被启用时才会输出.</span></span><br><span class="line"><span class="comment">	 * %lli: 用于打印 long long 类型的 entry-&gt;cookie (任务ID).</span></span><br><span class="line"><span class="comment">	 * %pS: 用于打印 entry-&gt;func 指针所指向的函数名.</span></span><br><span class="line"><span class="comment">	 * %i:  用于打印当前任务的PID. task_pid_nr(current) 返回当前正在执行任务(即 kworker 内核线程)的PID.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	pr_debug(<span class="string">&quot;calling  %lli_%pS @ %i\n&quot;</span>, (<span class="type">long</span> <span class="type">long</span>)entry-&gt;cookie,</span><br><span class="line">		 entry-&gt;func, task_pid_nr(current));</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 ktime_get() 获取当前的高精度时间戳, 记录函数开始执行的时刻.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	calltime = ktime_get();</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 这是核心的执行步骤: 通过函数指针 entry-&gt;func 调用用户提交的原始函数.</span></span><br><span class="line"><span class="comment">	 * 同时, 将用户提供的原始数据 entry-&gt;data 和本次任务的唯一标识符 entry-&gt;cookie 作为参数传递过去.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	entry-&gt;func(entry-&gt;data, entry-&gt;cookie);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 再次使用 pr_debug 打印一条调试日志, 报告函数执行完毕.</span></span><br><span class="line"><span class="comment">	 * microseconds_since(calltime) 会计算从 calltime 时刻到现在所经过的微秒数.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	pr_debug(<span class="string">&quot;initcall %lli_%pS returned after %lld usecs\n&quot;</span>,</span><br><span class="line">		 (<span class="type">long</span> <span class="type">long</span>)entry-&gt;cookie, entry-&gt;func,</span><br><span class="line">		 microseconds_since(calltime));</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 步骤 2: 将任务实体从各个待处理队列中移除.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取全局自旋锁 async_lock, 并禁用当前CPU的中断, 保存中断状态到 flags.</span></span><br><span class="line"><span class="comment">	 * 这是为了保护对全局共享链表(domain_list, global_list)和计数器(entry_count)的访问,</span></span><br><span class="line"><span class="comment">	 * 防止在修改过程中被中断或其他任务抢占, 从而确保操作的原子性.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_lock_irqsave(&amp;async_lock, flags);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 list_del_init 从其所属的同步域的 pending 链表中移除 entry.</span></span><br><span class="line"><span class="comment">	 * _init 版本在删除节点后, 会重新初始化该节点的链表头, 使其指向自身, 这是一个安全措施.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	list_del_init(&amp;entry-&gt;domain_list);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 从全局的 async_global_pending 链表中移除 entry.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	list_del_init(&amp;entry-&gt;global_list);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 步骤 3: 释放任务实体占用的资源.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 kfree 释放 entry 结构体本身占用的内存.</span></span><br><span class="line"><span class="comment">	 * 这块内存是在 __async_schedule_node_domain 函数中用 kzalloc 分配的.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	kfree(entry);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 原子地将全局异步任务计数器 entry_count 的值减一.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">atomic_dec</span>(&amp;entry_count);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 释放自旋锁, 并恢复之前保存的中断状态. 临界区结束.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_unlock_irqrestore(&amp;async_lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 步骤 4: 唤醒任何可能正在等待的进程.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 wake_up 唤醒在 async_done 等待队列上睡眠的所有进程.</span></span><br><span class="line"><span class="comment">	 * 例如, 如果有进程调用了 async_synchronize_full() 或类似的同步函数,</span></span><br><span class="line"><span class="comment">	 * 它们就会在这个等待队列上睡眠, 等待所有(或特定)异步任务完成.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	wake_up(&amp;async_done);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="async-schedule-node-domain-异步任务调度的核心实现"><a href="#async-schedule-node-domain-异步任务调度的核心实现" class="headerlink" title="__async_schedule_node_domain: 异步任务调度的核心实现"></a>__async_schedule_node_domain: 异步任务调度的核心实现</h2><p>此函数是Linux内核异步执行框架的内部核心, 负责将一个已经准备好的异步任务实体(<code>entry</code>)加入到相应的等待队列, 并最终提交给内核工作队列(<code>workqueue</code>)去执行. 它是 <code>async_schedule_node_domain</code> 函数在成功分配了任务实体后的实际执行者.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 静态函数声明: __async_schedule_node_domain</span></span><br><span class="line"><span class="comment"> * 这是异步调度的内部核心函数, 它假定 entry 结构体已经被成功分配.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @func:    需要异步执行的函数指针.</span></span><br><span class="line"><span class="comment"> * @data:    将要传递给 func 函数的 void 指针.</span></span><br><span class="line"><span class="comment"> * @node:    期望执行此任务的NUMA节点. 在STM32H750上此参数无效.</span></span><br><span class="line"><span class="comment"> * @domain:  此任务所属的同步域.</span></span><br><span class="line"><span class="comment"> * @entry:   由调用者预先分配并传入的, 用于封装此异步任务的 async_entry 结构体指针.</span></span><br><span class="line"><span class="comment"> * @return:  返回一个唯一的 async_cookie_t 任务标识符.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">async_cookie_t</span> __async_schedule_node_domain(<span class="type">async_func_t</span> func,</span><br><span class="line">						   <span class="type">void</span> *data, <span class="type">int</span> node,</span><br><span class="line">						   <span class="keyword">struct</span> async_domain *domain,</span><br><span class="line">						   <span class="keyword">struct</span> async_entry *entry)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个 async_cookie_t 类型的变量 newcookie, 用于存储新分配的任务标识符.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">async_cookie_t</span> newcookie;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个无符号长整型变量 flags, 用于在调用自旋锁时保存当前的中断状态(IRQs).</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 INIT_LIST_HEAD 宏来初始化 entry 中的 domain_list 成员.</span></span><br><span class="line"><span class="comment">	 * list_head 是Linux内核链表的节点. 初始化后, 它指向自身, 表示一个空链表.</span></span><br><span class="line"><span class="comment">	 * 这个链表用于将 entry 连接到其所属 domain 的 pending 链表中.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	INIT_LIST_HEAD(&amp;entry-&gt;domain_list);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 初始化 entry 中的 global_list 成员.</span></span><br><span class="line"><span class="comment">	 * 这个链表用于将 entry 连接到全局的 async_global_pending 链表中.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	INIT_LIST_HEAD(&amp;entry-&gt;global_list);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 INIT_WORK 宏来初始化 entry 中的 work 成员 (一个 struct work_struct).</span></span><br><span class="line"><span class="comment">	 * 这是将异步任务与内核工作队列(workqueue)机制关联起来的关键一步.</span></span><br><span class="line"><span class="comment">	 * 它将 work 结构体与一个处理函数 async_run_entry_fn 绑定.</span></span><br><span class="line"><span class="comment">	 * 当工作队列执行这个 work 时, async_run_entry_fn 函数就会被调用.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	INIT_WORK(&amp;entry-&gt;work, async_run_entry_fn);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 将调用者提供的函数指针 func 保存到 entry 结构体中.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	entry-&gt;func = func;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 将调用者提供的参数数据指针 data 保存到 entry 结构体中.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	entry-&gt;data = data;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 将此任务所属的同步域 domain 指针保存到 entry 结构体中.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	entry-&gt;domain = domain;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取全局的异步框架自旋锁 async_lock, 并禁用本地中断, 将当前的中断状态保存到 flags 变量中.</span></span><br><span class="line"><span class="comment">	 * 在单核系统上, 这能防止当前代码被中断处理程序或其他任务抢占, 从而保护接下来的共享数据访问.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_lock_irqsave(&amp;async_lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 从全局的 cookie 计数器 next_cookie 中分配一个唯一的新ID.</span></span><br><span class="line"><span class="comment">	 * 这个ID同时赋值给 entry-&gt;cookie (用于内部记录) 和 newcookie (用于返回给调用者).</span></span><br><span class="line"><span class="comment">	 * next_cookie++ 保证了下一次分配的ID是不同的.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	newcookie = entry-&gt;cookie = next_cookie++;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 将当前任务实体 entry 添加到其所属同步域 domain 的 pending 链表的尾部.</span></span><br><span class="line"><span class="comment">	 * 这个链表用于实现针对特定域的同步等待.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	list_add_tail(&amp;entry-&gt;domain_list, &amp;domain-&gt;pending);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查当前任务的同步域 domain 是否被注册到了全局同步机制中.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (domain-&gt;registered)</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果 domain 已注册, 那么也将此任务实体 entry 添加到全局待处理链表 async_global_pending 的尾部.</span></span><br><span class="line"><span class="comment">		 * 这个链表用于实现全局同步, 如 async_synchronize_full().</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		list_add_tail(&amp;entry-&gt;global_list, &amp;async_global_pending);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 原子地增加全局异步任务计数器 entry_count 的值.</span></span><br><span class="line"><span class="comment">	 * atomic_inc 是一个原子操作, 确保计数的准确性, 不受中断或抢占影响.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">atomic_inc</span>(&amp;entry_count);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 释放 async_lock 自旋锁, 并恢复到进入临界区之前的中断状态 (由 flags 变量记录).</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_unlock_irqrestore(&amp;async_lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 queue_work_node 函数, 正式将任务提交给内核的工作队列子系统去执行.</span></span><br><span class="line"><span class="comment">	 * node:     期望的NUMA节点. 在STM32H750上, 此参数被忽略.</span></span><br><span class="line"><span class="comment">	 * async_wq: 指向异步框架专用的工作队列(struct workqueue_struct)的指针.</span></span><br><span class="line"><span class="comment">	 * &amp;entry-&gt;work: 要提交的具体工作项. 内核的工作线程(kworker)会适时执行与这个工作项关联的函数,</span></span><br><span class="line"><span class="comment">	 *               也就是我们之前设置的 async_run_entry_fn.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	queue_work_node(node, async_wq, &amp;entry-&gt;work);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 向最初的调用者返回本次异步任务的唯一标识符.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> newcookie;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="async-schedule-node-domain-在指定的NUMA节点上使用特定域调度一个异步函数执行"><a href="#async-schedule-node-domain-在指定的NUMA节点上使用特定域调度一个异步函数执行" class="headerlink" title="async_schedule_node_domain: 在指定的NUMA节点上使用特定域调度一个异步函数执行"></a>async_schedule_node_domain: 在指定的NUMA节点上使用特定域调度一个异步函数执行</h2><p>此函数是内核异步调度框架的核心实现. 它的主要作用是接收一个函数指针(<code>func</code>)和其参数(<code>data</code>), 并将它们打包成一个异步工作项, 然后提交给内核的工作队列, 以便稍后由内核线程执行. 它允许指定一个同步域(<code>domain</code>), 用于后续更细粒度的同步等待.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * async_cookie_t async_schedule_node_domain(async_func_t func, void *data,</span></span><br><span class="line"><span class="comment"> *					  int node, struct async_domain *domain)</span></span><br><span class="line"><span class="comment"> * @func:   需要异步执行的函数指针.</span></span><br><span class="line"><span class="comment"> * @data:   一个将要传递给 func 函数的 void 指针, 用于传递任意数据.</span></span><br><span class="line"><span class="comment"> * @node:   期望在其上或其附近调度此异步任务的NUMA节点. 在STM32H750上此参数无效.</span></span><br><span class="line"><span class="comment"> * @domain: 指向一个 async_domain 结构体的指针, 用于将异步任务分组, 以便后续可以只同步这个域内的任务.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @return: 返回一个 async_cookie_t 类型的值, 这是一个唯一的标识符, 后续可用于检查点或等待此特定任务完成.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 注意: 此函数可以在原子上下文(如中断处理程序)或非原子上下文中调用.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 对于指定的节点, 内核会尽力满足. 如果该节点没有关联的CPU, 工作将在所有可用的CPU之间分发.</span></span><br><span class="line"><span class="comment"> * (在STM32H750上, 只有一个CPU, 所以总是在其上执行).</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">async_cookie_t</span> <span class="title function_">async_schedule_node_domain</span><span class="params">(<span class="type">async_func_t</span> func, <span class="type">void</span> *data,</span></span><br><span class="line"><span class="params">					  <span class="type">int</span> node, <span class="keyword">struct</span> async_domain *domain)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个指向 async_entry 结构体的指针. async_entry 用于封装一次异步执行所需的所有信息.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">async_entry</span> *<span class="title">entry</span>;</span></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个无符号长整型变量 flags, 用于在调用自旋锁时保存当前的中断状态.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个 async_cookie_t 类型的变量 newcookie. async_cookie_t 本质上是一个整数类型,</span></span><br><span class="line"><span class="comment">	 * 用于唯一标识每一个异步任务.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">async_cookie_t</span> newcookie;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用 kzalloc 分配一个 async_entry 结构体的内存.</span></span><br><span class="line"><span class="comment">	 * kzalloc 会将分配的内存区域清零.</span></span><br><span class="line"><span class="comment">	 * GFP_ATOMIC 标志位至关重要: 它指示内存分配必须在原子上下文中进行,</span></span><br><span class="line"><span class="comment">	 * 这意味着分配过程不能睡眠(阻塞). 这使得本函数可以安全地从中断处理程序中调用.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	entry = kzalloc(<span class="keyword">sizeof</span>(<span class="keyword">struct</span> async_entry), GFP_ATOMIC);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查两种可能导致异步执行失败的情况:</span></span><br><span class="line"><span class="comment">	 * 1. !entry: 上一步的内存分配失败 (系统内存极度紧张).</span></span><br><span class="line"><span class="comment">	 * 2. atomic_read(&amp;entry_count) &gt; MAX_WORK: 全局的异步任务计数器(entry_count)的值已经超过了设定的最大值(MAX_WORK).</span></span><br><span class="line"><span class="comment">	 *    这是一个保护机制, 防止过多的异步任务被提交, 耗尽系统资源. atomic_read 用于原子地读取计数器值.</span></span><br><span class="line"><span class="comment">	 * 如果任一条件为真, 则无法进行异步调度, 将转而以同步方式执行.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!entry || <span class="type">atomic_read</span>(&amp;entry_count) &gt; MAX_WORK) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果是因为任务队列已满(entry分配成功), 则需要先释放掉刚刚分配的内存.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		kfree(entry);</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 进入一个临界区来安全地获取一个唯一的任务cookie.</span></span><br><span class="line"><span class="comment">		 * spin_lock_irqsave 会获取一个自旋锁(async_lock)并禁用当前CPU的中断.</span></span><br><span class="line"><span class="comment">		 * 在单核STM32H750上, 这主要用于防止中断处理程序并发地修改 next_cookie.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		spin_lock_irqsave(&amp;async_lock, flags);</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 从全局的 next_cookie 计数器中获取一个新值, 并将计数器加一.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		newcookie = next_cookie++;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 释放自旋锁, 并恢复到调用spin_lock_irqsave之前的CPU中断状态.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		spin_unlock_irqrestore(&amp;async_lock, flags);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 由于内存不足或任务队列已满, 无法进行异步调度,</span></span><br><span class="line"><span class="comment">		 * 因此直接在当前的上下文中调用该函数, 实现同步执行.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		func(data, newcookie);</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 返回新生成的cookie. 即便任务是同步执行的, 仍然提供一个cookie.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">return</span> newcookie;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果内存分配成功且任务队列未满, 则调用内部函数 __async_schedule_node_domain</span></span><br><span class="line"><span class="comment">	 * 来完成实际的异步调度工作(即将entry添加到工作队列中).</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> __async_schedule_node_domain(func, data, node, domain, entry);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 将 async_schedule_node_domain 函数导出, 以便遵循GPL协议的内核模块可以使用它.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">EXPORT_SYMBOL_GPL(async_schedule_node_domain);</span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * async_schedule_domain - schedule a function for asynchronous execution within a certain domain</span></span><br><span class="line"><span class="comment"> * @func: function to execute asynchronously</span></span><br><span class="line"><span class="comment"> * @data: data pointer to pass to the function</span></span><br><span class="line"><span class="comment"> * @domain: the domain</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Returns an async_cookie_t that may be used for checkpointing later.</span></span><br><span class="line"><span class="comment"> * @domain may be used in the async_synchronize_*_domain() functions to</span></span><br><span class="line"><span class="comment"> * wait within a certain synchronization domain rather than globally.</span></span><br><span class="line"><span class="comment"> * Note: This function may be called from atomic or non-atomic contexts.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">async_cookie_t</span></span><br><span class="line"><span class="title function_">async_schedule_domain</span><span class="params">(<span class="type">async_func_t</span> func, <span class="type">void</span> *data,</span></span><br><span class="line"><span class="params">		      <span class="keyword">struct</span> async_domain *domain)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> async_schedule_node_domain(func, data, NUMA_NO_NODE, domain);</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+
+<h2 id="async-schedule-node-在指定的NUMA节点上使用默认域调度异步函数"><a href="#async-schedule-node-在指定的NUMA节点上使用默认域调度异步函数" class="headerlink" title="async_schedule_node: 在指定的NUMA节点上使用默认域调度异步函数"></a>async_schedule_node: 在指定的NUMA节点上使用默认域调度异步函数</h2><p>此函数是 <code>async_schedule_node_domain</code> 的一个简化版本. 它隐藏了 <code>domain</code> (同步域) 的概念, 总是使用系统默认的同步域 (<code>async_dfl_domain</code>). 这为那些不需要复杂同步控制的调用者提供了便利.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * async_cookie_t async_schedule_node(async_func_t func, void *data, int node)</span></span><br><span class="line"><span class="comment"> * @func: 需要异步执行的函数指针.</span></span><br><span class="line"><span class="comment"> * @data: 一个将要传递给 func 函数的 void 指针, 用于传递任意数据.</span></span><br><span class="line"><span class="comment"> * @node: 期望在其上或其附近调度此异步任务的NUMA节点. 在STM32H750上此参数无效.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @return: 返回一个 async_cookie_t 类型的值, 后续可用于检查点或等待此特定任务完成.</span></span><br><span class="line"><span class="comment"> * 注意: 此函数可以在原子上下文(如中断处理程序)或非原子上下文中调用.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 对于指定的节点, 内核会尽力满足. 如果该节点没有关联的CPU, 工作将在所有可用的CPU之间分发.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">async_cookie_t</span> <span class="title function_">async_schedule_node</span><span class="params">(<span class="type">async_func_t</span> func, <span class="type">void</span> *data, <span class="type">int</span> node)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 此函数是 async_schedule_node_domain 的一个简单封装.</span></span><br><span class="line"><span class="comment">	 * 它直接调用前者, 并为其 domain 参数传递一个全局的默认域 &amp;async_dfl_domain.</span></span><br><span class="line"><span class="comment">	 * 这意味着所有通过 async_schedule 和 async_schedule_node 调度的任务都属于同一个默认同步域,</span></span><br><span class="line"><span class="comment">	 * 可以通过调用 async_synchronize_full() 来等待所有这些默认域中的任务完成.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> async_schedule_node_domain(func, data, node, &amp;async_dfl_domain);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 将 async_schedule_node 函数导出, 以便遵循GPL协议的内核模块可以使用它.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">EXPORT_SYMBOL_GPL(async_schedule_node);</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="async-schedule-dev-在与设备关联的NUMA节点上调度异步函数"><a href="#async-schedule-dev-在与设备关联的NUMA节点上调度异步函数" class="headerlink" title="async_schedule_dev: 在与设备关联的NUMA节点上调度异步函数"></a>async_schedule_dev: 在与设备关联的NUMA节点上调度异步函数</h2><p>这是一个静态内联函数, 提供了更高层次的封装, 主要面向设备驱动程序的开发者. 它使得为特定设备调度一个异步任务变得非常简单, 因为它会自动从设备结构体 (<code>struct device</code>) 中推断出 NUMA 节点信息, 并将设备指针自身作为参数传递给异步执行的函数.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * async_cookie_t async_schedule_dev(async_func_t func, struct device *dev)</span></span><br><span class="line"><span class="comment"> * @func: 需要异步执行的函数指针.</span></span><br><span class="line"><span class="comment"> * @dev:  设备指针, 它既作为参数传递给func, 也用于确定在哪个NUMA节点上运行函数.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @return: 返回一个 async_cookie_t 类型的值, 后续可用于检查点或等待此特定任务完成.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 通过这样做, 我们可以尝试在最靠近设备的CPU上对设备进行操作, 以期达到最佳效果.</span></span><br><span class="line"><span class="comment"> * (在STM32H750上, 因为没有&quot;远近&quot;之分, 所以此优化无效, 但异步执行机制仍有效).</span></span><br><span class="line"><span class="comment"> * 注意: 此函数可以在原子上下文(如中断处理程序)或非原子上下文中调用.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">async_cookie_t</span></span><br><span class="line"><span class="title function_">async_schedule_dev</span><span class="params">(<span class="type">async_func_t</span> func, <span class="keyword">struct</span> device *dev)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * static inline: 这是一个C语言关键字组合.</span></span><br><span class="line"><span class="comment">	 *   static:  表示此函数的作用域仅限于当前文件.</span></span><br><span class="line"><span class="comment">	 *   inline:  建议编译器在调用点将此函数展开, 以减少函数调用的开销.</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 此函数调用了 async_schedule_node, 并为其传递了三个参数:</span></span><br><span class="line"><span class="comment">	 * 1. func:  需要异步执行的函数, 由调用者提供.</span></span><br><span class="line"><span class="comment">	 * 2. dev:   设备指针. 它被作为 void *data 参数传递. 这意味着异步函数 func 将会收到这个设备指针作为其第一个参数.</span></span><br><span class="line"><span class="comment">	 * 3. dev_to_node(dev): 调用 dev_to_node() 函数来从设备结构体中获取其关联的NUMA节点号.</span></span><br><span class="line"><span class="comment">	 *    在非NUMA的STM32H750系统上, dev_to_node(dev) 通常返回-1或0, 最终调度策略会退化为在唯一可用的CPU上执行.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> async_schedule_node(func, dev, dev_to_node(dev));</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="lowest-in-progress-查找进行中任务的最低Cookie值"><a href="#lowest-in-progress-查找进行中任务的最低Cookie值" class="headerlink" title="lowest_in_progress: 查找进行中任务的最低Cookie值"></a>lowest_in_progress: 查找进行中任务的最低Cookie值</h2><p>此函数是内核异步同步机制 (<code>async_synchronize_*</code>) 的核心辅助函数, 它的唯一作用是<strong>查找并返回当前所有正在排队或执行的异步任务中, 拥有最小 <code>cookie</code> 值的那个 <code>cookie</code></strong>.</p>
+<p>它的工作原理基于一个简单而高效的设计:</p>
+<ol>
+<li>所有新提交的异步任务, 都会被添加到相应待处理链表 (<code>pending</code> 或 <code>global_pending</code>) 的<strong>尾部</strong>.</li>
+<li><code>cookie</code> 值是单调递增的.</li>
+<li>因此, 待处理链表的<strong>头部</strong>的那个任务, 必然是所有待处理任务中最早被提交的, 也就拥有最低的 <code>cookie</code> 值.</li>
+</ol>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 静态函数声明: lowest_in_progress</span></span><br><span class="line"><span class="comment"> * 此函数仅在当前文件中可见.</span></span><br><span class="line"><span class="comment"> * @domain: 指向一个 async_domain 结构体的指针. 如果不为NULL, 则只在此域内查找;</span></span><br><span class="line"><span class="comment"> *          如果为NULL, 则在全局范围内查找.</span></span><br><span class="line"><span class="comment"> * @return: 返回找到的进行中任务的最低cookie值. 如果没有任何进行中的任务, 则返回 ASYNC_COOKIE_MAX.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">async_cookie_t</span> <span class="title function_">lowest_in_progress</span><span class="params">(<span class="keyword">struct</span> async_domain *domain)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个指向 async_entry 的指针 first, 用于存储找到的第一个待处理任务. 初始化为NULL.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">async_entry</span> *<span class="title">first</span> =</span> <span class="literal">NULL</span>;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个 async_cookie_t 类型的变量 ret, 作为返回值.</span></span><br><span class="line"><span class="comment">	 * 将其初始化为 ASYNC_COOKIE_MAX, 这是cookie可能的最大值.</span></span><br><span class="line"><span class="comment">	 * 如果后续没有找到任何进行中的任务, 这个值将被直接返回.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">async_cookie_t</span> ret = ASYNC_COOKIE_MAX;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个无符号长整型变量 flags, 用于为自旋锁保存CPU中断状态.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取全局异步框架的自旋锁 async_lock, 并禁用本地中断, 将中断状态存入 flags.</span></span><br><span class="line"><span class="comment">	 * 这创建了一个临界区, 以保证对下面的全局/域内链表的访问是原子的.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_lock_irqsave(&amp;async_lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查调用者是否提供了一个具体的域.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (domain) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果提供了域, 则检查此域的 pending (待处理)链表是否为空.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (!list_empty(&amp;domain-&gt;pending))</span><br><span class="line">			<span class="comment">/*</span></span><br><span class="line"><span class="comment">			 * 如果链表不为空, 则使用 list_first_entry 获取链表的第一个条目.</span></span><br><span class="line"><span class="comment">			 * 因为新任务总是添加到链表尾部, 所以第一个条目必然拥有最低的cookie值.</span></span><br><span class="line"><span class="comment">			 * 将这个条目的地址存入 first 指针.</span></span><br><span class="line"><span class="comment">			 */</span></span><br><span class="line">			first = list_first_entry(&amp;domain-&gt;pending,</span><br><span class="line">					<span class="keyword">struct</span> async_entry, domain_list);</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果没有提供域 (domain 为 NULL), 则检查全局的 async_global_pending 链表是否为空.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (!list_empty(&amp;async_global_pending))</span><br><span class="line">			<span class="comment">/*</span></span><br><span class="line"><span class="comment">			 * 如果全局链表不为空, 则获取其第一个条目.</span></span><br><span class="line"><span class="comment">			 * 这个条目拥有所有已注册域中待处理任务的最低cookie值.</span></span><br><span class="line"><span class="comment">			 */</span></span><br><span class="line">			first = list_first_entry(&amp;async_global_pending,</span><br><span class="line">					<span class="keyword">struct</span> async_entry, global_list);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查我们是否成功找到了一个条目 (即 first 是否不再是 NULL).</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (first)</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果找到了, 就将返回值 ret 更新为这个条目的 cookie 值.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		ret = first-&gt;cookie;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 释放自旋锁, 并恢复之前保存的中断状态. 临界区结束.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_unlock_irqrestore(&amp;async_lock, flags);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 返回最终结果.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="async-synchronize-full-同步-等待-所有异步函数调用完成"><a href="#async-synchronize-full-同步-等待-所有异步函数调用完成" class="headerlink" title="async_synchronize_full: 同步(等待)所有异步函数调用完成"></a>async_synchronize_full: 同步(等待)所有异步函数调用完成</h2><p>此函数是内核异步框架中最强力的一个全局同步点. 调用此函数的任务将会进入睡眠, 直到系统中<strong>所有</strong>被调度执行的、尚未完成的异步任务全部执行完毕. 它是一个全局屏障, 确保在它返回后, 整个异步子系统处于静默状态.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * void async_synchronize_full(void) - 同步所有的异步函数调用</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这个函数会等待, 直到所有的异步函数调用都已经完成.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">async_synchronize_full</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 此函数是 async_synchronize_full_domain 的一个简单封装.</span></span><br><span class="line"><span class="comment">	 * 它直接调用后者, 并为其 domain 参数传递 NULL.</span></span><br><span class="line"><span class="comment">	 * 在 async_synchronize_full_domain 中, NULL 是一个特殊值,</span></span><br><span class="line"><span class="comment">	 * 意味着&quot;同步所有已注册的域&quot;, 从而实现了全局同步.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	async_synchronize_full_domain(<span class="literal">NULL</span>);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 将 async_synchronize_full 函数导出, 供GPL许可的内核模块使用.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">EXPORT_SYMBOL_GPL(async_synchronize_full);</span><br></pre></td></tr></table></figure>
+
+<h2 id="async-synchronize-full-domain-同步特定域内的所有异步函数调用"><a href="#async-synchronize-full-domain-同步特定域内的所有异步函数调用" class="headerlink" title="async_synchronize_full_domain: 同步特定域内的所有异步函数调用"></a>async_synchronize_full_domain: 同步特定域内的所有异步函数调用</h2><p>这是一个更具针对性的同步函数. 它允许调用者只等待某个特定”同步域” (<code>domain</code>) 内的所有异步任务完成, 而不是等待全局所有的任务. 这在大型子系统中很有用, 这些子系统可能定义了自己的域, 以便能独立地管理和同步自己的后台任务, 而不受其他子系统的影响.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * async_synchronize_full_domain - 同步某个特定域内的所有异步函数</span></span><br><span class="line"><span class="comment"> * @domain: 需要同步的域.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这个函数会等待, 直到为 @domain 指定的同步域的所有异步函数调用都已完成.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">async_synchronize_full_domain</span><span class="params">(<span class="keyword">struct</span> async_domain *domain)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 此函数是下一层核心函数 async_synchronize_cookie_domain 的封装.</span></span><br><span class="line"><span class="comment">	 * 它直接调用后者, 并为其 cookie 参数传递 ASYNC_COOKIE_MAX.</span></span><br><span class="line"><span class="comment">	 * ASYNC_COOKIE_MAX 是一个宏, 代表了 cookie 值的上限.</span></span><br><span class="line"><span class="comment">	 * 使用这个值意味着&quot;请等待所有已提交的、cookie值小于等于最大值的任务完成&quot;,</span></span><br><span class="line"><span class="comment">	 * 这实际上就等同于等待该域内所有已提交的任务完成.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	async_synchronize_cookie_domain(ASYNC_COOKIE_MAX, domain);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 将 async_synchronize_full_domain 函数导出, 供GPL许可的内核模块使用.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">EXPORT_SYMBOL_GPL(async_synchronize_full_domain);</span><br></pre></td></tr></table></figure>
+
+<h3 id="async-synchronize-cookie-domain-使用cookie检查点同步特定域内的异步函数"><a href="#async-synchronize-cookie-domain-使用cookie检查点同步特定域内的异步函数" class="headerlink" title="async_synchronize_cookie_domain: 使用cookie检查点同步特定域内的异步函数"></a>async_synchronize_cookie_domain: 使用cookie检查点同步特定域内的异步函数</h3><p>这是异步同步机制的核心实现函数, 提供了最精细的控制. 它允许任务等待一个特定域(<code>domain</code>)中, 所有在某个时间点(<code>cookie</code>)之前提交的任务完成. <code>cookie</code> 就像一个序列号或检查点, 调用者可以获取一个当前的 <code>cookie</code>, 然后提交一系列异步任务, 最后使用这个 <code>cookie</code> 来等待这一批任务全部完成.</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * async_synchronize_cookie_domain - 在特定域内使用cookie检查点同步异步函数调用</span></span><br><span class="line"><span class="comment"> * @cookie: 用作检查点的 async_cookie_t 值.</span></span><br><span class="line"><span class="comment"> * @domain: 需要同步的域 (如果为 %NULL, 则同步所有已注册的域).</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这个函数会等待, 直到为 @domain 指定的同步域中, 所有在 @cookie 之前提交的</span></span><br><span class="line"><span class="comment"> * 异步函数调用都已完成.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">async_synchronize_cookie_domain</span><span class="params">(<span class="type">async_cookie_t</span> cookie, <span class="keyword">struct</span> async_domain *domain)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义一个 ktime_t 类型的变量 starttime, 用于存储高精度时间戳.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="type">ktime_t</span> starttime;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用 pr_debug 打印一条调试信息, 表明当前任务(由PID标识)开始等待.</span></span><br><span class="line"><span class="comment">	 * 这类信息仅在内核开启了动态调试时才会显示.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	pr_debug(<span class="string">&quot;async_waiting @ %i\n&quot;</span>, task_pid_nr(current));</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 ktime_get() 获取当前时间, 记录等待开始的时刻, 用于性能调试.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	starttime = ktime_get();</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 这是实现同步的核心. 调用 wait_event 宏使当前任务睡眠.</span></span><br><span class="line"><span class="comment">	 * async_done:          这是一个全局的等待队列头. 所有等待异步任务完成的进程都在此队列上睡眠.</span></span><br><span class="line"><span class="comment">	 *                      当每个异步任务完成时(在 async_run_entry_fn 中), 都会调用 wake_up(&amp;async_done)</span></span><br><span class="line"><span class="comment">	 *                      来唤醒在这个队列上睡眠的任务.</span></span><br><span class="line"><span class="comment">	 * lowest_in_progress(domain) &gt;= cookie: 这是睡眠的条件.</span></span><br><span class="line"><span class="comment">	 *                      lowest_in_progress(domain) 是一个函数(或宏), 它会扫描所有正在进行中的</span></span><br><span class="line"><span class="comment">	 *                      异步任务(在指定的domain内), 并返回其中最小的那个 cookie 值.</span></span><br><span class="line"><span class="comment">	 *                      只要还有一个正在进行的任务的 cookie 小于我们指定的检查点 cookie,</span></span><br><span class="line"><span class="comment">	 *                      这个条件就为假, wait_event 会让当前任务继续睡眠.</span></span><br><span class="line"><span class="comment">	 *                      直到所有小于检查点 cookie 的任务都完成了, lowest_in_progress 返回的值</span></span><br><span class="line"><span class="comment">	 *                      才会大于或等于检查点 cookie, 条件变为真, wait_event 最终返回.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	wait_event(async_done, lowest_in_progress(domain) &gt;= cookie);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 再次使用 pr_debug 打印调试信息, 报告当前任务已结束等待, 并打印出总的等待时间(微秒).</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	pr_debug(<span class="string">&quot;async_continuing @ %i after %lli usec\n&quot;</span>, task_pid_nr(current),</span><br><span class="line">		 microseconds_since(starttime));</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 将 async_synchronize_cookie_domain 函数导出, 供GPL许可的内核模块使用.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">EXPORT_SYMBOL_GPL(async_synchronize_cookie_domain);</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/6f1f8386/">https://wdfk-prog.space/posts/6f1f8386/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/kernel/">kernel</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/07.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/38d6377e/" title="completion"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">completion</div></div><div class="info-2"><div class="info-item-1">kernel&#x2F;sched&#x2F;completion.c 内核同步原语(Kernel Synchronization Primitive) 简洁的任务完成信号量历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及它所实现的“完成量”（Completion），是为了提供一个高度简化的、专门用于解决“一个执行单元等待另一个执行单元完成某项工作”这一特定同步场景的内核原语。  简化样板代码：在completion出现之前，要实现这种“等待-通知”的模式，开发者必须手动组合更底层的原语。这通常意味着： 定义一个wait_queue_head_t（等待队列头）。 定义一个bool或int类型的标志位来表示任务是否完成。 等待者需要在一个循环中调用wait_event_interruptible()，这个宏会自动处理将任务加入等待队列、睡眠、被唤醒后检查标志位、处理伪唤醒等一系列复杂操作。 完成者需要设置标志位，然后调用wake_up()来唤醒等待者。这个过程虽然强大，但对于一个非常常见的模式来说，显得过于繁琐且容易出错（例如，忘记处理竞态条件）。   解决竞态条件：...</div></div></div></a><a class="pagination-related" href="/posts/39a9d7cf/" title="bounds"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">bounds</div></div><div class="info-2"><div class="info-item-1">[TOC] kernel&#x2F;bounds.c 内核边界定义(Kernel Bounds Definition) 为汇编代码提供C语言的宏常量历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其背后独特的构建过程，是为了解决一个根本性的、存在于所有操作系统内核开发中的问题：如何在底层汇编代码（Assembly Code）中，安全、准确地访问C语言定义的内核数据结构（structs）的成员偏移量和大小。  汇编代码的局限性：汇编语言是一种低级语言，它没有struct或#define的概念。汇编代码需要知道一个结构体中某个成员的确切字节偏移量才能访问它。例如，为了访问task_struct结构中的state字段，汇编代码需要知道state字段距离task_struct结构体起始地址有多少个字节。 C语言编译器的不确定性：这些偏移量并不是固定的。它们会因为以下原因而改变： 架构差异：同一个结构体在32位和64位系统上的布局可能完全不同。 配置选项：不同的内核配置选项（Kconfig）可能会启用或禁用某些结构体成员，导致其后所有成员的偏移量发生变化。 编译器行为：不同的...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">dma</div></div><div class="info-2"><div class="info-item-1">[TOC] drivers&#x2F;dma DMA引擎与映射(DMA Engine &amp; Mapping) 内核统一的直接内存访问框架历史与背景这项技术是为了解决什么特定问题而诞生的？DMA（Direct Memory Access，直接内存访问）框架的诞生是为了解决一个根本性的性能瓶颈问题，并为内核提供一个统一、可移植的解决方案。  解决CPU性能瓶颈：在没有DMA的系统中，当外设（如网卡、磁盘）需要与内存交换大量数据时，CPU必须亲自担当“搬运工”的角色。这种方式被称为PIO（Programmed I&#x2F;O），CPU需要逐字节或逐字地从设备读取数据再写入内存，或者反之。对于高速设备，这会消耗大量的CPU周期，导致CPU无暇处理其他计算任务，严重影响系统整体性能。DMA技术通过引入一个专门的硬件控制器（DMAC），允许外设在没有CPU干预的情况下直接与内存进行数据传输，从而将CPU解放出来。 抽象硬件差异：不同的CPU架构和SoC平台，其DMA控制器的设计和编程接口千差万别。如果没有一个统一的软件框架，设备驱动程序的开发者将不得不为每一种不同的DMAC编写特定的...</div></div></div></a><a class="pagination-related" href="/posts/ba80502e/" title="cpu"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">cpu</div></div><div class="info-2"><div class="info-item-1">[TOC] include&#x2F;linux&#x2F;cpumask.hcpumask_check 验证当前cpu数量是否超过了配置的最大cpu数量,并返回cpu1234567891011121314151617// 验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline void cpu_max_bits_warn(unsigned int cpu, unsigned int bits)&#123;#ifdef CONFIG_DEBUG_PER_CPU_MAPS	WARN_ON_ONCE(cpu &gt;= bits);#endif /* CONFIG_DEBUG_PER_CPU_MAPS */&#125;/* verify cpu argument to cpumask_* operators *///验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline unsigned int cpumask_check(unsigned int cpu)&#123;    //small_cpumask_...</div></div></div></a><a class="pagination-related" href="/posts/feb74a0/" title="utsname_sysctl"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">utsname_sysctl</div></div><div class="info-2"><div class="info-item-1">   [TOC]  kernel&#x2F;utsname_sysctl.c UTS命名空间与Sysctl接口 管理和暴露系统标识信息历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了提供一个标准化的、可在运行时动态查询和修改系统核心标识信息的机制而诞生的。这些标识信息，统称为UTS（UNIX Time-sharing System）名称，包括：  主机名 (Hostname) 和 域名 (Domainname)：在网络中唯一标识一台机器。 操作系统发布版本 (OS Release) 和 版本号 (Version)：允许软件检查其运行的内核版本，以确定兼容性或是否存在特定功能&#x2F;错误。 硬件架构 (Machine)：指明系统运行的CPU架构（如 x86_64, aarch64）。  utsname_sysctl.c 的核心任务是：  提供访问接口：允许用户空间程序和管理员通过 uname(2) 系统调用和 /proc/sys/kernel/ 文件系统接口来读取这些信息。 提供配置能力：尤其是对于主机名和域名，系统必须提供一种在运行时进行修改的方法，而无需重启...</div></div></div></a><a class="pagination-related" href="/posts/2c09369a/" title="seccomp"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">seccomp</div></div><div class="info-2"><div class="info-item-1">  [toc]  kernel&#x2F;seccomp.c 安全计算模式(Secure Computing Mode) 系统调用防火墙历史与背景这项技术是为了解决什么特定问题而诞生的？Seccomp（Secure Computing Mode）是为了解决一个核心的安全问题而诞生的：如何安全地运行不可信的代码。 在复杂的软件环境中，一个进程被赋予了访问数百个系统调用（syscall）的能力，这些系统调用是用户空间程序与内核交互的接口。 然而，大多数程序在其整个生命周期中只需要使用这些系统调用中的一小部分。 如果一个程序（例如，一个处理外部输入的Web浏览器渲染进程）被恶意代码攻陷，攻击者就可以利用那些该程序本不需要、但内核依然暴露给它的系统调用来进一步攻击和破坏整个系统。 Seccomp通过提供一种机制来限制一个进程可以调用的系统调用集合，从而减少内核的攻击面。 它的核心思想是实施“最小权限原则”：只授予程序执行其核心功能所必需的最小权限集合。 这样，即使程序被攻破，攻击者能造成的损害也因为其可用的系统调用极其有限而受到严格控制。 这对于构建应用程序沙箱（sandbox）至关重要...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-async-c-%E5%86%85%E6%A0%B8%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8-Asynchronous-Function-Calls-%E4%B8%80%E4%B8%AA%E7%AE%80%E5%8D%95%E7%9A%84%E2%80%9C%E5%8F%91%E5%90%8E%E5%8D%B3%E5%BF%98%E2%80%9D%E5%BC%8F%E5%86%85%E6%A0%B8%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6"><span class="toc-number">1.</span> <span class="toc-text">kernel&#x2F;async.c 内核异步函数调用(Asynchronous Function Calls) 一个简单的“发后即忘”式内核执行框架</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E3%80%82"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-init-%E4%B8%BA%E5%86%85%E6%A0%B8%E7%9A%84%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8%EF%BC%88async%EF%BC%89%E6%A1%86%E6%9E%B6%E5%88%9B%E5%BB%BA%E4%B8%80%E4%B8%AA%E4%B8%93%E9%97%A8%E7%9A%84%E3%80%81%E9%9D%9E%E7%BB%91%E5%AE%9A%E7%9A%84%EF%BC%88unbound%EF%BC%89%E5%B7%A5%E4%BD%9C%E9%98%9F%E5%88%97%EF%BC%88workqueue%EF%BC%89"><span class="toc-number">1.1.</span> <span class="toc-text">async_init 为内核的异步函数调用（async）框架创建一个专门的、非绑定的（unbound）工作队列（workqueue）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-run-entry-fn-%E6%89%A7%E8%A1%8C%E5%B9%B6%E6%B8%85%E7%90%86%E5%BC%82%E6%AD%A5%E4%BB%BB%E5%8A%A1"><span class="toc-number">1.2.</span> <span class="toc-text">async_run_entry_fn: 执行并清理异步任务</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-schedule-node-domain-%E5%BC%82%E6%AD%A5%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E6%A0%B8%E5%BF%83%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.3.</span> <span class="toc-text">__async_schedule_node_domain: 异步任务调度的核心实现</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-schedule-node-domain-%E5%9C%A8%E6%8C%87%E5%AE%9A%E7%9A%84NUMA%E8%8A%82%E7%82%B9%E4%B8%8A%E4%BD%BF%E7%94%A8%E7%89%B9%E5%AE%9A%E5%9F%9F%E8%B0%83%E5%BA%A6%E4%B8%80%E4%B8%AA%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0%E6%89%A7%E8%A1%8C"><span class="toc-number">1.4.</span> <span class="toc-text">async_schedule_node_domain: 在指定的NUMA节点上使用特定域调度一个异步函数执行</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-schedule-node-%E5%9C%A8%E6%8C%87%E5%AE%9A%E7%9A%84NUMA%E8%8A%82%E7%82%B9%E4%B8%8A%E4%BD%BF%E7%94%A8%E9%BB%98%E8%AE%A4%E5%9F%9F%E8%B0%83%E5%BA%A6%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0"><span class="toc-number">1.5.</span> <span class="toc-text">async_schedule_node: 在指定的NUMA节点上使用默认域调度异步函数</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-schedule-dev-%E5%9C%A8%E4%B8%8E%E8%AE%BE%E5%A4%87%E5%85%B3%E8%81%94%E7%9A%84NUMA%E8%8A%82%E7%82%B9%E4%B8%8A%E8%B0%83%E5%BA%A6%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0"><span class="toc-number">1.6.</span> <span class="toc-text">async_schedule_dev: 在与设备关联的NUMA节点上调度异步函数</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#lowest-in-progress-%E6%9F%A5%E6%89%BE%E8%BF%9B%E8%A1%8C%E4%B8%AD%E4%BB%BB%E5%8A%A1%E7%9A%84%E6%9C%80%E4%BD%8ECookie%E5%80%BC"><span class="toc-number">1.7.</span> <span class="toc-text">lowest_in_progress: 查找进行中任务的最低Cookie值</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-synchronize-full-%E5%90%8C%E6%AD%A5-%E7%AD%89%E5%BE%85-%E6%89%80%E6%9C%89%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8%E5%AE%8C%E6%88%90"><span class="toc-number">1.8.</span> <span class="toc-text">async_synchronize_full: 同步(等待)所有异步函数调用完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#async-synchronize-full-domain-%E5%90%8C%E6%AD%A5%E7%89%B9%E5%AE%9A%E5%9F%9F%E5%86%85%E7%9A%84%E6%89%80%E6%9C%89%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8"><span class="toc-number">1.9.</span> <span class="toc-text">async_synchronize_full_domain: 同步特定域内的所有异步函数调用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#async-synchronize-cookie-domain-%E4%BD%BF%E7%94%A8cookie%E6%A3%80%E6%9F%A5%E7%82%B9%E5%90%8C%E6%AD%A5%E7%89%B9%E5%AE%9A%E5%9F%9F%E5%86%85%E7%9A%84%E5%BC%82%E6%AD%A5%E5%87%BD%E6%95%B0"><span class="toc-number">1.9.1.</span> <span class="toc-text">async_synchronize_cookie_domain: 使用cookie检查点同步特定域内的异步函数</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/07.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'ef1b440403171f7257a2fbfd344a9fbb'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

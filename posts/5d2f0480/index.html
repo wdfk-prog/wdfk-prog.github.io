@@ -1,0 +1,1334 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>truncate | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[toc] mm&#x2F;truncate.c 页面缓存截断(Page Cache Truncation) 文件大小变更的核心内存管理历史与背景这项技术是为了解决什么特定問題而誕生的？这项技术是为了实现一个最基本、最核心的文件系统功能：更改文件的大小，特别是缩减文件（Truncation）。这是一个由POSIX标准规定的基础操作。mm&#x2F;truncate.c专门负责处理这个操作在内存管理（Memo">
+<meta property="og:type" content="article">
+<meta property="og:title" content="truncate">
+<meta property="og:url" content="https://wdfk-prog.space/posts/5d2f0480/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[toc] mm&#x2F;truncate.c 页面缓存截断(Page Cache Truncation) 文件大小变更的核心内存管理历史与背景这项技术是为了解决什么特定問題而誕生的？这项技术是为了实现一个最基本、最核心的文件系统功能：更改文件的大小，特别是缩减文件（Truncation）。这是一个由POSIX标准规定的基础操作。mm&#x2F;truncate.c专门负责处理这个操作在内存管理（Memo">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/01.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:28.762Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="mm">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/01.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "truncate",
+  "url": "https://wdfk-prog.space/posts/5d2f0480/",
+  "image": "https://wdfk-prog.space/images/covers/01.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:28.762Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/5d2f0480/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'truncate',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/01.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">truncate</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">truncate<a class="post-edit-link" href="null_posts/linux/mm/truncate.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:28.762Z" title="更新于 2025-10-03 17:23:28">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/mm/">mm</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">9.4k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>30分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/5d2f0480/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:28&quot;}" hidden></div><p>[toc]</p>
+<h1 id="mm-truncate-c-页面缓存截断-Page-Cache-Truncation-文件大小变更的核心内存管理"><a href="#mm-truncate-c-页面缓存截断-Page-Cache-Truncation-文件大小变更的核心内存管理" class="headerlink" title="mm&#x2F;truncate.c 页面缓存截断(Page Cache Truncation) 文件大小变更的核心内存管理"></a>mm&#x2F;truncate.c 页面缓存截断(Page Cache Truncation) 文件大小变更的核心内存管理</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定問題而誕生的？"><a href="#这项技术是为了解决什么特定問題而誕生的？" class="headerlink" title="这项技术是为了解决什么特定問題而誕生的？"></a>这项技术是为了解决什么特定問題而誕生的？</h4><p>这项技术是为了实现一个最基本、最核心的文件系统功能：<strong>更改文件的大小</strong>，特别是<strong>缩减文件（Truncation）</strong>。这是一个由POSIX标准规定的基础操作。<code>mm/truncate.c</code>专门负责处理这个操作在内存管理（Memory Management, MM）层面最复杂的部分：确保文件的内存表示（即页面缓存 Page Cache）与文件在磁盘上的新大小保持一致。</p>
+<p>它解决了以下核心问题：</p>
+<ul>
+<li><strong>内存与磁盘同步</strong>：当用户调用<code>truncate()</code>或以<code>O_TRUNC</code>模式打开文件时，不仅需要通知文件系统释放磁盘上的数据块，还必须精确地从内核的页面缓存中移除或修改对应的缓存页。否则，应用程序可能会读到已经被“删除”的陈旧数据，或者脏页（Dirty Page）可能会错误地将已删除的数据写回磁盘。</li>
+<li><strong>处理边界条件</strong>：文件截断不总是以页面大小（通常是4KB）对齐的。<code>mm/truncate.c</code>必须能精确处理部分被截断的页面，即一个页面中只有一部分数据属于截断后的文件，剩余部分必须被作废（通常是清零）。</li>
+<li><strong>统一接口</strong>：不同的文件系统（ext4, XFS, Btrfs等）有不同的磁盘数据块管理方式。<code>mm/truncate.c</code>提供了一套通用的、与文件系统无关的页面缓存处理逻辑，使得文件系统开发者不必重复实现这套复杂的内存管理代码，只需专注于实现自己特有的磁盘块释放逻辑即可。</li>
+</ul>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p><code>mm/truncate.c</code>中的逻辑是内核VFS和MM子系统非常古老和核心的一部分。其发展主要体现在对新内核特性的适应和性能优化上：</p>
+<ul>
+<li><strong>基本实现</strong>：早期内核就包含了文件截断的核心逻辑，即遍历和释放页面缓存。</li>
+<li><strong>性能优化</strong>：对于非常大的文件，逐页遍历和锁定开销很大。内核对此进行了优化，例如引入了范围截断（<code>truncate_inode_pages_range</code>），可以更高效地处理大范围的页面失效。</li>
+<li><strong>支持透明大页（THP）</strong>：当文件数据被缓存在透明大页中时，截断操作需要能正确地分割（split）大页，只保留所需的部分，这比处理标准小页要复杂得多。</li>
+<li><strong>支持DAX（Direct Access）</strong>：对于支持DAX的持久内存，文件数据直接映射，绕过了页面缓存。<code>mm/truncate.c</code>的逻辑需要与DAX协同工作，在截断时不是释放缓存页，而是直接清零持久内存的对应区域，并使CPU缓存失效。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p><code>mm/truncate.c</code>是内核MM和VFS中极其稳定和基础的部分，其核心逻辑很少发生大的变动。社区的活跃度主要体现在为新的内存管理或文件系统特性（如Folios）提供适配和进行微观性能调优。它是所有支持可写操作的Linux文件系统的基石，被以下系统调用和操作所依赖：</p>
+<ul>
+<li><code>truncate(2)</code> 和 <code>ftruncate(2)</code> 系统调用。</li>
+<li><code>open(2)</code> 系统调用中使用 <code>O_TRUNC</code> 标志。</li>
+<li><code>creat(2)</code> 系统调用（等同于<code>open</code>与<code>O_CREAT | O_WRONLY | O_TRUNC</code>）。</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p><code>mm/truncate.c</code>的工作核心是一个<strong>两阶段的、内存优先的清理过程</strong>，它与具体的文件系统驱动紧密协作。</p>
+<p>当一个文件需要被截断到一个新的、更小的尺寸（<code>new_size</code>）时：</p>
+<ol>
+<li><strong>VFS层发起</strong>：操作始于VFS层，通常是<code>notify_change()</code>函数检测到<code>ATTR_SIZE</code>变更。</li>
+<li><strong>文件系统预处理</strong>：VFS会首先调用文件系统特有的函数，通知它文件大小即将改变。文件系统此时会更新其内存中的inode大小 (<code>i_size</code>)，并可能做一些准备工作。</li>
+<li><strong>内存截断 (mm&#x2F;truncate.c的核心)</strong>：VFS接着调用<code>truncate_inode_pages_range()</code>或类似的函数进入<code>mm/truncate.c</code>的逻辑。这个函数会：<br>a. <strong>遍历页面缓存</strong>：它会从新的文件末尾（<code>new_size</code>）开始，一直遍历到旧的文件末尾，查找所有属于这个范围的缓存页。<br>b. <strong>处理完全位于截断范围的页面</strong>：对于整个页面都在<code>new_size</code>之后的，逻辑很简单：<br>*   如果页面是脏的，丢弃其数据（因为这部分数据已被删除），并清除其脏状态。<br>*   从文件的页面缓存基数树（Radix Tree）中移除该页面。<br>*   减少页面的引用计数，如果降到零，则释放该物理页。<br>c. <strong>处理跨越边界的页面</strong>：对于恰好包含<code>new_size</code>的那个页面，操作比较精细：<br>*   页面中从<code>new_size</code>到页面末尾的这部分区域必须被清零。<br>*   如果这个页面是脏的，它仍然保持脏状态，但后续写回时只会写回有效部分。</li>
+<li><strong>文件系统后处理</strong>：在页面缓存被清理干净后，VFS会调用文件系统的<code>.truncate</code>操作。此时，文件系统驱动可以安全地遍历并释放所有从<code>new_size</code>开始的磁盘数据块，因为它知道这些块在内存中已无任何缓存。</li>
+</ol>
+<p>这个**“先清理内存，再释放磁盘”**的顺序至关重要，它避免了在释放磁盘块后，仍然有脏页试图将数据写回已释放块的竞态条件。</p>
+<h4 id="它的主要优势体現在哪些方面？"><a href="#它的主要优势体現在哪些方面？" class="headerlink" title="它的主要优势体現在哪些方面？"></a>它的主要优势体現在哪些方面？</h4><ul>
+<li><strong>抽象与代码复用</strong>：将通用的内存管理逻辑集中化，极大地简化了文件系统的开发。</li>
+<li><strong>一致性保证</strong>：通过严格的执行顺序，确保了文件在内存和磁盘上视图的一致性。</li>
+<li><strong>健壮性</strong>：能正确处理各种复杂情况，如脏页、稀疏文件（holes）、透明大页和DAX。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>性能开销</strong>：截断一个非常大的文件可能是一个性能开销很大的操作。它需要修改大量的文件系统元数据（块位图、扩展树等），这可能导致大量的随机I&#x2F;O。</li>
+<li><strong>破坏性操作</strong>：截断是一个不可逆的数据销毁操作。<code>mm/truncate.c</code>的职责就是正确地执行这个销毁，但从用户角度看，误操作的后果是灾难性的。</li>
+<li><strong>非安全擦除</strong>：该机制只负责将磁盘块归还给文件系统的可用空间池，并不会对这些块进行擦写。被截断的数据在被新数据覆盖之前，仍可能通过磁盘工具恢复。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p>它是Linux&#x2F;POSIX系统中<strong>唯一标准</strong>的缩减文件尺寸的解决方案。</p>
+<ul>
+<li><strong>日志文件管理</strong>：定期清空或轮转（rotate）日志文件。例如，执行<code>truncate -s 0 /var/log/app.log</code>或在脚本中用<code>&gt; /var/log/app.log</code>来清空日志，其后台就是<code>mm/truncate.c</code>在工作。</li>
+<li><strong>文件重写</strong>：当应用程序需要完全重写一个配置文件或数据文件时，最常见的模式就是以<code>open(path, O_WRONLY | O_TRUNC)</code>的方式打开文件。</li>
+<li><strong>数据库和键值存储</strong>：在管理WAL（预写日志）或SSTable文件时，可能会截断文件以移除已合并或作废的数据段。</li>
+<li><strong>临时文件使用</strong>：当一个程序使用临时文件，并且需要在处理过程中缩减其大小时（虽然不常见），会用到<code>ftruncate()</code>。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>需要高性能地“清空”文件</strong>：如果一个应用的模式是反复地清空并重用同一个文件，那么<code>truncate()</code>后立即重新写入可能不是最高效的。<code>unlink()</code>一个旧文件并创建一个同名的新文件有时可能更快，因为它避免了保留和修改旧inode的元数据开销。</li>
+<li><strong>需要安全删除数据</strong>：如上所述，<code>truncate</code>不是一个安全的数据擦除工具。需要保证数据无法恢复的场景，必须使用如<code>shred</code>或专门的安全擦除工具。</li>
+<li><strong>在文件中间创建空洞</strong>：<code>truncate</code>只能从文件末尾移除数据。如果</li>
+</ul>
+<h1 id="include-linux-pagevec-h-页面向量-Page-Vector-高效的批量页面操作工具"><a href="#include-linux-pagevec-h-页面向量-Page-Vector-高效的批量页面操作工具" class="headerlink" title="include&#x2F;linux&#x2F;pagevec.h 页面向量(Page Vector) 高效的批量页面操作工具"></a>include&#x2F;linux&#x2F;pagevec.h 页面向量(Page Vector) 高效的批量页面操作工具</h1><h3 id="历史与背景-1"><a href="#历史与背景-1" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p>这项技术是为了解决在内核内存管理（MM）子系统中，对大量页面（<code>struct page</code>）进行单一、重复操作时的<strong>性能瓶ăpadă</strong>问题。</p>
+<p>在<code>pagevec</code>（页面向量）出现之前，许多内核路径需要对一组页面执行相同的操作（例如，将它们添加到LRU链表、释放它们、或将它们从页面缓存中移除）。这些操作通常是在一个循环中逐个页面完成的。这种方法的弊端在于：</p>
+<ul>
+<li><strong>高昂的锁开销</strong>：每次操作单个页面，都可能需要获取和释放一个或多个锁（例如，LRU链表锁）。在多核系统上，这种频繁的锁操作会导致严重的锁争用和缓存行弹跳，极大地限制了系统的伸缩性。</li>
+<li><strong>函数调用开销</strong>：在紧凑的循环中反复调用同一个函数会累积不可忽视的CPU开销。</li>
+<li><strong>效率低下</strong>：无法利用批量处理带来的优势。</li>
+</ul>
+<p><code>pagevec</code>的诞生，就是为了提供一个<strong>轻量级的、基于栈的批量处理容器</strong>。它允许内核代码先将一组页面收集到一个小数组（向量）中，然后一次性地对整个数组执行操作。这极大地**摊销（Amortize）**了锁获取和函数调用的开销，显著提升了页面密集型操作的性能。</p>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？-1"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？-1" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p><code>pagevec</code>是一个相对稳定和底层的工具，其发展主要体现在其在内核中的逐步普及和应用，而不是自身功能的剧烈变化。</p>
+<ul>
+<li><strong>引入</strong>：作为一个内存管理性能优化的工具被引入。</li>
+<li><strong>广泛采用</strong>：由于其带来的显著性能提升，<code>pagevec</code>迅速成为内核MM子系统中处理页面集合的标准范式。它被深度集成到以下核心路径中：<ul>
+<li>内存回收（<code>mm/vmscan.c</code>）</li>
+<li>页面缓存回写（<code>fs/fs-writeback.c</code>）</li>
+<li>文件截断（<code>mm/truncate.c</code>）</li>
+<li>页面迁移</li>
+</ul>
+</li>
+<li><strong>API完善</strong>：围绕<code>pagevec</code>，内核提供了一系列方便的封装函数，如<code>pagevec_lru_add()</code>、<code>pagevec_release()</code>等，使得批量操作的调用更加简洁。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？-1"><a href="#目前该技术的社区活跃度和主流应用情况如何？-1" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p><code>pagevec</code>是Linux内核内存管理中一个基础、成熟且不可或缺的组件。它的代码本身非常稳定，很少改动。其“活跃度”体现在内核中几乎所有涉及多页面处理的性能关键路径都在使用它。它是保证Linux在多核、大内存环境下依然能高效进行内存管理的关键微观优化之一。</p>
+<h3 id="核心原理与设计-1"><a href="#核心原理与设计-1" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？-1"><a href="#它的核心工作原理是什么？-1" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p><code>pagevec</code>的核心是一个简单的、固定大小的结构体，通常在函数栈上分配：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// include/linux/pagevec.h</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAGEVEC_SIZE 14</span></span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">pagevec</span> &#123;</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">short</span> nr;      <span class="comment">// 当前向量中的页面数量</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">short</span> cold;    <span class="comment">// (用于LRU) 标记页面是冷/热</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">page</span> *<span class="title">pages</span>[<span class="title">PAGEVEC_SIZE</span>];</span> <span class="comment">// 存放页面指针的数组</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p>它的工作模式遵循一个清晰的**“收集-刷出”（Collect-and-Flush）**模式：</p>
+<ol>
+<li><strong>初始化</strong>：在使用前，通过<code>pagevec_init()</code>将<code>nr</code>计数器清零。</li>
+<li><strong>收集页面</strong>：在一个循环中，通过<code>pagevec_add(pvec, page)</code>将需要处理的页面指针添加到<code>pvec-&gt;pages</code>数组中，并增加<code>nr</code>计数。</li>
+<li><strong>自动刷出</strong>：<code>pagevec_add()</code>函数有一个关键的内置逻辑：如果添加页面后，<code>nr</code>达到了<code>PAGEVEC_SIZE</code>（即向量已满），它会<strong>自动调用</strong>一个批量处理函数（例如，<code>__pagevec_lru_add_fn()</code>），将当前向量中的所有页面一次性处理掉，然后自动将<code>nr</code>清零。</li>
+<li><strong>手动刷出</strong>：当收集页面的循环结束后，向量中可能还残留着一些未处理的页面（因为<code>nr</code>未满）。此时，需要<strong>手动调用</strong>一次批量处理函数（例如，<code>pagevec_lru_add(pvec)</code>）来处理这些“尾单”。</li>
+</ol>
+<p>这个设计巧妙地将批量处理的逻辑封装起来，使得调用者的代码可以保持简洁。</p>
+<h4 id="它的主要优势体現在哪些方面？-1"><a href="#它的主要优势体現在哪些方面？-1" class="headerlink" title="它的主要优势体現在哪些方面？"></a>它的主要优势体現在哪些方面？</h4><ul>
+<li><strong>极高的性能</strong>：这是其核心优势。通过将14次锁操作合并为1次，极大地降低了锁争用，提升了吞吐量。</li>
+<li><strong>代码简洁</strong>：为批量页面操作提供了一个标准、统一的抽象，避免了在内核各处重复实现类似的手动批处理逻辑。</li>
+<li><strong>基于栈</strong>：<code>pagevec</code>通常在栈上分配，无需动态内存分配（<code>kmalloc</code>），使得其在任何上下文中都能被高效、安全地使用。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？-1"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？-1" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>固定大小</strong>：<code>PAGEVEC_SIZE</code>是一个编译时常量。这个大小是一个权衡：太小则摊销效果不佳，太大则会占用过多栈空间并可能增加单次操作的延迟。</li>
+<li><strong>非通用数据结构</strong>：它是一个高度特化的工具，不是一个通用的链表或动态数组。它只适用于“收集-刷出”模式，不支持随机访问或从中删除单个元素。</li>
+<li><strong>栈空间占用</strong>：虽然是优势，但在极深的函数调用链或栈空间极其受限的特殊场景下，也需要注意其栈空间占用。</li>
+</ul>
+<h3 id="使用场景-1"><a href="#使用场景-1" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？-1"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？-1" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p>在任何需要对<strong>多个页面</strong>执行<strong>相同操作</strong>的内核路径中，<code>pagevec</code>都是首选解决方案。</p>
+<ul>
+<li><strong>内存回收（<code>mm/vmscan.c</code>）</strong>：内核的<code>kswapd</code>线程在扫描LRU链表以回收内存时，会将识别出的可回收页面收集到一个<code>pagevec</code>中，然后调用<code>pagevec_release()</code>来批量释放它们。</li>
+<li><strong>页面缓存回写</strong>：当内核需要将脏页写回磁盘时，它会扫描文件的inode，将脏页收集到<code>pagevec</code>中，然后批量提交给块设备层。</li>
+<li><strong>文件截断（<code>mm/truncate.c</code>）</strong>：当一个文件被截断时，所有需要从页面缓存中移除的页面会被收集到<code>pagevec</code>中，然后被批量释放。</li>
+<li><strong>添加到LRU链表</strong>：当新页面被换入（fault in）时，通过<code>pagevec_lru_add()</code>将它们批量添加到LRU链表的尾部，可以显著减少对LRU锁的争用。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？-1"><a href="#是否有不推荐使用该技术的场景？为什么？-1" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>单页面操作</strong>：如果明确知道每次只需要处理一个页面，那么使用<code>pagevec</code>会带来不必要的开销。直接调用单页面的处理函数（如<code>lru_cache_add()</code>）会更简单、更高效。</li>
+<li><strong>需要构建持久的页面列表</strong>：如果需要构建一个页面列表，并在其生命周期中进行复杂的管理（如排序、随机删除），那么<code>pagevec</code>不适用。此时应该使用标准的内核链表（<code>struct list_head</code>）。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><p><strong><code>pagevec</code> vs. 逐个页面循环操作</strong></p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left"><code>pagevec</code> (批量)</th>
+<th align="left">逐个页面循环操作 (单次)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>实现方式</strong></td>
+<td align="left">先将页面收集到数组中，然后对整个数组执行一次操作。</td>
+<td align="left">在循环中，对每个页面都执行一次独立的操作。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能</strong></td>
+<td align="left"><strong>高</strong>。锁开销被摊销，函数调用次数少。</td>
+<td align="left"><strong>低</strong>。频繁的锁操作和函数调用在高并发、多核环境下会导致严重的性能瓶颈。</td>
+</tr>
+<tr>
+<td align="left"><strong>锁争用</strong></td>
+<td align="left"><strong>极低</strong>。一次循环（最多14个页面）通常只获取一次锁。</td>
+<td align="left"><strong>高</strong>。每次循环都获取和释放锁。</td>
+</tr>
+<tr>
+<td align="left"><strong>代码复杂度</strong></td>
+<td align="left">略高，需要<code>init</code>和一次最终的<code>flush</code>调用。</td>
+<td align="left">非常直观，循环体即操作本身。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left">处理多个页面的性能关键路径。</td>
+<td align="left">处理单个页面，或性能要求不高的场景。</td>
+</tr>
+</tbody></table>
+<p><strong><code>pagevec</code> vs. <code>struct list_head</code> (内核标准链表)</strong></p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left"><code>pagevec</code></th>
+<th align="left"><code>struct list_head</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>数据结构</strong></td>
+<td align="left"><strong>定长数组</strong>，基于栈。</td>
+<td align="left"><strong>双向链表</strong>，需要动态分配节点或嵌入到其他结构中。</td>
+</tr>
+<tr>
+<td align="left"><strong>核心用途</strong></td>
+<td align="left"><strong>瞬时批处理容器</strong>。”收集-刷出”。</td>
+<td align="left"><strong>通用、持久的列表管理</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>内存分配</strong></td>
+<td align="left">通常在栈上，无额外开销。</td>
+<td align="left">需要为链表节点或包含链表节点的结构体分配堆内存。</td>
+</tr>
+<tr>
+<td align="left"><strong>API</strong></td>
+<td align="left">简单的<code>add</code>（自动刷出）和<code>flush</code>。</td>
+<td align="left">丰富的API，支持在任意位置添加、删除、遍历、拼接等。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能特点</strong></td>
+<td align="left">针对摊销锁开销进行了优化。</td>
+<td align="left">插入和删除操作是O(1)，但本身不解决批量操作的锁争用问题。</td>
+</tr>
+<tr>
+<td align="left"><strong>适用场景</strong></td>
+<td align="left">高效地将一组页面传递给一个批量处理函数。</td>
+<td align="left">构建和管理一个生命周期较长的、动态大小的页面集合。</td>
+</tr>
+</tbody></table>
+<h2 id="Folio-Batch：分摊内存操作开销的基础容器"><a href="#Folio-Batch：分摊内存操作开销的基础容器" class="headerlink" title="Folio Batch：分摊内存操作开销的基础容器"></a>Folio Batch：分摊内存操作开销的基础容器</h2><p>本头文件 <code>linux/pagevec.h</code> 定义了Linux内存管理子系统中一个基础且至关重要的性能优化工具：<code>struct folio_batch</code>。它是一个简单的、固定大小的容器，专门用于<strong>批量处理（batching）</strong> folio（代表一个或多个物理页的内存单元）。其核心设计思想是通过将多次对单个folio的操作<strong>聚合</strong>起来，然后一次性地对整批folio执行某个动作，从而**分摊（amortize）**获取锁、函数调用以及其他同步操作的开销，显著提升内存管理相关路径的性能。</p>
+<h3 id="实现原理分析"><a href="#实现原理分析" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>folio_batch</code> 的实现非常简洁高效，本质上是一个轻量级的、基于数组的队列或集合。</p>
+<ol>
+<li><p><strong>数据结构 (<code>struct folio_batch</code>)</strong>:</p>
+<ul>
+<li><code>folios[PAGEVEC_SIZE]</code>: 这是一个固定大小的指针数组，是批处理的<strong>核心存储区</strong>。<code>PAGEVEC_SIZE</code> 通常被设置为一个略小于2的幂的奇数（如31），这是一种常见的内存对齐技巧，可以使得整个<code>folio_batch</code>结构体的大小恰好是一个2的幂（例如256字节），从而提高缓存利用率。</li>
+<li><code>nr</code>: 一个<code>unsigned char</code>，记录了当前批处理中<strong>有效的folio数量</strong>。这是数组的“水位线”。</li>
+<li><code>i</code>: 一个<code>unsigned char</code>，用作一个<strong>迭代游标</strong>，主要由 <code>folio_batch_next</code> 使用，以支持将<code>folio_batch</code>作为一个队列来处理。</li>
+<li><code>percpu_pvec_drained</code>: 一个布尔标志，用于更复杂的per-CPU批处理场景，标记相关的per-CPU批次是否已被清空。</li>
+</ul>
+</li>
+<li><p><strong>核心操作 (内联函数)</strong>:</p>
+<ul>
+<li><code>folio_batch_init()</code>: 初始化一个批处理。它简单地将<code>nr</code>和<code>i</code>清零，表示这是一个空的批处理。这是使用<code>folio_batch</code>的第一步。</li>
+<li><code>folio_batch_count()</code>: 返回当前批处理中的folio数量（即<code>nr</code>的值）。</li>
+<li><code>folio_batch_space()</code>: 返回批处理中还剩多少可用的空位。</li>
+<li><code>folio_batch_add()</code>: 将一个folio指针添加到批处理的末尾，并递增<code>nr</code>。这是向批处理中“装填”folio的标准方法。它会返回剩余空间，允许调用者判断批处理是否已满。</li>
+<li><code>folio_batch_next()</code>: 将<code>folio_batch</code>作为一个<strong>队列</strong>来使用。它返回游标<code>i</code>指向的folio，并递增<code>i</code>。当<code>i</code>追上<code>nr</code>时，表示队列已处理完毕，返回<code>NULL</code>。</li>
+</ul>
+</li>
+<li><p><strong>生命周期与资源管理</strong>:</p>
+<ul>
+<li><code>folio_batch_release()</code>: 这是一个<strong>至关重要</strong>的函数。当一个folio被添加到<code>folio_batch</code>中时，它的引用计数通常是增加的。处理完一个批次后，<strong>必须</strong>调用<code>folio_batch_release</code>。这个函数（通过其工作者<code>__folio_batch_release</code>）会遍历批处理中的所有folio，并调用<code>folio_put</code>来<strong>递减它们的引用计数</strong>。这确保了所有被临时引用的folio最终都能被正确释放，防止了内存泄漏。</li>
+</ul>
+</li>
+<li><p><strong>特殊条目处理</strong>:</p>
+<ul>
+<li><code>folio_batch_remove_exceptionals()</code>: 页缓存等机制有时会在批处理中放入一些“异常”条目（例如，已经被其他任务解锁的folio）。这个函数负责遍历批处理，并将这些异常条目从中移除（通常是通过将后面的有效条目向前移动来覆盖它们），以保证后续操作只处理有效的folio。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析"><a href="#代码分析" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ... (头文件保护和包含) ...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 定义批处理的大小。31个指针加上头部成员，可以使结构体大小对齐到2的幂。</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAGEVEC_SIZE	31</span></span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">folio</span>;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch: 一个folio的集合。</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> &#123;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">char</span> nr;		<span class="comment">// 当前批处理中的folio数量</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">char</span> i;		<span class="comment">// 用于队列式处理的迭代游标</span></span><br><span class="line">	<span class="type">bool</span> percpu_pvec_drained;	<span class="comment">// 用于per-cpu批处理的特殊标志</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folios</span>[<span class="title">PAGEVEC_SIZE</span>];</span> <span class="comment">// 存储folio指针的核心数组</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_init: 初始化一个folio批处理。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">folio_batch_init</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	fbatch-&gt;nr = <span class="number">0</span>; <span class="comment">// 数量清零</span></span><br><span class="line">	fbatch-&gt;i = <span class="number">0</span>;  <span class="comment">// 游标清零</span></span><br><span class="line">	fbatch-&gt;percpu_pvec_drained = <span class="literal">false</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_reinit: 重新初始化一个批处理，不清空percpu标志。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">folio_batch_reinit</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	fbatch-&gt;nr = <span class="number">0</span>;</span><br><span class="line">	fbatch-&gt;i = <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_count: 返回批处理中的folio数量。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">unsigned</span> <span class="type">int</span> <span class="title function_">folio_batch_count</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> fbatch-&gt;nr;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_space: 返回批处理中剩余的可用空间。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">unsigned</span> <span class="type">int</span> <span class="title function_">folio_batch_space</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> PAGEVEC_SIZE - fbatch-&gt;nr;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_add: 向批处理中添加一个folio。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">unsigned</span> <span class="title function_">folio_batch_add</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch,</span></span><br><span class="line"><span class="params">		<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 将folio指针存入数组的下一个可用位置，并递增数量。</span></span><br><span class="line">	fbatch-&gt;folios[fbatch-&gt;nr++] = folio;</span><br><span class="line">	<span class="comment">// 返回剩余空间。</span></span><br><span class="line">	<span class="keyword">return</span> folio_batch_space(fbatch);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_next: 将批处理作为队列使用，返回下一个待处理的folio。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="keyword">struct</span> folio *<span class="title function_">folio_batch_next</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 如果迭代游标已到达数量上限，说明队列已空。</span></span><br><span class="line">	<span class="keyword">if</span> (fbatch-&gt;i == fbatch-&gt;nr)</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">NULL</span>;</span><br><span class="line">	<span class="comment">// 返回当前游标指向的folio，并递增游标。</span></span><br><span class="line">	<span class="keyword">return</span> fbatch-&gt;folios[fbatch-&gt;i++];</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 声明外部函数，用于释放批处理中所有folio的引用。</span></span><br><span class="line"><span class="type">void</span> __folio_batch_release(<span class="keyword">struct</span> folio_batch *pvec);</span><br><span class="line"></span><br><span class="line"><span class="comment">// folio_batch_release: 释放一个批处理。</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">folio_batch_release</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 仅当批处理不为空时，才调用重量级的工作函数。</span></span><br><span class="line">	<span class="keyword">if</span> (folio_batch_count(fbatch))</span><br><span class="line">		__folio_batch_release(fbatch);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 声明外部函数，用于从批处理中移除异常条目。</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">folio_batch_remove_exceptionals</span><span class="params">(<span class="keyword">struct</span> folio_batch *fbatch)</span>;</span><br></pre></td></tr></table></figure>
+
+<h1 id="mm-truncate-c"><a href="#mm-truncate-c" class="headerlink" title="mm&#x2F;truncate.c"></a>mm&#x2F;truncate.c</h1><h2 id="页缓存失效：从地址空间中移除干净的缓存页"><a href="#页缓存失效：从地址空间中移除干净的缓存页" class="headerlink" title="页缓存失效：从地址空间中移除干净的缓存页"></a>页缓存失效：从地址空间中移除干净的缓存页</h2><p>本代码片段定义了Linux内存管理中一个关键的函数 <code>invalidate_mapping_pages</code>，它是在 <code>drop_caches</code> 功能中负责清理页缓存的<strong>核心执行者</strong>。其主要功能是遍历一个文件（由其<code>address_space</code>表示）的页缓存，并尝试移除所有<strong>干净的（clean）、未被锁定且未被映射到用户空间的</strong>缓存页（folios）。这是一个性能攸关的操作，它采用**批处理（batching）**的方式来高效地查找、锁定和处理页面，同时通过主动调度来避免长时间占用CPU。</p>
+<h3 id="实现原理分析-1"><a href="#实现原理分析-1" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>invalidate_mapping_pages</code> 本身是一个简单的包装，其所有复杂逻辑都在 <code>mapping_try_invalidate</code> 函数中。该函数的设计体现了内核中常见的高性能、高并发处理模式。</p>
+<ol>
+<li><p><strong>批处理 (Batched Processing)</strong>:</p>
+<ul>
+<li>函数的核心是一个<code>while</code>循环，但它不是一次处理一个页面。它使用一个<code>folio_batch</code>结构体，通过<code>find_lock_entries</code>函数一次性地从文件的页缓存（内部由XArray数据结构实现）中查找并<strong>锁定</strong>多达<code>PAGEVEC_SIZE</code>（通常是15个）个folio。</li>
+<li><strong>为什么用批处理？</strong> 因为查找和锁定XArray本身是有开销的。一次性处理一批，可以**分摊（amortize）**这些开销，显著提高整体吞吐量。</li>
+</ul>
+</li>
+<li><p><strong>核心循环 (The Main Loop)</strong>:</p>
+<ul>
+<li><code>while (find_lock_entries(...))</code>: 这个循环会一直持续，直到<code>find_lock_entries</code>在指定的范围内再也找不到任何可处理的页缓存条目为止。</li>
+<li><strong>查找并锁定</strong>: <code>find_lock_entries</code>负责在<code>mapping</code>中从<code>index</code>位置开始查找，它会跳过已经被锁定的条目，并对找到的条目尝试加锁。</li>
+<li><strong>处理批次</strong>: 在<code>while</code>循环内部，一个<code>for</code>循环会遍历<code>folio_batch</code>中所有被成功找到并锁定的folio。</li>
+</ul>
+</li>
+<li><p><strong>逐个驱逐 (Eviction Logic)</strong>:</p>
+<ul>
+<li><strong>处理影子条目</strong>: 页缓存（XArray）不仅可以存储指向folio的指针，还可以存储特殊的“影子条目”（shadow entries）或“值条目”（value entries），这些条目不代表真实的内存页，而是元数据（例如，表示文件空洞）。代码通过<code>xa_is_value</code>来识别它们，并跳过驱逐逻辑。</li>
+<li><strong><code>mapping_evict_folio</code></strong>: 这是尝试驱逐一个folio的核心函数。它会检查folio的引用计数和状态。只有当folio是干净的、未被映射且引用计数允许释放时，才会成功将其从<code>address_space</code>中移除并释放。如果成功，<code>mapping_evict_folio</code>返回1。</li>
+<li><strong>处理驱逐失败</strong>: 如果<code>mapping_evict_folio</code>返回0，意味着folio<strong>不能</strong>被立即驱逐（例如，它可能仍然被某个进程映射着，或者它是脏的）。在这种情况下，代码会采取一个“降级”措施：调用<code>deactivate_file_folio</code>。这个函数不会释放页面，但会将其移动到LRU链表的**非活跃（inactive）**端，使其成为下一次内存回收时优先被考虑的对象。这是一种“我虽然不能马上扔掉你，但我可以把你放在垃圾桶旁边”的策略。</li>
+</ul>
+</li>
+<li><p><strong>清理与协作 (<code>cond_resched</code>)</strong>:</p>
+<ul>
+<li><strong><code>folio_batch_release</code></strong>: 在处理完一个批次后，必须调用此函数来释放<code>folio_batch</code>中所有folio的引用计数。</li>
+<li><strong><code>cond_resched</code></strong>: 这是保证系统响应性的<strong>生命线</strong>。清理一个大文件的页缓存可能是一个非常耗时的操作。如果在内核态长时间不间断地执行，会导致其他任务（包括高优先级的）得不到调度，造成系统“卡死”或触发软锁死（soft lockup）警告。<code>cond_resched()</code>会检查当前任务是否需要重新调度，如果是，它会<strong>主动让出CPU</strong>，让其他任务运行，然后再继续执行。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析-1"><a href="#代码分析-1" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * mapping_try_invalidate - 尝试使一个inode的所有可驱逐folio无效</span></span><br><span class="line"><span class="comment"> * @mapping: 持有待失效folio的address_space</span></span><br><span class="line"><span class="comment"> * @start: 失效范围的起始偏移</span></span><br><span class="line"><span class="comment"> * @end: 失效范围的结束偏移（包含）</span></span><br><span class="line"><span class="comment"> * @nr_failed: 用于返回失效失败的folio数量的指针</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 此函数与invalidate_mapping_pages()类似，但它会返回无法驱逐的folio数量。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">unsigned</span> <span class="type">long</span> <span class="title function_">mapping_try_invalidate</span><span class="params">(<span class="keyword">struct</span> address_space *mapping,</span></span><br><span class="line"><span class="params">		<span class="type">pgoff_t</span> start, <span class="type">pgoff_t</span> end, <span class="type">unsigned</span> <span class="type">long</span> *nr_failed)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">pgoff_t</span> indices[PAGEVEC_SIZE]; <span class="comment">// 用于存储folio索引的临时数组</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio_batch</span> <span class="title">fbatch</span>;</span>     <span class="comment">// folio批处理结构体</span></span><br><span class="line">	<span class="type">pgoff_t</span> index = start;         <span class="comment">// 当前扫描的起始索引</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> ret;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> count = <span class="number">0</span>;       <span class="comment">// 成功失效的条目计数</span></span><br><span class="line">	<span class="type">int</span> i;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 初始化folio批处理结构体</span></span><br><span class="line">	folio_batch_init(&amp;fbatch);</span><br><span class="line">	<span class="comment">// 主循环：只要还能在指定范围内找到并锁定一批页缓存条目...</span></span><br><span class="line">	<span class="keyword">while</span> (find_lock_entries(mapping, &amp;index, end, &amp;fbatch, indices)) &#123;</span><br><span class="line">		<span class="type">bool</span> xa_has_values = <span class="literal">false</span>;</span><br><span class="line">		<span class="type">int</span> nr = folio_batch_count(&amp;fbatch); <span class="comment">// 获取批处理中的条目数</span></span><br><span class="line"></span><br><span class="line">		<span class="comment">// 遍历批处理中的每一个条目</span></span><br><span class="line">		<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; nr; i++) &#123;</span><br><span class="line">			<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span> =</span> fbatch.folios[i];</span><br><span class="line"></span><br><span class="line">			<span class="comment">// 检查是否为值条目（影子条目），而不是真正的folio。</span></span><br><span class="line">			<span class="keyword">if</span> (xa_is_value(folio)) &#123;</span><br><span class="line">				xa_has_values = <span class="literal">true</span>;</span><br><span class="line">				count++; <span class="comment">// 影子条目也被视为成功“失效”。</span></span><br><span class="line">				<span class="keyword">continue</span>;</span><br><span class="line">			&#125;</span><br><span class="line"></span><br><span class="line">			<span class="comment">// 尝试驱逐这个folio。</span></span><br><span class="line">			ret = mapping_evict_folio(mapping, folio);</span><br><span class="line">			<span class="comment">// 无论成功与否，都必须解锁folio，与find_lock_entries配对。</span></span><br><span class="line">			folio_unlock(folio);</span><br><span class="line"></span><br><span class="line">			<span class="comment">// 如果驱逐失败 (ret == 0)...</span></span><br><span class="line">			<span class="keyword">if</span> (!ret) &#123;</span><br><span class="line">				<span class="comment">// ...将folio降级到非活跃LRU列表，使其更容易被回收。</span></span><br><span class="line">				deactivate_file_folio(folio);</span><br><span class="line">				<span class="comment">// 如果调用者关心失败次数，则递增计数器。</span></span><br><span class="line">				<span class="keyword">if</span> (nr_failed)</span><br><span class="line">					(*nr_failed)++;</span><br><span class="line">			&#125;</span><br><span class="line">			<span class="comment">// ret为1表示成功驱逐，累加到总数中。</span></span><br><span class="line">			count += ret;</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 如果批处理中包含了值条目，则需要专门清理它们。</span></span><br><span class="line">		<span class="keyword">if</span> (xa_has_values)</span><br><span class="line">			clear_shadow_entries(mapping, indices[<span class="number">0</span>], indices[nr<span class="number">-1</span>]);</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 从批处理中移除那些特殊的、未被完全处理的folio。</span></span><br><span class="line">		folio_batch_remove_exceptionals(&amp;fbatch);</span><br><span class="line">		<span class="comment">// 释放批处理中所有folio的引用计数。</span></span><br><span class="line">		folio_batch_release(&amp;fbatch);</span><br><span class="line">		<span class="comment">// 主动让出CPU，防止长时间运行导致系统无响应。</span></span><br><span class="line">		cond_resched();</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> count;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * invalidate_mapping_pages - 使一个inode的所有干净、未锁定的缓存无效</span></span><br><span class="line"><span class="comment"> * @mapping: 持有待失效缓存的address_space</span></span><br><span class="line"><span class="comment"> * @start: 失效范围的起始偏移</span></span><br><span class="line"><span class="comment"> * @end: 失效范围的结束偏移（包含）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回值: 内容被成功失效的条目数量</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">unsigned</span> <span class="type">long</span> <span class="title function_">invalidate_mapping_pages</span><span class="params">(<span class="keyword">struct</span> address_space *mapping,</span></span><br><span class="line"><span class="params">		<span class="type">pgoff_t</span> start, <span class="type">pgoff_t</span> end)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 这是一个简单的包装函数，直接调用核心实现，且不关心失败的次数。</span></span><br><span class="line">	<span class="keyword">return</span> mapping_try_invalidate(mapping, start, end, <span class="literal">NULL</span>);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 导出符号，使得内核其他部分（如文件系统驱动）可以调用此函数。</span></span><br><span class="line">EXPORT_SYMBOL(invalidate_mapping_pages);</span><br></pre></td></tr></table></figure>
+
+<h2 id="清理影子条目：维护页缓存（XArray）的一致性"><a href="#清理影子条目：维护页缓存（XArray）的一致性" class="headerlink" title="清理影子条目：维护页缓存（XArray）的一致性"></a>清理影子条目：维护页缓存（XArray）的一致性</h2><p>本代码片段定义了 <code>clear_shadow_entries</code> 函数，它是页缓存管理的一个内部辅助函数。其核心功能是<strong>清理</strong>一个文件（由其<code>address_space</code>表示）的页缓存（内部由一个XArray数据结构实现）中特定范围内的<strong>影子条目（shadow entries）</strong>。影子条目是一种特殊的元数据标记，不代表真实的内存页，通常用来表示文件空洞（holes）或者标记某些页已被交换出去（swap）。当 <code>invalidate_mapping_pages</code> 等操作需要清理页缓存时，必须同时清理这些影子条目，以保证页缓存数据结构的一致性。</p>
+<h3 id="实现原理分析-2"><a href="#实现原理分析-2" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>clear_shadow_entries</code> 的实现直接操作底层的XArray数据结构，这是一个高度优化的、用于存储稀疏索引指针的树状结构。</p>
+<ol>
+<li><p><strong>初始化XArray状态 (<code>XA_STATE</code>)</strong>:</p>
+<ul>
+<li><code>XA_STATE(xas, &amp;mapping-&gt;i_pages, start)</code>: 这是一个宏，它在栈上初始化一个<code>xas</code>（XArray State）对象。这个对象是与XArray交互的“游标”或“句柄”，它包含了遍历和修改XArray所需的所有上下文信息。它被初始化为指向<code>mapping-&gt;i_pages</code>（即页缓存的XArray树）的<code>start</code>索引位置。</li>
+</ul>
+</li>
+<li><p><strong>特殊文件系统处理</strong>:</p>
+<ul>
+<li><code>if (shmem_mapping(mapping) || dax_mapping(mapping))</code>: 函数首先检查是否为<code>shmem</code>（共享内存&#x2F;tmpfs）或<code>DAX</code>（直接访问存储）。<ul>
+<li><code>shmem</code>有自己独特的、更复杂的影子条目管理逻辑，因此不使用这个通用函数。</li>
+<li><code>DAX</code>直接将存储映射到地址空间，不使用常规的页缓存或影子条目，因此也无需操作。</li>
+</ul>
+</li>
+<li>对于普通的文件系统，这两个条件都为假。</li>
+</ul>
+</li>
+<li><p><strong>获取锁</strong>:</p>
+<ul>
+<li>函数需要获取两个锁来保证操作的原子性和安全性：<ul>
+<li><code>spin_lock(&amp;mapping-&gt;host-&gt;i_lock)</code>: 获取<code>inode</code>的<code>i_lock</code>。这个锁保护了<code>inode</code>的大部分元数据，包括LRU链表的状态。</li>
+<li><code>xas_lock_irq(&amp;xas)</code>: 获取保护XArray树本身的内部锁，并禁用本地中断。这是必需的，因为页缓存可能会在中断上下文中被访问（例如，在缺页异常中）。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><strong>核心遍历与清理 (<code>xas_for_each</code>)</strong>:</p>
+<ul>
+<li><code>xas_for_each(&amp;xas, folio, max)</code>: 这是一个XArray的遍历宏。它会从<code>xas</code>当前的位置（<code>start</code>）开始，一直迭代到<code>max</code>索引。在每次循环中，<code>folio</code>变量会被设置为当前索引处的条目。</li>
+<li><code>if (xa_is_value(folio))</code>: 在循环内部，检查当前条目是否是一个“值条目”（value entry），这是影子条目的通用术语。</li>
+<li><code>xas_store(&amp;xas, NULL)</code>: 如果是影子条目，就调用<code>xas_store</code>，将该索引位置的值<strong>更新为<code>NULL</code></strong>。这等同于从XArray中删除了这个影子条目。</li>
+</ul>
+</li>
+<li><p><strong>释放锁与后续操作</strong>:</p>
+<ul>
+<li><code>xas_unlock_irq(&amp;xas)</code> 和 <code>spin_unlock(&amp;mapping-&gt;host-&gt;i_lock)</code>: 释放之前获取的锁。</li>
+<li><code>if (mapping_shrinkable(mapping)) inode_add_lru(mapping-&gt;host);</code>: 这是一个重要的后续步骤。当一个<code>inode</code>的页缓存被修改后（即使只是清除了影子条目），它可能已经从“完全没有缓存”的状态变成了“有缓存但缓存为空”的状态。<code>inode_add_lru</code> 确保了这个<code>inode</code>被正确地添加回内核的inode LRU链表中，以便在内存压力下可以被回收。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析-2"><a href="#代码分析-2" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// clear_shadow_entries: 清理一个address_space中特定范围内的影子条目。</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">clear_shadow_entries</span><span class="params">(<span class="keyword">struct</span> address_space *mapping,</span></span><br><span class="line"><span class="params">				 <span class="type">unsigned</span> <span class="type">long</span> start, <span class="type">unsigned</span> <span class="type">long</span> max)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 初始化一个XArray状态对象(xas)，作为遍历和修改的句柄。</span></span><br><span class="line">	XA_STATE(xas, &amp;mapping-&gt;i_pages, start);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">folio</span> *<span class="title">folio</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 特殊文件系统处理：shmem有自己的逻辑，DAX不需要，直接返回。</span></span><br><span class="line">	<span class="keyword">if</span> (shmem_mapping(mapping) || dax_mapping(mapping))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 配置xas，以便在更新XArray节点时，同时更新工作集信息。</span></span><br><span class="line">	xas_set_update(&amp;xas, workingset_update_node);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 获取inode锁，保护inode元数据。</span></span><br><span class="line">	spin_lock(&amp;mapping-&gt;host-&gt;i_lock);</span><br><span class="line">	<span class="comment">// 获取XArray内部锁，并禁用中断，以安全地修改XArray树。</span></span><br><span class="line">	xas_lock_irq(&amp;xas);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 核心循环：从start到max，遍历XArray中的每一个条目。</span></span><br><span class="line">	xas_for_each(&amp;xas, folio, max) &#123;</span><br><span class="line">		<span class="comment">// 检查当前条目是否为值条目/影子条目。</span></span><br><span class="line">		<span class="keyword">if</span> (xa_is_value(folio))</span><br><span class="line">			<span class="comment">// 如果是，就将其替换为NULL，即删除该条目。</span></span><br><span class="line">			xas_store(&amp;xas, <span class="literal">NULL</span>);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 释放XArray锁和中断。</span></span><br><span class="line">	xas_unlock_irq(&amp;xas);</span><br><span class="line">	<span class="comment">// 如果这个inode是可收缩的（通常是的）...</span></span><br><span class="line">	<span class="keyword">if</span> (mapping_shrinkable(mapping))</span><br><span class="line">		<span class="comment">// ...将其添加到inode LRU链表中，以便在内存压力下可以被回收。</span></span><br><span class="line">		inode_add_lru(mapping-&gt;host);</span><br><span class="line">	<span class="comment">// 释放inode锁。</span></span><br><span class="line">	spin_unlock(&amp;mapping-&gt;host-&gt;i_lock);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="Folio驱逐核心：从页缓存中安全地移除一个干净页"><a href="#Folio驱逐核心：从页缓存中安全地移除一个干净页" class="headerlink" title="Folio驱逐核心：从页缓存中安全地移除一个干净页"></a>Folio驱逐核心：从页缓存中安全地移除一个干净页</h2><p>本代码片段定义了 <code>mapping_evict_folio</code> 函数，它是页缓存清理功能（如<code>invalidate_mapping_pages</code>）中负责<strong>决策和执行单个folio驱逐</strong>的核心工作者。其主要功能是进行一系列严格的<strong>安全检查</strong>，以确定一个folio当前是否处于“可安全驱逐”的状态。只有当所有条件都满足时，它才会真正地将该folio从文件的页缓存（<code>address_space</code>）中移除，并最终释放其内存。</p>
+<h3 id="实现原理分析-3"><a href="#实现原理分析-3" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p><code>mapping_evict_folio</code> 的实现是一个多阶段的<strong>过滤器（filter）</strong>，它会因为多种原因拒绝驱逐一个folio，以保证系统的正确性和数据一致性。</p>
+<ol>
+<li><p><strong>前提条件</strong>:</p>
+<ul>
+<li><strong>调用者负责锁定</strong>: 函数的文档明确指出，传入的<code>folio</code><strong>必须已经被调用者锁定</strong>。这是防止在检查<code>folio</code>状态的过程中，其状态被并发修改的关键前提。</li>
+<li><strong>Mapping存在性检查</strong>: <code>if (!mapping)</code>。在<code>folio</code>被锁定之前，它可能已经被截断（<code>truncate</code>）操作从<code>mapping</code>中移除了。这是一个必要的竞态条件检查。</li>
+</ul>
+</li>
+<li><p><strong>核心安全检查 (过滤条件)</strong>:</p>
+<ul>
+<li><strong>检查脏数据 (<code>folio_test_dirty</code>)</strong>: 如果folio是“脏”的（dirty），意味着它包含了尚未写回磁盘的数据。此时驱逐它会导致<strong>数据丢失</strong>，因此绝对禁止。</li>
+<li><strong>检查回写状态 (<code>folio_test_writeback</code>)</strong>: 如果folio正在被回写到磁盘的过程中，驱逐它会干扰I&#x2F;O操作，可能导致数据损坏。</li>
+<li><strong>检查引用计数 (<code>folio_ref_count</code>)</strong>: 这是最精妙的检查。<ul>
+<li>一个“空闲”的folio（仅存在于页缓存中）的基准引用计数是 <code>folio_nr_pages(folio)</code>（大型folio的每个子页都有一个引用） + <code>folio_has_private(folio)</code>（如果有关联的<code>buffer_head</code>，则加1） + <code>1</code>（来自<code>find_lock_entries</code>中<code>find_get_entry</code>的临时引用）。</li>
+<li>如果<code>folio_ref_count</code><strong>大于</strong>这个基准值，就意味着有<strong>其他内核子系统</strong>正在使用这个folio。最常见的情况是：<strong>该folio的某个页面被一个或多个用户进程的页表映射着</strong>（即<code>mmap</code>）。在这种情况下驱逐folio，会导致用户进程访问非法内存，引发段错误。</li>
+</ul>
+</li>
+<li><strong><code>filemap_release_folio</code></strong>: 这个函数尝试释放与folio关联的一些额外资源，主要是<code>buffer_head</code>。如果它返回<code>false</code>，意味着这些资源由于某种原因不能被释放，驱逐也必须中止。</li>
+</ul>
+</li>
+<li><p><strong>执行驱逐 (<code>remove_mapping</code>)</strong>:</p>
+<ul>
+<li>只有当一个folio<strong>通过了以上所有检查</strong>，即它是一个干净的、未被回写的、未被映射的、空闲的folio时，<code>mapping_evict_folio</code>才会调用<code>remove_mapping</code>。</li>
+<li><code>remove_mapping</code>（未在此处显示）是最终的执行者。它会原子地将该folio从<code>address_space</code>的XArray中移除，并调用<code>folio_put</code>来递减其引用计数。由于这个folio是空闲的，这次<code>folio_put</code>通常会导致其引用计数降为零，从而触发<code>__folio_put</code>函数，最终将物理内存返还给伙伴系统。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析-3"><a href="#代码分析-3" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * mapping_evict_folio() - 从页缓存中移除一个未使用的folio。</span></span><br><span class="line"><span class="comment"> * @mapping: 这个folio所属的address_space。</span></span><br><span class="line"><span class="comment"> * @folio: 要移除的folio。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 安全地从页缓存中移除一个folio。</span></span><br><span class="line"><span class="comment"> * 它只丢弃干净的、未使用的folio。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 上下文: Folio必须已被锁定。</span></span><br><span class="line"><span class="comment"> * 返回值: 成功移除的页面数量。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">long</span> <span class="title function_">mapping_evict_folio</span><span class="params">(<span class="keyword">struct</span> address_space *mapping, <span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 检查1: 文件是否在锁定folio之前被截断？如果是，mapping会是NULL。</span></span><br><span class="line">	<span class="keyword">if</span> (!mapping)</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	<span class="comment">// 检查2: folio是否是脏的或正在被回写？如果是，则不能驱逐，否则会丢失数据。</span></span><br><span class="line">	<span class="keyword">if</span> (folio_test_dirty(folio) || folio_test_writeback(folio))</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	<span class="comment">// 检查3: 引用计数是否过高？</span></span><br><span class="line">	<span class="comment">// 如果大于基准值，说明有其他用户（如用户进程的mmap），不能驱逐。</span></span><br><span class="line">	<span class="keyword">if</span> (folio_ref_count(folio) &gt;</span><br><span class="line">			folio_nr_pages(folio) + folio_has_private(folio) + <span class="number">1</span>)</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	<span class="comment">// 检查4: 尝试释放与folio关联的底层资源（如buffer_heads）。</span></span><br><span class="line">	<span class="comment">// 如果失败，则不能驱逐。</span></span><br><span class="line">	<span class="keyword">if</span> (!filemap_release_folio(folio, <span class="number">0</span>))</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 所有检查通过，调用核心函数将folio从mapping的XArray中移除。</span></span><br><span class="line">	<span class="keyword">return</span> remove_mapping(mapping, folio);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/5d2f0480/">https://wdfk-prog.space/posts/5d2f0480/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/mm/">mm</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/01.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/e8f76fed/" title="slub"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">slub</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;slub.c SLUB内存分配器(The SLUB Allocator) 现代内核对象缓存的核心历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及它所实现的SLUB分配器，是为了解决内核中一个基础且关键的性能问题：如何高效地分配和释放大量小的、固定大小的内存对象。  对抗内部碎片（Internal Fragmentation）：内核需要频繁创建大量的小对象（如inode, dentry, task_struct等），它们的大小通常远小于一个物理内存页（通常是4KB）。如果直接使用页分配器（Buddy System）来为这些小对象分配整个页，会造成巨大的内存浪费。例如，为一个128字节的对象分配一个4096字节的页，97%的内存就被浪费了。 提升分配性能：通用的内存分配器需要处理任意大小的请求，其算法相对复杂。而对于特定类型的对象，我们可以创建一个专用的“对象缓存池”。SLUB分配器就是这种缓存池的实现者。 利用对象构造&#x2F;析构：很多内核对象在首次使用时需要进行初始化。SLUB框架允许在创建缓存时指定一个“构造函数”（construc...</div></div></div></a><a class="pagination-related" href="/posts/25938561/" title="swap"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">swap</div></div><div class="info-2"><div class="info-item-1">  [TOC]  mm&#x2F;swap.c 交换机制(Swap Mechanism) 物理内存的虚拟扩展历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其实现的交换（Swap）机制，是为了解决一个自计算机诞生以来就存在的根本性限制：物理内存（RAM）的大小是有限的。  运行大于物理内存的程序：在早期，如果一个程序需要比机器拥有的RAM更多的内存，它根本无法运行。交换机制通过将内存中不常用的部分临时存放到磁盘上，从而“欺骗”程序，让它以为自己拥有一个远大于实际物理内存的地址空间。这使得运行大型应用程序成为可能。 同时运行更多的程序：即使每个程序都能装入内存，但同时运行多个程序可能会迅速耗尽RAM。交换机制允许内核将处于空闲或等待状态的进程的内存换出到磁盘，从而为当前活动的进程腾出宝贵的物理内存，提高系统的并发能力和整体吞吐量。 系统休眠（Hibernation）：为了实现休眠到磁盘（Suspend-to-Disk）功能，内核需要一个地方来存储整个系统内存的快照。交换空间（Swap Space）被自然地用作这个存储区域。  它的发展经历了哪些重要的里程碑或版本迭代？...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1"> [TOC] init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的 i...</div></div></div></a><a class="pagination-related" href="/posts/0/" title="workingset"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">workingset</div></div><div class="info-2"><div class="info-item-1">  [toc]  mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制历史与背景这项技术是为了解决什么特定问题而诞生的？mm/workingset.c 中的代码是为了解决传统页面回收算法（如vmscan.c中的两阶段LRU）的一个核心痛点：无法精确区分真正的“工作集”和短暂的、非核心的内存使用。 工作集（Working Set）指的是一个进程在当前阶段为了高效运行而需要频繁访问的内存页面集合。传统LRU算法通过active&#x2F;inactive链表来近似这个集合，但存在以下问题：  抖动（Thrashing）：当内存压力增大时，一个暂时不活动的进程（例如，用户切换到了另一个窗口），其工作集页面可能会被从active链表老化到inactive链表，并最终被回收。当用户切回该进程时，进程会遭遇大量的缺页中断（page faults），需要从磁盘或交换空间重新读取其工作集，导致系统响应缓慢，磁盘I&#x2F;O飙升。workingset.c 的核心目标就是识别并保护这些被错误回收的工作集页面，从而抑...</div></div></div></a><a class="pagination-related" href="/posts/e8ec9031/" title="vmscan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">vmscan</div></div><div class="info-2"><div class="info-item-1">   [toc]  mm&#x2F;vmscan.c 页面回收(Page Reclaim) 内核内存管理的核心压力调节器历史与背景这项技术是为了解决什么特定问题而诞生的？mm/vmscan.c 中的代码是为了解决计算机科学中最基本的问题之一：物理内存是一种有限资源。当系统运行的应用程序和内核本身需要的内存总量超过了可用的物理RAM时，操作系统必须有一种机制来释放一些当前已分配但“不那么重要”的内存，以便为新的、更紧迫的内存请求腾出空间。 如果没有页面回收机制，系统在内存耗尽时唯一的选择就是拒绝新的内存分配请求，这将导致应用程序崩溃或系统完全停止响应。vmscan.c 实现的页面回收（Page Reclaim）算法，其核心目标是在内存压力（Memory Pressure）下，智能地选择并回收内存页面，从而保证系统的持续运行和响应能力。 它的发展经历了哪些重要的里程碑或版本迭代？Linux的页面回收算法经历了重大的演进，以适应不断变化的硬件和工作负载：  早期的LRU：最初的Linux内核使用了相当简单的“最近最少使用”（Least Recently Used, LRU）算法。 两阶...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/e5a511c0/" title="mmzone"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">mmzone</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;vmscan.c lruvec 结构体 页面回收的核心数据结构lruvec 是 Linux 内核中用于管理 LRU（Least Recently Used，最近最少使用）页面列表的一个核心数据结构。它是内存管理子系统的一部分，定义于 mm/vmscan.c 相关头文件中，主要作用是在页面回收（Page Reclamation）过程中，对不同类型、不同状态的内存页面进行分组和跟踪，是内核决定回收哪些页面的关键依据。 历史与背景这项技术是为了解决什么特定问题而诞生的？lruvec 的诞生是为了解决在现代计算机体系结构下，如何高效、精确、可扩展地管理内存页面以供回收的问题。  区分页面类型：不同类型的内存页面回收成本和策略完全不同。例如，文件页（File-backed pages）如果内容未被修改（是干净的），可以直接丢弃，需要时再从磁盘读回；而匿名页（Anonymous pages，如进程堆栈、malloc分配的内存）则必须先交换到交换空间（Swap Area）才能释放，成本更高。lruvec 需要将它们分开管理。 近似LRU算法：真正的LRU算法要求跟踪...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-truncate-c-%E9%A1%B5%E9%9D%A2%E7%BC%93%E5%AD%98%E6%88%AA%E6%96%AD-Page-Cache-Truncation-%E6%96%87%E4%BB%B6%E5%A4%A7%E5%B0%8F%E5%8F%98%E6%9B%B4%E7%9A%84%E6%A0%B8%E5%BF%83%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86"><span class="toc-number">1.</span> <span class="toc-text">mm&#x2F;truncate.c 页面缓存截断(Page Cache Truncation) 文件大小变更的核心内存管理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E5%95%8F%E9%A1%8C%E8%80%8C%E8%AA%95%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定問題而誕生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8F%BE%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体現在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-pagevec-h-%E9%A1%B5%E9%9D%A2%E5%90%91%E9%87%8F-Page-Vector-%E9%AB%98%E6%95%88%E7%9A%84%E6%89%B9%E9%87%8F%E9%A1%B5%E9%9D%A2%E6%93%8D%E4%BD%9C%E5%B7%A5%E5%85%B7"><span class="toc-number">2.</span> <span class="toc-text">include&#x2F;linux&#x2F;pagevec.h 页面向量(Page Vector) 高效的批量页面操作工具</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF-1"><span class="toc-number">2.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">2.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F-1"><span class="toc-number">2.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F-1"><span class="toc-number">2.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1-1"><span class="toc-number">2.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F-1"><span class="toc-number">2.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8F%BE%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F-1"><span class="toc-number">2.0.2.2.</span> <span class="toc-text">它的主要优势体現在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F-1"><span class="toc-number">2.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF-1"><span class="toc-number">2.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F-1"><span class="toc-number">2.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F-1"><span class="toc-number">2.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">2.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">2.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Folio-Batch%EF%BC%9A%E5%88%86%E6%91%8A%E5%86%85%E5%AD%98%E6%93%8D%E4%BD%9C%E5%BC%80%E9%94%80%E7%9A%84%E5%9F%BA%E7%A1%80%E5%AE%B9%E5%99%A8"><span class="toc-number">2.1.</span> <span class="toc-text">Folio Batch：分摊内存操作开销的基础容器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">2.1.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">2.1.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-truncate-c"><span class="toc-number">3.</span> <span class="toc-text">mm&#x2F;truncate.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%A1%B5%E7%BC%93%E5%AD%98%E5%A4%B1%E6%95%88%EF%BC%9A%E4%BB%8E%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E4%B8%AD%E7%A7%BB%E9%99%A4%E5%B9%B2%E5%87%80%E7%9A%84%E7%BC%93%E5%AD%98%E9%A1%B5"><span class="toc-number">3.1.</span> <span class="toc-text">页缓存失效：从地址空间中移除干净的缓存页</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-1"><span class="toc-number">3.1.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-1"><span class="toc-number">3.1.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B8%85%E7%90%86%E5%BD%B1%E5%AD%90%E6%9D%A1%E7%9B%AE%EF%BC%9A%E7%BB%B4%E6%8A%A4%E9%A1%B5%E7%BC%93%E5%AD%98%EF%BC%88XArray%EF%BC%89%E7%9A%84%E4%B8%80%E8%87%B4%E6%80%A7"><span class="toc-number">3.2.</span> <span class="toc-text">清理影子条目：维护页缓存（XArray）的一致性</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-2"><span class="toc-number">3.2.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-2"><span class="toc-number">3.2.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Folio%E9%A9%B1%E9%80%90%E6%A0%B8%E5%BF%83%EF%BC%9A%E4%BB%8E%E9%A1%B5%E7%BC%93%E5%AD%98%E4%B8%AD%E5%AE%89%E5%85%A8%E5%9C%B0%E7%A7%BB%E9%99%A4%E4%B8%80%E4%B8%AA%E5%B9%B2%E5%87%80%E9%A1%B5"><span class="toc-number">3.3.</span> <span class="toc-text">Folio驱逐核心：从页缓存中安全地移除一个干净页</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-3"><span class="toc-number">3.3.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-3"><span class="toc-number">3.3.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/01.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'cd3ed6927b4ab2a7478b09836d70574c'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

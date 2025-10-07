@@ -1,0 +1,1354 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>mutex | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[toc] kernel&#x2F;locking&#x2F;mutex.c 互斥锁(Mutex) 内核中基本的睡眠锁实现历史与背景这项技术是为了解决什么特定问题而诞生的？kernel&#x2F;locking&#x2F;mutex.c 实现的互斥锁（Mutex，Mutual Exclusion）是为了解决多任务内核中一个最基础、最普遍的并发控制问题：如何确保一段代码（临界区）在任何时刻最多只能被一个执行绪（线程或进">
+<meta property="og:type" content="article">
+<meta property="og:title" content="mutex">
+<meta property="og:url" content="https://wdfk-prog.space/posts/eecdb22f/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[toc] kernel&#x2F;locking&#x2F;mutex.c 互斥锁(Mutex) 内核中基本的睡眠锁实现历史与背景这项技术是为了解决什么特定问题而诞生的？kernel&#x2F;locking&#x2F;mutex.c 实现的互斥锁（Mutex，Mutual Exclusion）是为了解决多任务内核中一个最基础、最普遍的并发控制问题：如何确保一段代码（临界区）在任何时刻最多只能被一个执行绪（线程或进">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/01.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:29.198Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="kernel">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="lock">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/01.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "mutex",
+  "url": "https://wdfk-prog.space/posts/eecdb22f/",
+  "image": "https://wdfk-prog.space/images/covers/01.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:29.198Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/eecdb22f/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'mutex',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/01.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">mutex</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">mutex<a class="post-edit-link" href="null_posts/linux/kernel/lock/mutex.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:29.198Z" title="更新于 2025-10-03 17:23:29">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/">kernel</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/kernel/lock/">lock</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">10.5k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>35分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/eecdb22f/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:29&quot;}" hidden></div><p>[toc]</p>
+<h1 id="kernel-locking-mutex-c-互斥锁-Mutex-内核中基本的睡眠锁实现"><a href="#kernel-locking-mutex-c-互斥锁-Mutex-内核中基本的睡眠锁实现" class="headerlink" title="kernel&#x2F;locking&#x2F;mutex.c 互斥锁(Mutex) 内核中基本的睡眠锁实现"></a>kernel&#x2F;locking&#x2F;mutex.c 互斥锁(Mutex) 内核中基本的睡眠锁实现</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p><code>kernel/locking/mutex.c</code> 实现的互斥锁（Mutex，Mutual Exclusion）是为了解决多任务内核中一个最基础、最普遍的并发控制问题：<strong>如何确保一段代码（临界区）在任何时刻最多只能被一个执行绪（线程或进程）执行，从而保护共享数据的完整性</strong>。</p>
+<p>在没有互斥机制的情况下，如果多个CPU上的任务同时访问和修改同一个共享数据（如一个链表），就会导致数据损坏、状态不一致、内存泄漏等各种灾难性的后果。</p>
+<p><code>mutex</code>被设计为一种<strong>睡眠锁（Sleeping Lock）</strong>，专门用于解决**进程上下文（Process Context）**中的互斥问题。它的诞生是为了与另一种锁——**自旋锁（Spinlock）**形成互补：</p>
+<ul>
+<li><strong>自旋锁</strong>适用于中断上下文或保护极短的、不容许睡眠的临界区。获取不到锁的任务会“自旋”（忙等待），浪费CPU。</li>
+<li>如果临界区比较长，或者在临界区内需要调用可能导致睡眠的函数（如<code>kmalloc(GFP_KERNEL)</code>、<code>copy_from_user</code>、等待I&#x2F;O），使用自旋锁会造成长时间的CPU空转，甚至因在持有自旋锁时睡眠而导致系统死锁。</li>
+</ul>
+<p><code>mutex</code>正是为了这种<strong>临界区可睡眠</strong>的场景而设计的。当一个任务试图获取一个已经被占用的<code>mutex</code>时，它不会忙等待，而是会被加入到一个等待队列中并<strong>进入睡眠状态</strong>，将CPU让给其他任务。</p>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p>Linux内核的<code>mutex</code>实现经过了多次重要的优化演进：</p>
+<ul>
+<li><strong>从信号量（Semaphore）演变而来</strong>：在<code>mutex</code>正式出现之前，内核使用计数为1的信号量来模拟互斥锁。但信号量是一个更通用的同步原语，其实现比专门的互斥锁要复杂和低效。</li>
+<li><strong>通用<code>mutex</code>子系统的建立</strong>：一个重要的里程碑是创建一个独立的、高度优化的<code>mutex</code>子系统。它提供了<code>mutex_init</code>, <code>mutex_lock</code>, <code>mutex_unlock</code>等清晰的API。</li>
+<li><strong>性能优化——快速路径（Fastpath）</strong>：现代<code>mutex</code>的实现核心是其性能优化。它区分了<strong>快速路径</strong>和<strong>慢速路径</strong>。<ul>
+<li><strong>快速路径</strong>：用于无竞争或低竞争的场景。通过一次原子的比较并交换（Compare-and-Swap）操作就能成功获取或释放锁，几乎没有额外开销。</li>
+<li><strong>慢速路径</strong>：当锁存在竞争时，代码会跳转到慢速路径。在这里，任务会被加入等待队列并进入睡眠。</li>
+</ul>
+</li>
+<li><strong>公平性与优化</strong>：引入了不同的实现变体，如公平锁（确保等待者按顺序获取锁）和为了性能而进行优化的非公平锁。</li>
+<li><strong>调试支持（<code>CONFIG_DEBUG_MUTEXES</code>）</strong>：增加了强大的调试功能，如死锁检测、锁所有权检查、在中断上下文中使用<code>mutex</code>的错误检测等，极大地帮助了内核开发者发现和修复锁相关的bug。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p><code>mutex</code>是Linux内核中最基础、最广泛使用的同步原语之一。其代码非常核心和稳定。社区的活跃度主要集中在：</p>
+<ul>
+<li>对锁的性能进行持续的微调和优化，以适应新的处理器架构和工作负载。</li>
+<li>增强其调试功能。</li>
+</ul>
+<p><code>mutex</code>被内核中几乎<strong>所有可以睡眠的、需要进行互斥访问的场景</strong>所使用，特别是：</p>
+<ul>
+<li><strong>设备驱动程序</strong>：用于保护设备的状态数据结构，防止来自<code>open</code>, <code>read</code>, <code>write</code>, <code>ioctl</code>等系统调用的并发访问。</li>
+<li><strong>文件系统</strong>：用于保护inode、superblock等核心数据结构。</li>
+<li><strong>内核核心子系统</strong>：在各种需要保护可睡眠路径中的共享数据时使用。</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p>现代Linux <code>mutex</code>的核心是一个<strong>原子计数器</strong>、一个<strong>自旋锁</strong>和一个<strong>等待队列</strong>的巧妙结合。</p>
+<ol>
+<li><p><strong>数据结构 (<code>struct mutex</code>)</strong>：</p>
+<ul>
+<li><code>owner</code>: 一个原子变量（<code>atomic_long_t</code>），用于存储持有锁的<code>task_struct</code>的指针。它同时也被用来编码锁的状态（是否被锁定）。</li>
+<li><code>wait_lock</code>: 一个<code>raw_spinlock_t</code>，用于保护等待队列本身，确保并发地加入&#x2F;移出等待队列的操作是安全的。</li>
+<li><code>wait_list</code>: 一个链表头，即等待队列。</li>
+</ul>
+</li>
+<li><p><strong>加锁 (<code>mutex_lock</code>) 的流程</strong>：</p>
+<ul>
+<li><strong>快速路径</strong>：首先，它会尝试一次原子的<code>cmpxchg</code>（比较并交换）操作。如果<code>owner</code>字段是<code>NULL</code>（表示锁未被持有），就原子地将其设置为当前任务的指针。如果这个操作成功，锁就获取到了，函数立即返回。这是无竞争下的情况，非常快。</li>
+<li><strong>慢速路径</strong>：如果快速路径失败（说明锁已被其他任务持有），代码会跳转到一个更复杂的函数（<code>__mutex_lock_slowpath</code>）。<ul>
+<li>获取<code>wait_lock</code>自旋锁。</li>
+<li>将当前任务添加到一个等待队列（<code>wait_list</code>）中。</li>
+<li>释放<code>wait_lock</code>自旋锁。</li>
+<li>在一个循环中，将当前任务的状态设置为<code>TASK_UNINTERRUPTIBLE</code>，然后调用<code>schedule()</code>进入睡眠。</li>
+<li>当被唤醒后，循环会检查自己是否成为了新的<code>owner</code>，如果是，则退出循环。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><strong>解锁 (<code>mutex_unlock</code>) 的流程</strong>：</p>
+<ul>
+<li><strong>快速路径</strong>：它会尝试一次原子的<code>cmpxchg</code>操作，将<code>owner</code>字段从当前任务的指针原子地设置为<code>NULL</code>。如果成功（这意味着没有其他任务在等待队列中），函数立即返回。</li>
+<li><strong>慢速路径</strong>：如果快速路径失败（通常意味着<code>owner</code>字段被设置了特殊标志，表明有等待者），代码会跳转到<code>__mutex_unlock_slowpath</code>。<ul>
+<li>获取<code>wait_lock</code>自旋锁。</li>
+<li>从等待队列中取出一个等待者。</li>
+<li>将这个等待者的任务指针设置为锁的新<code>owner</code>。</li>
+<li>调用<code>wake_up_process()</code>唤醒这个等待者。</li>
+<li>释放<code>wait_lock</code>自旋锁。</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>高效性</strong>：在无竞争或低竞争的情况下，通过原子操作实现的快速路径开销极低。在有竞争的情况下，通过让任务睡眠来避免CPU资源的浪费。</li>
+<li><strong>安全性</strong>：提供了严格的“一个所有者”语义。只有持有锁的任务才能释放它。</li>
+<li><strong>强大的调试支持</strong>：内核的调试选项可以帮助发现大量的常见锁使用错误。</li>
+<li><strong>简单易用的API</strong>：<code>mutex_lock/unlock</code>的接口非常直观。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>不能在中断上下文中使用</strong>：这是<code>mutex</code>最根本的限制。中断上下文不能睡眠，而<code>mutex</code>在有竞争时会导致睡眠。在中断上下文（硬中断、软中断、tasklet等）中尝试获取<code>mutex</code>会触发内核错误。</li>
+<li><strong>性能开销</strong>：虽然经过高度优化，但在高竞争下，进入慢速路径、进行上下文切换的开销仍然远大于自旋锁。</li>
+<li><strong>只支持单一所有者</strong>：它不能像读写锁那样允许多个读者并发访问。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p><code>mutex</code>是<strong>进程上下文</strong>中进行互斥保护的<strong>默认和首选</strong>工具，特别是当：</p>
+<ul>
+<li><strong>临界区内可能睡眠</strong>：这是使用<code>mutex</code>而非<code>spinlock</code>的决定性因素。例如，驱动的<code>ioctl</code>处理函数中需要调用<code>copy_from_user()</code>，这个函数可能会因为缺页异常而睡眠。</li>
+<li><strong>临界区执行时间较长</strong>：即使临界区内不睡眠，但如果执行时间超过几个微秒，使用<code>mutex</code>也比<code>spinlock</code>更合适，因为它避免了其他CPU长时间的自旋等待。</li>
+<li><strong>保护的数据结构被用户上下文访问</strong>：所有通过系统调用进入的内核路径都属于进程上下文，因此在这些路径中保护共享数据，<code>mutex</code>是标准选择。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>中断上下文</strong>：绝对禁止。必须使用<code>spinlock</code>。</li>
+<li><strong>需要保护极短的、不睡眠的临界区</strong>：如果临界区非常短（例如，只是修改几个整数），即使在进程上下文中，使用<code>spinlock</code>也可能比<code>mutex</code>更快，因为它避免了进入慢速路径的函数调用开销。</li>
+<li><strong>需要允许多个读者并发访问</strong>：在这种“读多写少”的场景下，应该使用<code>rw_lock</code>（读写锁）或<code>seqlock</code>来获得更好的性能。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">互斥锁 (Mutex)</th>
+<th align="left">自旋锁 (Spinlock)</th>
+<th align="left">读写锁 (RW_Lock)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>基本行为</strong></td>
+<td align="left"><strong>睡眠</strong> (放弃CPU)。</td>
+<td align="left"><strong>自旋</strong> (忙等待，占用CPU)。</td>
+<td align="left"><strong>睡眠或自旋</strong> (取决于实现和竞争方)。</td>
+</tr>
+<tr>
+<td align="left"><strong>使用上下文</strong></td>
+<td align="left"><strong>进程上下文</strong> (可以睡眠)。</td>
+<td align="left"><strong>任何上下文</strong> (中断、进程)。</td>
+<td align="left">进程上下文 (读写信号量) 或 任何上下文 (读写自旋锁)。</td>
+</tr>
+<tr>
+<td align="left"><strong>保护粒度</strong></td>
+<td align="left"><strong>完全互斥</strong>。任何时候只有一个持有者。</td>
+<td align="left"><strong>完全互斥</strong>。</td>
+<td align="left"><strong>读者共享，写者互斥</strong>。允许多个读者或一个写者。</td>
+</tr>
+<tr>
+<td align="left"><strong>临界区约束</strong></td>
+<td align="left"><strong>可以睡眠</strong>，可以较长。</td>
+<td align="left"><strong>绝对不能睡眠</strong>，必须极短。</td>
+<td align="left">读者不能阻塞写者太久。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能(无竞争)</strong></td>
+<td align="left">非常高 (快速路径)。</td>
+<td align="left">非常高 (原子操作)。</td>
+<td align="left">非常高。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能(有竞争)</strong></td>
+<td align="left">中等 (上下文切换开销)。</td>
+<td align="left">低 (CPU空转浪费资源)。</td>
+<td align="left">取决于读写比例。</td>
+</tr>
+<tr>
+<td align="left"><strong>死锁风险</strong></td>
+<td align="left">相对较低 (调试机制可检测)。</td>
+<td align="left">较高 (在中断中获取已持有的锁会立即死锁)。</td>
+<td align="left">与<code>mutex</code>&#x2F;<code>spinlock</code>类似。</td>
+</tr>
+<tr>
+<td align="left"><strong>典型场景</strong></td>
+<td align="left">驱动<code>ioctl</code>，文件系统操作。</td>
+<td align="left">中断处理程序，调度器内部。</td>
+<td align="left">保护频繁被读、偶尔被写的配置数据。</td>
+</tr>
+</tbody></table>
+<h1 id="include-linux-mutex-types-h"><a href="#include-linux-mutex-types-h" class="headerlink" title="include&#x2F;linux&#x2F;mutex_types.h"></a>include&#x2F;linux&#x2F;mutex_types.h</h1><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 具有严格语义的简单、直接的互斥锁：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * - 一次只有一个任务可以持有互斥锁</span></span><br><span class="line"><span class="comment"> * - 只有所有者可以解锁互斥锁</span></span><br><span class="line"><span class="comment"> * - 不允许多次解锁</span></span><br><span class="line"><span class="comment"> * - 不允许递归锁定</span></span><br><span class="line"><span class="comment"> * - 互斥锁对象必须通过 API 初始化</span></span><br><span class="line"><span class="comment"> * - 互斥锁对象不得通过 memset 或复制进行初始化</span></span><br><span class="line"><span class="comment"> * - 任务不能在持有互斥锁的情况下退出</span></span><br><span class="line"><span class="comment"> * - 不得释放持有的锁所在的内存区域</span></span><br><span class="line"><span class="comment"> * - 持有的互斥锁不得重新初始化</span></span><br><span class="line"><span class="comment"> * - 互斥锁不能用于硬件或软件中断上下文，例如 tasklet 和 timers</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 启用 DEBUG_MUTEXES 时，将完全强制实施这些语义。此外，除了强制执行上述规则外，互斥锁调试代码还实现了许多附加功能，使锁调试更容易、更快捷：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * - 每当互斥锁在调试输出中打印时，都使用互斥锁的符号名称</span></span><br><span class="line"><span class="comment"> * - 获取点跟踪，函数名称的符号查找</span></span><br><span class="line"><span class="comment"> * - 系统中持有的所有锁的列表，它们的打印输出</span></span><br><span class="line"><span class="comment"> * - 所有者跟踪</span></span><br><span class="line"><span class="comment"> * - 检测自递归锁并打印出所有相关信息</span></span><br><span class="line"><span class="comment"> * - 检测多任务循环死锁并打印出所有受影响的锁和任务（并且只打印那些任务）</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">mutex</span> &#123;</span></span><br><span class="line">	<span class="type">atomic_long_t</span>		owner;</span><br><span class="line">	<span class="type">raw_spinlock_t</span>		wait_lock;</span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_MUTEX_SPIN_ON_OWNER</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">optimistic_spin_queue</span> <span class="title">osq</span>;</span> <span class="comment">/* Spinner MCS lock */</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">wait_list</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_DEBUG_MUTEXES</span></span><br><span class="line">	<span class="type">void</span>			*magic;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_DEBUG_LOCK_ALLOC</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">lockdep_map</span>	<span class="title">dep_map</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h1 id="include-linux-mutex-h"><a href="#include-linux-mutex-h" class="headerlink" title="include&#x2F;linux&#x2F;mutex.h"></a>include&#x2F;linux&#x2F;mutex.h</h1><h2 id="DEFINE-MUTEX"><a href="#DEFINE-MUTEX" class="headerlink" title="DEFINE_MUTEX"></a>DEFINE_MUTEX</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> __MUTEX_INITIALIZER(lockname) \</span></span><br><span class="line"><span class="meta">		&#123; .owner = ATOMIC_LONG_INIT(0) \</span></span><br><span class="line"><span class="meta">		, .wait_lock = __RAW_SPIN_LOCK_UNLOCKED(lockname.wait_lock) \</span></span><br><span class="line"><span class="meta">		, .wait_list = LIST_HEAD_INIT(lockname.wait_list) \</span></span><br><span class="line"><span class="meta">		__DEBUG_MUTEX_INITIALIZER(lockname) \</span></span><br><span class="line"><span class="meta">		__DEP_MAP_MUTEX_INITIALIZER(lockname) &#125;</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> DEFINE_MUTEX(mutexname) \</span></span><br><span class="line"><span class="meta">	struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="mutex-init"><a href="#mutex-init" class="headerlink" title="mutex_init"></a>mutex_init</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * mutex_init - 初始化互斥锁</span></span><br><span class="line"><span class="comment"> * @mutex：需要初始化的互斥锁</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 将互斥锁初始化为解锁状态。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 不允许初始化已锁定的互斥锁。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> mutex_init(mutex)						\</span></span><br><span class="line"><span class="meta">do &#123;									\</span></span><br><span class="line"><span class="meta">	static struct lock_class_key __key;				\</span></span><br><span class="line"><span class="meta">									\</span></span><br><span class="line"><span class="meta">	__mutex_init((mutex), #mutex, &amp;__key);				\</span></span><br><span class="line"><span class="meta">&#125; while (0)</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-locking-mutex-c"><a href="#kernel-locking-mutex-c" class="headerlink" title="kernel&#x2F;locking&#x2F;mutex.c"></a>kernel&#x2F;locking&#x2F;mutex.c</h1><h2 id="mutex-trylock-fast-mutex-unlock-fast"><a href="#mutex-trylock-fast-mutex-unlock-fast" class="headerlink" title="__mutex_trylock_fast __mutex_unlock_fast"></a>__mutex_trylock_fast __mutex_unlock_fast</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">ifndef</span> CONFIG_DEBUG_LOCK_ALLOC</span></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Lockdep annotations are contained to the slow paths for simplicity.</span></span><br><span class="line"><span class="comment"> * There is nothing that would stop spreading the lockdep annotations outwards</span></span><br><span class="line"><span class="comment"> * except more code.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Optimistic trylock that only works in the uncontended case. Make sure to</span></span><br><span class="line"><span class="comment"> * follow with a __mutex_trylock() before failing.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> __always_inline <span class="type">bool</span> __mutex_trylock_fast(<span class="keyword">struct</span> mutex *lock)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> curr = (<span class="type">unsigned</span> <span class="type">long</span>)current;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> zero = <span class="number">0UL</span>;</span><br><span class="line"></span><br><span class="line">	MUTEX_WARN_ON(lock-&gt;magic != lock);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (atomic_long_try_cmpxchg_acquire(&amp;lock-&gt;owner, &amp;zero, curr))</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> __always_inline <span class="type">bool</span> __mutex_unlock_fast(<span class="keyword">struct</span> mutex *lock)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> curr = (<span class="type">unsigned</span> <span class="type">long</span>)current;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> atomic_long_try_cmpxchg_release(&amp;lock-&gt;owner, &amp;curr, <span class="number">0UL</span>);</span><br><span class="line">&#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<h2 id="mutex-lock"><a href="#mutex-lock" class="headerlink" title="mutex_lock"></a>mutex_lock</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * mutex_lock - 获取互斥锁</span></span><br><span class="line"><span class="comment"> * @lock：需要获取的互斥量</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 专门为此任务锁定互斥锁。如果互斥锁现在不可用，它将休眠，直到可以获取它。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 互斥锁稍后必须由获取它的同一任务释放。不允许递归锁定。如果不先解锁互斥锁，任务可能无法退出。此外，在互斥锁仍处于锁定状态的情况下，不得释放互斥锁所在的内核内存。必须先初始化 （或静态定义） mutex ，然后才能锁定它。memset（）将互斥锁设置为 0 是不允许的。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * （CONFIG_DEBUG_MUTEXES .config 选项打开调试检查，这些检查将强制实施限制，并且还将执行死锁调试）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 此函数类似于（但不等效于）down（）。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> __sched <span class="title function_">mutex_lock</span><span class="params">(<span class="keyword">struct</span> mutex *lock)</span></span><br><span class="line">&#123;</span><br><span class="line">	might_sleep();</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!__mutex_trylock_fast(lock))</span><br><span class="line">		__mutex_lock_slowpath(lock);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(mutex_lock);</span><br></pre></td></tr></table></figure>
+
+<h2 id="mutex-unlock"><a href="#mutex-unlock" class="headerlink" title="mutex_unlock"></a>mutex_unlock</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * mutex_unlock - 释放互斥锁</span></span><br><span class="line"><span class="comment"> * @lock：需要释放的互斥锁</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 解锁之前被此任务锁定的互斥锁。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 此函数不得在中断上下文中使用。不允许解锁未锁定的互斥锁。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 调用方必须确保互斥锁在此函数返回之前保持活动状态 - mutex_unlock（） 不能直接用于释放对象，以便另一个并发任务可以释放它。在这个方面，互斥锁与自旋锁和引用计数不同。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 此函数类似于（但不等效于）up（）。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> __sched <span class="title function_">mutex_unlock</span><span class="params">(<span class="keyword">struct</span> mutex *lock)</span></span><br><span class="line">&#123;</span><br><span class="line"><span class="meta">#<span class="keyword">ifndef</span> CONFIG_DEBUG_LOCK_ALLOC</span></span><br><span class="line">	<span class="keyword">if</span> (__mutex_unlock_fast(lock))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">	__mutex_unlock_slowpath(lock, _RET_IP_);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(mutex_unlock);</span><br></pre></td></tr></table></figure>
+
+<h2 id="mutex-init-1"><a href="#mutex-init-1" class="headerlink" title="__mutex_init"></a>__mutex_init</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span></span><br><span class="line">__mutex_init(<span class="keyword">struct</span> mutex *lock, <span class="type">const</span> <span class="type">char</span> *name, <span class="keyword">struct</span> lock_class_key *key)</span><br><span class="line">&#123;</span><br><span class="line">	atomic_long_set(&amp;lock-&gt;owner, <span class="number">0</span>);</span><br><span class="line">	raw_spin_lock_init(&amp;lock-&gt;wait_lock);</span><br><span class="line">	INIT_LIST_HEAD(&amp;lock-&gt;wait_list);</span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_MUTEX_SPIN_ON_OWNER</span></span><br><span class="line">	osq_lock_init(&amp;lock-&gt;osq);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">	debug_mutex_init(lock, name, key);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(__mutex_init);</span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-locking-rtmutex-c-实时互斥锁-Real-Time-Mutex-支持优先级继承的内核锁"><a href="#kernel-locking-rtmutex-c-实时互斥锁-Real-Time-Mutex-支持优先级继承的内核锁" class="headerlink" title="kernel&#x2F;locking&#x2F;rtmutex.c 实时互斥锁(Real-Time Mutex) 支持优先级继承的内核锁"></a>kernel&#x2F;locking&#x2F;rtmutex.c 实时互斥锁(Real-Time Mutex) 支持优先级继承的内核锁</h1><h3 id="历史与背景-1"><a href="#历史与背景-1" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？-1"><a href="#这项技术是为了解决什么特定问题而诞生的？-1" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p><code>kernel/locking/rtmutex.c</code> 实现的实时互斥锁（RT-Mutex）是为了解决在<strong>实时（Real-Time）系统</strong>中，标准<code>mutex</code>所面临的一个致命问题：<strong>无界优先级反转（Unbounded Priority Inversion）</strong>。</p>
+<p><strong>优先级反转</strong>是一个经典的多任务调度问题：</p>
+<ol>
+<li>一个<strong>低优先级</strong>任务（L）获取了一个<code>mutex</code>锁。</li>
+<li>一个<strong>高优先级</strong>任务（H）试图获取同一个锁，但因为锁被L持有，H被迫进入睡眠等待。</li>
+<li>此时，一个<strong>中优先级</strong>任务（M）就绪并开始运行。由于M的优先级高于L，它会抢占L。</li>
+<li><strong>结果</strong>：高优先级任务H不仅要等待低优先级任务L释放锁，还要等待与该锁完全无关的中优先级任务M执行完毕。H的等待时间变得不可预测，取决于M的执行时间，这就是“无界优先级反转”。</li>
+</ol>
+<p>在通用操作系统中，这可能只会导致性能下降。但在硬实时系统中（如航空、工业控制），任务必须在严格的截止时间（Deadline）内完成，无界的优先级反转是不可接受的。</p>
+<p><code>rtmutex</code>通过实现**优先级继承协议（Priority Inheritance Protocol）**来解决这个问题：</p>
+<ul>
+<li>当高优先级任务H因等待低优先级任务L持有的锁而阻塞时，系统会<strong>临时地将L的优先级提升到与H相同</strong>。</li>
+<li>这样，中优先级任务M就无法再抢占L了。</li>
+<li>L会以高优先级继续执行，尽快完成临界区并释放锁。</li>
+<li>一旦L释放锁，它的优先级会恢复到原来的水平，而H则可以立即获取锁并继续执行。</li>
+</ul>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？-1"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？-1" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p>RT-Mutex的引入是Linux内核向实时化演进的一个关键里程碑，与<code>PREEMPT_RT</code>（实时抢占）补丁集的整合过程紧密相关。</p>
+<ul>
+<li><strong>作为<code>PREEMPT_RT</code>的核心组件</strong>：RT-Mutex最初是在Ingo Molnar领导的<code>PREEMPT_RT</code>补丁集中被开发和完善的。它是将Linux从一个通用系统转变为一个功能齐全的实时操作系统的核心技术之一。</li>
+<li><strong>逐渐并入主线内核</strong>：随着<code>PREEMPT_RT</code>的成熟，其核心组件被逐步合并到主线内核中。<code>rtmutex.c</code>的并入使得主线内核也具备了支持优先级继承的能力，尽管默认情况下可能并未对所有<code>mutex</code>启用。</li>
+<li><strong>替换标准<code>mutex</code></strong>：在完全启用<code>PREEMPT_RT</code>的内核配置中，<code>rtmutex</code>的实现会<strong>完全取代</strong>标准的<code>mutex</code>实现。这意味着，当<code>CONFIG_PREEMPT_RT</code>被选中时，内核中所有的<code>mutex_lock()</code>调用实际上都会路由到<code>rtmutex</code>的加锁逻辑。</li>
+<li><strong>PI-Futex</strong>：将优先级继承的能力扩展到了用户空间，通过<code>FUTEX_LOCK_PI</code>等操作，使得用户空间的多线程程序也能利用内核的<code>rtmutex</code>机制来避免优先级反-转。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？-1"><a href="#目前该技术的社区活跃度和主流应用情况如何？-1" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p><code>rtmutex.c</code>是Linux实时内核的核心，其代码非常稳定和关键。社区的活动主要由实时Linux社区驱动，集中在：</p>
+<ul>
+<li>确保其在各种复杂场景下的正确性和性能。</li>
+<li>修复与优先级继承相关的、非常微妙的边界情况bug。</li>
+<li>持续将其与主线内核的最新变化进行同步和整合。</li>
+</ul>
+<p><code>rtmutex</code>是所有需要确定性（deterministic）行为的Linux系统的基础，被广泛应用于：</p>
+<ul>
+<li><strong>工业自动化和机器人</strong></li>
+<li><strong>电信基础设施</strong></li>
+<li><strong>航空航天和汽车电子（特别是自动驾驶）</strong></li>
+<li><strong>专业音频和视频处理</strong></li>
+</ul>
+<h3 id="核心原理与设计-1"><a href="#核心原理与设计-1" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？-1"><a href="#它的核心工作原理是什么？-1" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p><code>rtmutex</code>的核心是在标准<code>mutex</code>的“睡眠-唤醒”机制之上，增加了一套复杂的<strong>优先级跟踪和动态调整</strong>逻辑。</p>
+<ol>
+<li><p><strong>数据结构 (<code>struct rt_mutex</code>)</strong>：</p>
+<ul>
+<li><code>owner</code>: 不再只是一个简单的指针，而是一个经过编码的字段，包含了任务指针和一些状态位。</li>
+<li><code>wait_lock</code>: 同样是一个<code>raw_spinlock_t</code>，用于保护等待队列。</li>
+<li><strong><code>wait_list</code></strong>: 这是关键区别。它不再是一个简单的链表，而是一个<strong>按任务优先级排序的红黑树（Red-Black Tree）</strong>。这使得查找最高优先级的等待者等操作非常高效。</li>
+</ul>
+</li>
+<li><p><strong>加锁 (<code>rt_mutex_lock</code>) 的流程</strong>：</p>
+<ul>
+<li><strong>快速路径</strong>：与标准<code>mutex</code>类似，尝试一次原子的<code>cmpxchg</code>来获取锁。</li>
+<li><strong>慢速路径（有竞争时）</strong>：<ul>
+<li>进入慢速路径处理函数 (<code>rt_mutex_slowlock</code>)。</li>
+<li><strong>优先级继承</strong>：这是核心。函数会检查当前锁的持有者（owner）的优先级是否低于当前任务（waiter）的优先级。如果是，它会启动一个<strong>优先级提升（boosting）<strong>的过程，将owner的优先级临时提升到与waiter相同。这个过程可能是递归的，如果owner也在等待另一个锁，优先级提升会沿着这个“等待链”传播下去，这被称为</strong>死锁检测与处理</strong>的一部分。</li>
+<li><strong>加入等待树</strong>：将当前任务插入到<code>wait_list</code>这个按优先级排序的红黑树中。</li>
+<li><strong>睡眠</strong>：将当前任务设置为睡眠状态并调用<code>schedule()</code>。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><strong>解锁 (<code>rt_mutex_unlock</code>) 的流程</strong>：</p>
+<ul>
+<li><strong>慢速路径 (<code>rt_mutex_slowunlock</code>)</strong>：<ul>
+<li><strong>恢复优先级</strong>：首先，检查当前任务（即将释放锁的owner）是否被提升了优先级。如果是，需要将其优先级恢复到原来的水平。这个过程同样复杂，需要考虑它是否还在等待其他锁。</li>
+<li><strong>选择下一个所有者</strong>：从<code>wait_list</code>红黑树中<strong>找到并移除优先级最高的</strong>那个等待任务。</li>
+<li><strong>交接所有权</strong>：将锁的<code>owner</code>设置为这个新的最高优先级任务。</li>
+<li><strong>唤醒</strong>：唤醒这个新owner。</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？-1"><a href="#它的主要优势体现在哪些方面？-1" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>解决优先级反转</strong>：这是其最核心的优势，为实时任务提供了可预测的执行时间保证。</li>
+<li><strong>死锁检测</strong>：其复杂的等待链跟踪机制，天然地集成了一个运行时的死锁检测器。如果加锁操作形成了一个依赖环路，<code>rt_mutex_lock</code>会检测到并返回<code>-EDEADLK</code>错误。</li>
+<li><strong>性能</strong>：尽管比标准<code>mutex</code>复杂，但其实现经过高度优化，在无竞争时性能与标准<code>mutex</code>相当。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？-1"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？-1" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>复杂性</strong>：<code>rtmutex</code>的实现非常复杂，理解其完整的优先级继承和死锁检测逻辑需要深入的专业知识。</li>
+<li><strong>开销</strong>：在有竞争的情况下，维护优先级排序的红黑树、执行优先级提升&#x2F;恢复等操作，其开销比标准<code>mutex</code>的慢速路径要高。</li>
+<li><strong>与<code>PREEMPT_RT</code>的强关联</strong>：虽然主线内核中存在<code>rtmutex</code>的代码，但其全部威力只有在完全的<code>PREEMPT_RT</code>配置下才能发挥（例如，将自旋锁也替换为可抢占的睡眠锁）。</li>
+</ul>
+<h3 id="使用场景-1"><a href="#使用场景-1" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？-1"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？-1" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p><code>rtmutex</code>是<strong>任何需要实时确定性</strong>的内核同步场景下的<strong>唯一正确选择</strong>。</p>
+<ul>
+<li><strong><code>PREEMPT_RT</code>内核</strong>：在配置了<code>PREEMPT_RT</code>的内核中，它就是标准的<code>mutex</code>，被用于所有需要睡眠锁的地方。</li>
+<li><strong>PI-Futex</strong>：用户空间实时应用程序通过<code>FUTEX_LOCK_PI</code>来利用内核的<code>rtmutex</code>，以避免用户空间线程间的优先级反转。这是构建用户空间实时同步原语（如实时<code>pthread_mutex</code>）的基础。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？-1"><a href="#是否有不推荐使用该技术的场景？为什么？-1" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>非实时通用系统</strong>：在标准的、非实时的Linux内核配置中，没有必要刻意去使用<code>rtmutex</code>的API（除非是为了实现PI-Futex）。标准的<code>mutex</code>实现更简单、在竞争下的开销略低，并且已经能满足通用系统的需求。</li>
+<li><strong>中断上下文</strong>：与标准<code>mutex</code>一样，<code>rtmutex</code>是睡眠锁，<strong>绝对不能</strong>在中断上下文中使用。</li>
+</ul>
+<h3 id="对比分析-1"><a href="#对比分析-1" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-标准mutex进行详细对比。"><a href="#请将其-与-标准mutex进行详细对比。" class="headerlink" title="请将其 与 标准mutex进行详细对比。"></a>请将其 与 标准<code>mutex</code>进行详细对比。</h4><table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">实时互斥锁 (RT-Mutex)</th>
+<th align="left">标准互斥锁 (Mutex)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>核心功能</strong></td>
+<td align="left"><strong>优先级继承</strong>，解决优先级反转。</td>
+<td align="left">提供基本的互斥访问。</td>
+</tr>
+<tr>
+<td align="left"><strong>等待队列</strong></td>
+<td align="left"><strong>按优先级排序的红黑树</strong>。</td>
+<td align="left"><strong>简单的FIFO链表</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能(无竞争)</strong></td>
+<td align="left">非常高 (快速路径)，与标准<code>mutex</code>几乎相同。</td>
+<td align="left">非常高 (快速路径)。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能(有竞争)</strong></td>
+<td align="left">较高，但有维护红黑树和优先级调整的额外开销。</td>
+<td align="left">较高，但慢速路径逻辑比<code>rtmutex</code>简单。</td>
+</tr>
+<tr>
+<td align="left"><strong>死锁检测</strong></td>
+<td align="left"><strong>是</strong>，内置于优先级继承的等待链跟踪中。</td>
+<td align="left"><strong>否</strong> (调试版本<code>DEBUG_MUTEXES</code>可以提供一些检测)。</td>
+</tr>
+<tr>
+<td align="left"><strong>复杂性</strong></td>
+<td align="left"><strong>非常高</strong>。</td>
+<td align="left">中等。</td>
+</tr>
+<tr>
+<td align="left"><strong>主要目标</strong></td>
+<td align="left"><strong>可预测性 (Predictability)</strong> 和 <strong>确定性 (Determinism)</strong>。</td>
+<td align="left"><strong>吞吐量 (Throughput)</strong> 和 <strong>公平性 (Fairness)</strong>。</td>
+</tr>
+<tr>
+<td align="left"><strong>典型应用</strong></td>
+<td align="left">实时系统 (<code>PREEMPT_RT</code>)，PI-Futex。</td>
+<td align="left">通用Linux内核中的所有可睡眠临界区。</td>
+</tr>
+</tbody></table>
+<h1 id="kernel-locking-rtmutex-c"><a href="#kernel-locking-rtmutex-c" class="headerlink" title="kernel&#x2F;locking&#x2F;rtmutex.c"></a>kernel&#x2F;locking&#x2F;rtmutex.c</h1><h2 id="优先级继承"><a href="#优先级继承" class="headerlink" title="优先级继承"></a>优先级继承</h2><hr>
+<h3 id="优先级继承（Priority-Inheritance）问题与解决流程图"><a href="#优先级继承（Priority-Inheritance）问题与解决流程图" class="headerlink" title="优先级继承（Priority Inheritance）问题与解决流程图"></a><strong>优先级继承（Priority Inheritance）问题与解决流程图</strong></h3><h4 id="1-问题场景：优先级反转-Priority-Inversion"><a href="#1-问题场景：优先级反转-Priority-Inversion" class="headerlink" title="1. 问题场景：优先级反转 (Priority Inversion)"></a><strong>1. 问题场景：优先级反转 (Priority Inversion)</strong></h4><p>首先，我们需要定义问题。优先级继承机制是为了解决“优先级反转”而生的。</p>
+<p><strong>参与者</strong>:</p>
+<ul>
+<li><strong>H</strong>: 高优先级任务 (High Priority Task)</li>
+<li><strong>M</strong>: 中等优先级任务 (Medium Priority Task)</li>
+<li><strong>L</strong>: 低优先级任务 (Low Priority Task)</li>
+<li><strong>Lock</strong>: 一个实时互斥锁 (RT-Mutex)</li>
+</ul>
+<p><strong>流程图: 优先级反转的发生</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">+---------------------------------+      +--------------------------------+      +---------------------------------+</span><br><span class="line">|          任务 L (低优)           |      |          任务 M (中优)          |      |          任务 H (高优)           |</span><br><span class="line">+---------------------------------+      +--------------------------------+      +---------------------------------+</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              v                                                                                   |</span><br><span class="line">[1] L 开始运行                                                                                    |</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              v                                                                                   |</span><br><span class="line">[2] L 获取 Lock                                                                                   |</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              |                                                                                   v</span><br><span class="line">[3] H 变为就绪态，优先级高于L，抢占L  ---------------------------------------------------&gt; [4] H 开始运行</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              |                                                                                   v</span><br><span class="line">              |                                                                             [5] H 尝试获取 Lock</span><br><span class="line">              |                                                                                   | (发现被L持有)</span><br><span class="line">              |                                                                                   v</span><br><span class="line">              |                                                                             [6] H 进入睡眠，等待Lock</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              |                                                                                   |</span><br><span class="line">[7.1] L 被调度器选中，恢复运行 (因为H在睡眠) &lt;------------------------------------------------------</span><br><span class="line">              |</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">[7.2] M 变为就绪态，优先级高于L，抢占L  ------&gt; [8] M 开始运行</span><br><span class="line">              |                                   (M 与 Lock 无关)</span><br><span class="line">              |                                       |</span><br><span class="line">              v                                       v</span><br><span class="line">[9] **问题发生**: M正在运行，         [10] M 持续运行，消耗CPU时间...</span><br><span class="line">    L 无法运行，因此无法释放Lock。</span><br><span class="line">                                                        |</span><br><span class="line">                                                        v</span><br><span class="line">                                                  [11] M 运行结束或睡眠</span><br><span class="line">                                                        |</span><br><span class="line">[12] L 终于有机会再次运行 &lt;------------------------------</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">[13] L 释放 Lock</span><br><span class="line">              |</span><br><span class="line">              |</span><br><span class="line">[14] 内核唤醒 H &lt;---------------------------------------------------------------------------&gt; [15] H 终于被唤醒并运行</span><br></pre></td></tr></table></figure>
+
+<p><strong>问题分析</strong>: 在步骤，最高优先级的任务H在等待，但CPU时间却被一个不相关的中等优先级任务M“偷走”了。这就是<strong>优先级反转</strong>。H的有效优先级，实际上降到了比M还低的水平。</p>
+<hr>
+<h4 id="2-解决方案：优先级继承-Priority-Inheritance"><a href="#2-解决方案：优先级继承-Priority-Inheritance" class="headerlink" title="2. 解决方案：优先级继承 (Priority Inheritance)"></a><strong>2. 解决方案：优先级继承 (Priority Inheritance)</strong></h4><p>现在，我们来看引入了优先级继承机制后，流程是如何变化的。</p>
+<p><strong>流程图: 优先级继承的解决过程</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">+---------------------------------+      +--------------------------------+      +---------------------------------+</span><br><span class="line">|          任务 L (低优)           |      |          任务 M (中优)          |      |          任务 H (高优)           |</span><br><span class="line">+---------------------------------+      +--------------------------------+      +---------------------------------+</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              v                                                                                   |</span><br><span class="line">[1] L 开始运行                                                                                    |</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              v                                                                                   |</span><br><span class="line">[2] L 获取 Lock                                                                                   |</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              |                                                                                   v</span><br><span class="line">[3] H 变为就绪态，抢占L  -----------------------------------------------------------------&gt; [4] H 开始运行</span><br><span class="line">              |                                                                                   |</span><br><span class="line">              v                                                                                   v</span><br><span class="line">              |                                                                             [5] H 尝试获取 Lock</span><br><span class="line">              |                                                                                   | (发现被L持有)</span><br><span class="line">              |                                                                                   v</span><br><span class="line">[6] **PI启动**: 内核检测到H在等待L，    &lt;----------------------------------------------------- [7] H 进入睡眠，等待Lock</span><br><span class="line">    将 L 的有效优先级**提升**至与 H 相同。</span><br><span class="line">    **L.eff_prio = H.prio**</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">[8] M 变为就绪态。</span><br><span class="line">    此时 M.prio &lt; L.eff_prio。</span><br><span class="line">    M **无法**抢占 L。</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">[9] **问题解决**: L 继续以H的高优先级运行，</span><br><span class="line">    没有被M打断。</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">[10] L 快速执行其临界区代码...</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">[11] L 释放 Lock。</span><br><span class="line">     内核**立即**将 L 的优先级</span><br><span class="line">     **恢复**到其原始的低优先级。</span><br><span class="line">              |</span><br><span class="line">              |</span><br><span class="line">[12] 内核唤醒 H &lt;---------------------------------------------------------------------------&gt; [13] H 被唤醒，由于其优先级</span><br><span class="line">                                                                                                  最高，立即抢占L并运行。</span><br></pre></td></tr></table></figure>
+
+<p><strong>解决方案分析</strong>:</p>
+<ul>
+<li><strong>核心步骤</strong>: 当H阻塞在L持有的锁上时，内核执行了<strong>优先级捐赠（Priority Donation）</strong>。L的有效优先级被临时提升，继承了H的优先级。</li>
+<li><strong>关键结果</strong>: 由于L现在具有高优先级，中等优先级的M无法再抢占它。这保证了持有锁的L能够尽快运行，从而尽快释放锁。</li>
+<li><strong>优先级恢复</strong>: 一旦锁被释放，继承关系就解除了，L的优先级必须立即恢复原状，防止它继续“滥用”不属于它的高优先级。</li>
+<li><strong>及时响应</strong>: H一旦被唤醒，就能立刻获得CPU，其等待时间被显著缩短，只取决于L执行其临界区的必要时间。</li>
+</ul>
+<hr>
+<h4 id="内核实现流程-rt-mutex-adjust-prio-chain的角色"><a href="#内核实现流程-rt-mutex-adjust-prio-chain的角色" class="headerlink" title="内核实现流程 (rt_mutex_adjust_prio_chain的角色)"></a><strong>内核实现流程 (<code>rt_mutex_adjust_prio_chain</code>的角色)</strong></h4><p>上面的流程图是宏观逻辑，而<code>rt_mutex_adjust_prio_chain</code>则是实现这个逻辑的微观算法。</p>
+<ul>
+<li>当步骤 **** 发生时，H调用<code>rt_mutex_lock()</code>，发现锁被持有，此时就会触发一次对<code>rt_mutex_adjust_prio_chain</code>的调用，将H的优先级沿着依赖链向上“推（push）”给L。</li>
+<li>当步骤 **** 发生时，L调用<code>rt_mutex_unlock()</code>，释放锁。解锁操作会再次触发对<code>rt_mutex_adjust_prio_chain</code>的调用，但这次的目的是“<strong>去继承（deboosting）</strong>”，即检查L是否还需要保持高优先级。由于H已经被唤醒，不再是等待者，L的优先级就会被重新计算并恢复到其基础值。</li>
+<li>如果在<code>sched_setscheduler</code>中改变了H或L的基础优先级，也会调用<code>rt_mutex_adjust_prio_chain</code>来重新计算和平衡整条链的优先级。</li>
+</ul>
+<p>这个宏观流程图清晰地展示了优先级继承机制所要解决的核心问题，以及它通过动态调整任务优先级来保证高优先级任务响应性的基本原理。</p>
+<h2 id="rt-mutex-adjust-prio-chain-调整优先级链的实时互斥锁"><a href="#rt-mutex-adjust-prio-chain-调整优先级链的实时互斥锁" class="headerlink" title="rt_mutex_adjust_prio_chain 调整优先级链的实时互斥锁"></a>rt_mutex_adjust_prio_chain 调整优先级链的实时互斥锁</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br><span class="line">145</span><br><span class="line">146</span><br><span class="line">147</span><br><span class="line">148</span><br><span class="line">149</span><br><span class="line">150</span><br><span class="line">151</span><br><span class="line">152</span><br><span class="line">153</span><br><span class="line">154</span><br><span class="line">155</span><br><span class="line">156</span><br><span class="line">157</span><br><span class="line">158</span><br><span class="line">159</span><br><span class="line">160</span><br><span class="line">161</span><br><span class="line">162</span><br><span class="line">163</span><br><span class="line">164</span><br><span class="line">165</span><br><span class="line">166</span><br><span class="line">167</span><br><span class="line">168</span><br><span class="line">169</span><br><span class="line">170</span><br><span class="line">171</span><br><span class="line">172</span><br><span class="line">173</span><br><span class="line">174</span><br><span class="line">175</span><br><span class="line">176</span><br><span class="line">177</span><br><span class="line">178</span><br><span class="line">179</span><br><span class="line">180</span><br><span class="line">181</span><br><span class="line">182</span><br><span class="line">183</span><br><span class="line">184</span><br><span class="line">185</span><br><span class="line">186</span><br><span class="line">187</span><br><span class="line">188</span><br><span class="line">189</span><br><span class="line">190</span><br><span class="line">191</span><br><span class="line">192</span><br><span class="line">193</span><br><span class="line">194</span><br><span class="line">195</span><br><span class="line">196</span><br><span class="line">197</span><br><span class="line">198</span><br><span class="line">199</span><br><span class="line">200</span><br><span class="line">201</span><br><span class="line">202</span><br><span class="line">203</span><br><span class="line">204</span><br><span class="line">205</span><br><span class="line">206</span><br><span class="line">207</span><br><span class="line">208</span><br><span class="line">209</span><br><span class="line">210</span><br><span class="line">211</span><br><span class="line">212</span><br><span class="line">213</span><br><span class="line">214</span><br><span class="line">215</span><br><span class="line">216</span><br><span class="line">217</span><br><span class="line">218</span><br><span class="line">219</span><br><span class="line">220</span><br><span class="line">221</span><br><span class="line">222</span><br><span class="line">223</span><br><span class="line">224</span><br><span class="line">225</span><br><span class="line">226</span><br><span class="line">227</span><br><span class="line">228</span><br><span class="line">229</span><br><span class="line">230</span><br><span class="line">231</span><br><span class="line">232</span><br><span class="line">233</span><br><span class="line">234</span><br><span class="line">235</span><br><span class="line">236</span><br><span class="line">237</span><br><span class="line">238</span><br><span class="line">239</span><br><span class="line">240</span><br><span class="line">241</span><br><span class="line">242</span><br><span class="line">243</span><br><span class="line">244</span><br><span class="line">245</span><br><span class="line">246</span><br><span class="line">247</span><br><span class="line">248</span><br><span class="line">249</span><br><span class="line">250</span><br><span class="line">251</span><br><span class="line">252</span><br><span class="line">253</span><br><span class="line">254</span><br><span class="line">255</span><br><span class="line">256</span><br><span class="line">257</span><br><span class="line">258</span><br><span class="line">259</span><br><span class="line">260</span><br><span class="line">261</span><br><span class="line">262</span><br><span class="line">263</span><br><span class="line">264</span><br><span class="line">265</span><br><span class="line">266</span><br><span class="line">267</span><br><span class="line">268</span><br><span class="line">269</span><br><span class="line">270</span><br><span class="line">271</span><br><span class="line">272</span><br><span class="line">273</span><br><span class="line">274</span><br><span class="line">275</span><br><span class="line">276</span><br><span class="line">277</span><br><span class="line">278</span><br><span class="line">279</span><br><span class="line">280</span><br><span class="line">281</span><br><span class="line">282</span><br><span class="line">283</span><br><span class="line">284</span><br><span class="line">285</span><br><span class="line">286</span><br><span class="line">287</span><br><span class="line">288</span><br><span class="line">289</span><br><span class="line">290</span><br><span class="line">291</span><br><span class="line">292</span><br><span class="line">293</span><br><span class="line">294</span><br><span class="line">295</span><br><span class="line">296</span><br><span class="line">297</span><br><span class="line">298</span><br><span class="line">299</span><br><span class="line">300</span><br><span class="line">301</span><br><span class="line">302</span><br><span class="line">303</span><br><span class="line">304</span><br><span class="line">305</span><br><span class="line">306</span><br><span class="line">307</span><br><span class="line">308</span><br><span class="line">309</span><br><span class="line">310</span><br><span class="line">311</span><br><span class="line">312</span><br><span class="line">313</span><br><span class="line">314</span><br><span class="line">315</span><br><span class="line">316</span><br><span class="line">317</span><br><span class="line">318</span><br><span class="line">319</span><br><span class="line">320</span><br><span class="line">321</span><br><span class="line">322</span><br><span class="line">323</span><br><span class="line">324</span><br><span class="line">325</span><br><span class="line">326</span><br><span class="line">327</span><br><span class="line">328</span><br><span class="line">329</span><br><span class="line">330</span><br><span class="line">331</span><br><span class="line">332</span><br><span class="line">333</span><br><span class="line">334</span><br><span class="line">335</span><br><span class="line">336</span><br><span class="line">337</span><br><span class="line">338</span><br><span class="line">339</span><br><span class="line">340</span><br><span class="line">341</span><br><span class="line">342</span><br><span class="line">343</span><br><span class="line">344</span><br><span class="line">345</span><br><span class="line">346</span><br><span class="line">347</span><br><span class="line">348</span><br><span class="line">349</span><br><span class="line">350</span><br><span class="line">351</span><br><span class="line">352</span><br><span class="line">353</span><br><span class="line">354</span><br><span class="line">355</span><br><span class="line">356</span><br><span class="line">357</span><br><span class="line">358</span><br><span class="line">359</span><br><span class="line">360</span><br><span class="line">361</span><br><span class="line">362</span><br><span class="line">363</span><br><span class="line">364</span><br><span class="line">365</span><br><span class="line">366</span><br><span class="line">367</span><br><span class="line">368</span><br><span class="line">369</span><br><span class="line">370</span><br><span class="line">371</span><br><span class="line">372</span><br><span class="line">373</span><br><span class="line">374</span><br><span class="line">375</span><br><span class="line">376</span><br><span class="line">377</span><br><span class="line">378</span><br><span class="line">379</span><br><span class="line">380</span><br><span class="line">381</span><br><span class="line">382</span><br><span class="line">383</span><br><span class="line">384</span><br><span class="line">385</span><br><span class="line">386</span><br><span class="line">387</span><br><span class="line">388</span><br><span class="line">389</span><br><span class="line">390</span><br><span class="line">391</span><br><span class="line">392</span><br><span class="line">393</span><br><span class="line">394</span><br><span class="line">395</span><br><span class="line">396</span><br><span class="line">397</span><br><span class="line">398</span><br><span class="line">399</span><br><span class="line">400</span><br><span class="line">401</span><br><span class="line">402</span><br><span class="line">403</span><br><span class="line">404</span><br><span class="line">405</span><br><span class="line">406</span><br><span class="line">407</span><br><span class="line">408</span><br><span class="line">409</span><br><span class="line">410</span><br><span class="line">411</span><br><span class="line">412</span><br><span class="line">413</span><br><span class="line">414</span><br><span class="line">415</span><br><span class="line">416</span><br><span class="line">417</span><br><span class="line">418</span><br><span class="line">419</span><br><span class="line">420</span><br><span class="line">421</span><br><span class="line">422</span><br><span class="line">423</span><br><span class="line">424</span><br><span class="line">425</span><br><span class="line">426</span><br><span class="line">427</span><br><span class="line">428</span><br><span class="line">429</span><br><span class="line">430</span><br><span class="line">431</span><br><span class="line">432</span><br><span class="line">433</span><br><span class="line">434</span><br><span class="line">435</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 调整优先级链。也用于死 deadlock 检测。</span></span><br><span class="line"><span class="comment"> * 将任务的引用计数减少一 —— 因此可能会释放该任务。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @task:		拥有该互斥锁的任务(owner)，可能需要对其进行链遍历。</span></span><br><span class="line"><span class="comment"> * @chwalk:		我们是否必须执行 deadlock 检测？</span></span><br><span class="line"><span class="comment"> * @orig_lock:		该互斥锁 (如果我们是为了一个刚刚调整了优先级且正在等待互斥锁的</span></span><br><span class="line"><span class="comment"> *			任务而遍历链以重新检查事物，可以为 NULL)</span></span><br><span class="line"><span class="comment"> * @next_lock:		在我们在我们丢弃其 pi_lock 之前，@orig_lock 的持有者所阻塞</span></span><br><span class="line"><span class="comment"> *			的那个互斥锁。永远不会被解引用，仅用于比较以检测锁链的变化。</span></span><br><span class="line"><span class="comment"> * @orig_waiter:	刚刚将其优先级“捐赠”给互斥锁持有者的任务所对应的</span></span><br><span class="line"><span class="comment"> *			rt_mutex_waiter 结构体 (在上面描绘的情况下，或者如果</span></span><br><span class="line"><span class="comment"> *			顶层等待者已经离开并且我们实际上在为持有者降级优先级时，</span></span><br><span class="line"><span class="comment"> *			可以为 NULL)</span></span><br><span class="line"><span class="comment"> * @top_task:		当前的顶层等待者任务。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回 0 或 -EDEADLK。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 链遍历基础和保护范围</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * [R]  任务的引用计数</span></span><br><span class="line"><span class="comment"> * [Pn] task-&gt;pi_lock 被持有</span></span><br><span class="line"><span class="comment"> * [L]  rtmutex-&gt;wait_lock 被持有</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 正常的加锁顺序:</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> *   rtmutex-&gt;wait_lock</span></span><br><span class="line"><span class="comment"> *     task-&gt;pi_lock</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 步骤	描述					受...保护</span></span><br><span class="line"><span class="comment"> *	函数参数:</span></span><br><span class="line"><span class="comment"> *	@task					[R]</span></span><br><span class="line"><span class="comment"> *	@orig_lock if != NULL			@top_task 正阻塞于其上</span></span><br><span class="line"><span class="comment"> *	@next_lock				无保护。不能被解引用。仅用于比较。</span></span><br><span class="line"><span class="comment"> *	@orig_waiter if != NULL			@top_task 正阻塞于其上</span></span><br><span class="line"><span class="comment"> *	@top_task				当前任务，或在代理锁定的情况下由调用代码保护</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> *	again:</span></span><br><span class="line"><span class="comment"> *	  loop_sanity_check();</span></span><br><span class="line"><span class="comment"> *	retry:</span></span><br><span class="line"><span class="comment"> * [1]	  lock(task-&gt;pi_lock);			[R] 获取 [P1]</span></span><br><span class="line"><span class="comment"> * [2]	  waiter = task-&gt;pi_blocked_on;		[P1]</span></span><br><span class="line"><span class="comment"> * [3]	  check_exit_conditions_1();		[P1]</span></span><br><span class="line"><span class="comment"> * [4]	  lock = waiter-&gt;lock;			[P1]</span></span><br><span class="line"><span class="comment"> * [5]	  if (!try_lock(lock-&gt;wait_lock)) &#123;	[P1] 尝试获取 [L]</span></span><br><span class="line"><span class="comment"> *	    unlock(task-&gt;pi_lock);		释放 [P1]</span></span><br><span class="line"><span class="comment"> *	    goto retry;</span></span><br><span class="line"><span class="comment"> *	  &#125;</span></span><br><span class="line"><span class="comment"> * [6]	  check_exit_conditions_2();		[P1] + [L]</span></span><br><span class="line"><span class="comment"> * [7]	  requeue_lock_waiter(lock, waiter);	[P1] + [L]</span></span><br><span class="line"><span class="comment"> * [8]	  unlock(task-&gt;pi_lock);		释放 [P1]</span></span><br><span class="line"><span class="comment"> *	  put_task_struct(task);		释放 [R]</span></span><br><span class="line"><span class="comment"> * [9]	  check_exit_conditions_3();		[L]</span></span><br><span class="line"><span class="comment"> * [10]	  task = owner(lock);			[L]</span></span><br><span class="line"><span class="comment"> *	  get_task_struct(task);		[L] 获取 [R]</span></span><br><span class="line"><span class="comment"> *	  lock(task-&gt;pi_lock);			[L] 获取 [P2]</span></span><br><span class="line"><span class="comment"> * [11]	  requeue_pi_waiter(tsk, waiters(lock));[P2] + [L]</span></span><br><span class="line"><span class="comment"> * [12]	  check_exit_conditions_4();		[P2] + [L]</span></span><br><span class="line"><span class="comment"> * [13]	  unlock(task-&gt;pi_lock);		释放 [P2]</span></span><br><span class="line"><span class="comment"> *	  unlock(lock-&gt;wait_lock);		释放 [L]</span></span><br><span class="line"><span class="comment"> *	  goto again;</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 其中 P1 是阻塞的任务，P2 是锁的持有者；向上走一步，</span></span><br><span class="line"><span class="comment"> * 持有者就成为下一个阻塞的任务，以此类推...</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __sched <span class="title function_">rt_mutex_adjust_prio_chain</span><span class="params">(<span class="keyword">struct</span> task_struct *task,</span></span><br><span class="line"><span class="params">					      <span class="keyword">enum</span> rtmutex_chainwalk chwalk,</span></span><br><span class="line"><span class="params">					      <span class="keyword">struct</span> rt_mutex_base *orig_lock,</span></span><br><span class="line"><span class="params">					      <span class="keyword">struct</span> rt_mutex_base *next_lock,</span></span><br><span class="line"><span class="params">					      <span class="keyword">struct</span> rt_mutex_waiter *orig_waiter,</span></span><br><span class="line"><span class="params">					      <span class="keyword">struct</span> task_struct *top_task)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 局部变量声明与注释</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="comment">/* @waiter: 指向当前迭代中，&#x27;task&#x27;正阻塞于其上的rt_mutex_waiter结构体。*/</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_mutex_waiter</span> *<span class="title">waiter</span>;</span></span><br><span class="line">	<span class="comment">/* @top_waiter: 跟踪整个依赖链中，当前已知的最高优先级等待者。初始值为orig_waiter。*/</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_mutex_waiter</span> *<span class="title">top_waiter</span> =</span> orig_waiter;</span><br><span class="line">	<span class="comment">/* @prerequeue_top_waiter: 在对锁的等待者树进行修改“之前”，临时保存当时的最高优先级等待者，用于事后比较。*/</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_mutex_waiter</span> *<span class="title">prerequeue_top_waiter</span>;</span></span><br><span class="line">	<span class="comment">/* @ret: 函数的返回值。默认为0(成功)，如果检测到死锁，则设为-EDEADLK。*/</span></span><br><span class="line">	<span class="type">int</span> ret = <span class="number">0</span>;</span><br><span class="line">	<span class="comment">/* @depth: 迭代深度计数器。用于防止因过长的锁链或未检测到的循环导致的无限递归，是一种安全保护机制。*/</span></span><br><span class="line">	<span class="type">int</span> depth = <span class="number">0</span>;</span><br><span class="line">	<span class="comment">/* @lock: 指向当前迭代中，&#x27;task&#x27;正阻塞于其上的那个rt_mutex_base锁。*/</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_mutex_base</span> *<span class="title">lock</span>;</span></span><br><span class="line">	<span class="comment">/* @detect_deadlock: 布尔标志。根据输入参数chwalk决定本次遍历是否需要执行死锁检测逻辑。*/</span></span><br><span class="line">	<span class="type">bool</span> detect_deadlock;</span><br><span class="line">	<span class="comment">/* @requeue: 布尔标志。决定是否需要执行修改优先级和重新入队的核心逻辑。在某些“只看不动”的死锁检测路径上，会被设为false。*/</span></span><br><span class="line">	<span class="type">bool</span> requeue = <span class="literal">true</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取当前任务的pi_lock引用计数</span></span><br><span class="line">	detect_deadlock = rt_mutex_cond_detect_deadlock(orig_waiter, chwalk);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 提升或降低优先级是一个充满陷阱的分步过程。我们希望它是可抢占的，</span></span><br><span class="line"><span class="comment">	 * 并且每步最多持有两个锁。所以我们必须小心地检查我们操作期间</span></span><br><span class="line"><span class="comment">	 * 是否有东西发生了改变。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">again:</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 我们为每次调用限制锁链的长度。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (++depth &gt; max_lock_depth) &#123;</span><br><span class="line">		<span class="type">static</span> <span class="type">int</span> prev_max;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 只打印一次。如果管理员改变了限制，当再次达到限制时打印一条新消息。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (prev_max != max_lock_depth) &#123;</span><br><span class="line">			prev_max = max_lock_depth;</span><br><span class="line">			printk(KERN_WARNING <span class="string">&quot;Maximum lock depth %d reached &quot;</span></span><br><span class="line">			       <span class="string">&quot;task: %s (%d)\n&quot;</span>, max_lock_depth,</span><br><span class="line">			       top_task-&gt;comm, task_pid_nr(top_task));</span><br><span class="line">		&#125;</span><br><span class="line">        <span class="comment">// 如果超过了最大锁深度，释放task的引用计数并返回死锁错误。</span></span><br><span class="line">		put_task_struct(task);</span><br><span class="line"></span><br><span class="line">		<span class="keyword">return</span> -EDEADLK;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 我们在这里是完全可抢占的，只持有对@task的引用计数。所以</span></span><br><span class="line"><span class="comment">	 * 自从调用者或我们自己的代码下面（goto retry/again）释放了所有</span></span><br><span class="line"><span class="comment">	 * 锁之后，任何事情都可能已经改变了。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">retry:</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [1] 任务不会消失，因为我们之前做了 get_task()！</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	raw_spin_lock_irq(&amp;task-&gt;pi_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [2] 获取@task所阻塞于其上的waiter。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	waiter = task-&gt;pi_blocked_on;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [3] 在task-&gt;pi_lock保护下检查退出条件1。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查增强链的末端是否已达到，或者在我们释放锁期间链的状态是否已改变。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!waiter)</span><br><span class="line">		<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查orig_waiter的状态。在我们释放锁后，锁的前一个持有者可能已经释放了锁。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (orig_waiter &amp;&amp; !rt_mutex_owner(orig_lock))</span><br><span class="line">		<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 在我们获取对@task的引用计数后，我们释放了所有锁，所以该任务可能</span></span><br><span class="line"><span class="comment">	 * 已经在锁链中前进了，甚至完全离开了锁链，现在阻塞在一个不相关的锁</span></span><br><span class="line"><span class="comment">	 * 或@orig_lock上。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 我们将@task所阻塞的锁存储在@next_lock中，所以我们可以检测到链的变化。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (next_lock != waiter-&gt;lock)</span><br><span class="line">		<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 由于ww_mutex，锁图中可能会有‘虚假的’循环，考虑：</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 *   P1: A, ww_A, ww_B</span></span><br><span class="line"><span class="comment">	 *   P2: ww_B, ww_A</span></span><br><span class="line"><span class="comment">	 *   P3: A</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * P3不应该返回-EDEADLK，因为它被P1和P2创建的循环困住了（这个循环会解决</span></span><br><span class="line"><span class="comment">	 * —— 并会触发上面的max_lock_depth）。因此，禁用detect_deadlock，</span></span><br><span class="line"><span class="comment">	 * 以便在所有相关任务都被增强后，下面的终止条件可以触发。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 即使我们从ww_mutex开始，我们也可以禁用死锁检测，因为我们无论如何都</span></span><br><span class="line"><span class="comment">	 * 会在[6]处抑制一个由ww_mutex引发的死锁。然而，在这里抑制它是不够的，</span></span><br><span class="line"><span class="comment">	 * 因为我们仍可能因为调整驱动的迭代而碰到[6]。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 注意：如果有人在两个ww_class之间创建了死锁，我们完全无法报告它；</span></span><br><span class="line"><span class="comment">	 * lockdep应该能做到。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (IS_ENABLED(CONFIG_PREEMPT_RT) &amp;&amp; waiter-&gt;ww_ctx &amp;&amp; detect_deadlock)</span><br><span class="line">		detect_deadlock = <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 当任务没有等待者时退出。注意，top_waiter可以为NULL，</span></span><br><span class="line"><span class="comment">	 * 当我们处于降级增强（deboosting）模式时！</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (top_waiter) &#123;</span><br><span class="line">		<span class="keyword">if</span> (!task_has_pi_waiters(task))</span><br><span class="line">			<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果关闭了死锁检测，当我们不是任务的最高pi等待者时，我们在这里停止。</span></span><br><span class="line"><span class="comment">		 * 如果开启了死锁检测，我们继续，但在链遍历中停止重新排队。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (top_waiter != task_top_pi_waiter(task)) &#123;</span><br><span class="line">			<span class="keyword">if</span> (!detect_deadlock)</span><br><span class="line">				<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line">			<span class="keyword">else</span></span><br><span class="line">				requeue = <span class="literal">false</span>;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果waiter的优先级与任务的优先级相同，那么就不需要进一步的优先级</span></span><br><span class="line"><span class="comment">	 * 调整了。如果关闭了死锁检测，我们停止链遍历。如果开启了，我们继续，</span></span><br><span class="line"><span class="comment">	 * 但在链遍历中停止重新排队。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (rt_waiter_node_equal(&amp;waiter-&gt;tree, task_to_waiter_node(task))) &#123;</span><br><span class="line">		<span class="keyword">if</span> (!detect_deadlock)</span><br><span class="line">			<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line">		<span class="keyword">else</span></span><br><span class="line">			requeue = <span class="literal">false</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [4] 获取下一个锁；在持有task-&gt;pi_lock期间，我们无法解锁，并能保证@lock的存在。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	lock = waiter-&gt;lock;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [5] 我们在这里需要使用trylock，因为我们正持有task-&gt;pi_lock，</span></span><br><span class="line"><span class="comment">	 *     这与其他的rtmutex操作是相反的加锁顺序。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 根据以上所述，持有task-&gt;pi_lock保证了lock的存在，所以</span></span><br><span class="line"><span class="comment">	 * 从生命周期的角度来看，反转这个加锁顺序是不可行的。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!raw_spin_trylock(&amp;lock-&gt;wait_lock)) &#123;</span><br><span class="line">		raw_spin_unlock_irq(&amp;task-&gt;pi_lock);</span><br><span class="line">		cpu_relax();</span><br><span class="line">		<span class="keyword">goto</span> retry;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [6] 在task-&gt;pi_lock和lock-&gt;wait_lock保护下检查退出条件2。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 死锁检测。如果这个锁与最初导致我们遍历锁链的原始锁相同，</span></span><br><span class="line"><span class="comment">	 * 或者如果当前锁的持有者是发起链遍历的任务，我们就检测到了死锁。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (lock == orig_lock || rt_mutex_owner(lock) == top_task) &#123;</span><br><span class="line">		ret = -EDEADLK;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 当死锁是由于ww_mutex引起的；另见上文。不报告死锁，</span></span><br><span class="line"><span class="comment">		 * 而是让ww_mutex的wound/die逻辑来选择哪个竞争线程获取-EDEADLK。</span></span><br><span class="line"><span class="comment">		 *</span></span><br><span class="line"><span class="comment">		 * 注意：假设该循环只包含一个ww_class；任何其他配置我们都无法报告；</span></span><br><span class="line"><span class="comment">		 * 另见lockdep。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (IS_ENABLED(CONFIG_PREEMPT_RT) &amp;&amp; orig_waiter &amp;&amp; orig_waiter-&gt;ww_ctx)</span><br><span class="line">			ret = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">		raw_spin_unlock(&amp;lock-&gt;wait_lock);</span><br><span class="line">		<span class="keyword">goto</span> out_unlock_pi;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果我们只是为了死锁检测而跟随锁链，就不需要做所有重新排队的操作。</span></span><br><span class="line"><span class="comment">	 * 为了避免在下面各个地方使用大量的条件判断，只做最小的链遍历检查。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!requeue) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 这里没有重新排队[7]。只释放@task [8]</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		raw_spin_unlock(&amp;task-&gt;pi_lock);</span><br><span class="line">		put_task_struct(task);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * [9] 在lock-&gt;wait_lock保护下检查退出条件3。</span></span><br><span class="line"><span class="comment">		 * 如果锁没有持有者，则链结束。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (!rt_mutex_owner(lock)) &#123;</span><br><span class="line">			raw_spin_unlock_irq(&amp;lock-&gt;wait_lock);</span><br><span class="line">			<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* [10] 获取下一个任务，即@lock的持有者 */</span></span><br><span class="line">		task = get_task_struct(rt_mutex_owner(lock));</span><br><span class="line">		raw_spin_lock(&amp;task-&gt;pi_lock);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 这里没有重新排队[11]。我们只做死锁检测。</span></span><br><span class="line"><span class="comment">		 *</span></span><br><span class="line"><span class="comment">		 * [12] 存储持有者是否自己也被阻塞。在释放锁后做出决定。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		next_lock = task_blocked_on_lock(task);</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 获取下一次迭代的最高等待者。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		top_waiter = rt_mutex_top_waiter(lock);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* [13] 释放锁 */</span></span><br><span class="line">		raw_spin_unlock(&amp;task-&gt;pi_lock);</span><br><span class="line">		raw_spin_unlock_irq(&amp;lock-&gt;wait_lock);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/* 如果持有者没有被阻塞，则链结束。*/</span></span><br><span class="line">		<span class="keyword">if</span> (!next_lock)</span><br><span class="line">			<span class="keyword">goto</span> out_put_task;</span><br><span class="line">		<span class="keyword">goto</span> again;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 在对@lock执行重新排队操作前，存储当前的最高等待者。</span></span><br><span class="line"><span class="comment">	 * 我们在下面做增强/降级（boost/deboost）决策时需要它。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	prerequeue_top_waiter = rt_mutex_top_waiter(lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* [7] 在锁的等待者树中重新排队该waiter。*/</span></span><br><span class="line">	rt_mutex_dequeue(lock, waiter);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 既然我们已经出队了，现在更新waiter的优先级字段。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 这些值可能通过以下方式改变：</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 *   sys_sched_set_scheduler() / sys_sched_setattr()</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 或者</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 *   DL CBS强制执行，推进了有效截止时间。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	waiter_update_prio(waiter, task);</span><br><span class="line"></span><br><span class="line">	rt_mutex_enqueue(lock, waiter);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [8] 释放（阻塞的）任务，为在[10]中获取持有者任务做准备。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 因为我们持有lock-&gt;wait_lock，所以即使我们释放了task-&gt;pi_lock，</span></span><br><span class="line"><span class="comment">	 * task也无法解除阻塞。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	raw_spin_unlock(&amp;task-&gt;pi_lock);</span><br><span class="line">	put_task_struct(task);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [9] 在lock-&gt;wait_lock保护下检查退出条件3。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 即使在死锁检测的情况下，如果锁没有持有者，我们也必须中止链遍历，</span></span><br><span class="line"><span class="comment">	 * 因为这里我们无处可循。这是我们正在遍历的链的末端。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!rt_mutex_owner(lock)) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果上面的重新排队[7]改变了最高等待者，</span></span><br><span class="line"><span class="comment">		 * 那么我们需要唤醒新的最高等待者来尝试获取锁。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		top_waiter = rt_mutex_top_waiter(lock);</span><br><span class="line">		<span class="keyword">if</span> (prerequeue_top_waiter != top_waiter)</span><br><span class="line">			wake_up_state(top_waiter-&gt;task, top_waiter-&gt;wake_state);</span><br><span class="line">		raw_spin_unlock_irq(&amp;lock-&gt;wait_lock);</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [10] 获取下一个任务，即@lock的持有者。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 在持有lock-&gt;wait_lock并检查了!owner之后，必然有一个持有者，</span></span><br><span class="line"><span class="comment">	 * 并且它不会消失。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	task = get_task_struct(rt_mutex_owner(lock));</span><br><span class="line">	raw_spin_lock(&amp;task-&gt;pi_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* [11] 如果必要，重新排队pi等待者 */</span></span><br><span class="line">	<span class="keyword">if</span> (waiter == rt_mutex_top_waiter(lock)) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 该waiter成为了锁上新的最高（优先级）等待者。</span></span><br><span class="line"><span class="comment">		 * 用这个waiter替换持有者任务的pi等待者树中前一个最高等待者，</span></span><br><span class="line"><span class="comment">		 * 并调整持有者的优先级。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		rt_mutex_dequeue_pi(task, prerequeue_top_waiter);</span><br><span class="line">		waiter_clone_prio(waiter, task);</span><br><span class="line">		rt_mutex_enqueue_pi(task, waiter);</span><br><span class="line">		rt_mutex_adjust_prio(lock, task);</span><br><span class="line"></span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> (prerequeue_top_waiter == waiter) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 该waiter曾是锁上的最高等待者，但不再是最高优先级等待者了。</span></span><br><span class="line"><span class="comment">		 * 用新的最高（优先级）等待者替换持有者任务的pi等待者树中的waiter，</span></span><br><span class="line"><span class="comment">		 * 并调整持有者的优先级。</span></span><br><span class="line"><span class="comment">		 * 新的最高等待者被存储在@waiter中，以便下面的@waiter == @top_waiter</span></span><br><span class="line"><span class="comment">		 * 评估为真，我们继续为链的其余部分降级优先级。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		rt_mutex_dequeue_pi(task, waiter);</span><br><span class="line">		waiter = rt_mutex_top_waiter(lock);</span><br><span class="line">		waiter_clone_prio(waiter, task);</span><br><span class="line">		rt_mutex_enqueue_pi(task, waiter);</span><br><span class="line">		rt_mutex_adjust_prio(lock, task);</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 没有任何改变。不需要做任何优先级调整。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * [12] 在task-&gt;pi_lock和lock-&gt;wait_lock保护下检查退出条件4。</span></span><br><span class="line"><span class="comment">	 *      实际的决定在我们释放锁后做出。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 检查持有当前锁的任务是否自己也被pi阻塞了。如果是，我们</span></span><br><span class="line"><span class="comment">	 * 存储一个指向该锁的指针，用于上面的锁链变化检测。在我们释放</span></span><br><span class="line"><span class="comment">	 * task-&gt;pi_lock之后，next_lock就不能再被解引用了。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	next_lock = task_blocked_on_lock(task);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 存储@lock的最高等待者，用于下面链遍历结束的决策。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	top_waiter = rt_mutex_top_waiter(lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* [13] 释放锁 */</span></span><br><span class="line">	raw_spin_unlock(&amp;task-&gt;pi_lock);</span><br><span class="line">	raw_spin_unlock_irq(&amp;lock-&gt;wait_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 基于存储的值，做出实际的退出决定[12]。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 我们到达了锁链的末端。就在这里停止。没必要再回去才发现这一点。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!next_lock)</span><br><span class="line">		<span class="keyword">goto</span> out_put_task;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果当前waiter不是锁上的最高等待者，那么如果我们不是在</span></span><br><span class="line"><span class="comment">	 * 完全死锁检测模式下，我们可以在这里停止链遍历。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!detect_deadlock &amp;&amp; waiter != top_waiter)</span><br><span class="line">		<span class="keyword">goto</span> out_put_task;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">goto</span> again;</span><br><span class="line"></span><br><span class="line">out_unlock_pi:</span><br><span class="line">	raw_spin_unlock_irq(&amp;task-&gt;pi_lock);</span><br><span class="line">out_put_task:</span><br><span class="line">	put_task_struct(task);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="kernel-locking-rtmutex-api-c"><a href="#kernel-locking-rtmutex-api-c" class="headerlink" title="kernel&#x2F;locking&#x2F;rtmutex_api.c"></a>kernel&#x2F;locking&#x2F;rtmutex_api.c</h1><h2 id="rt-mutex-adjust-pi-重新检查优先级继承（pi）链"><a href="#rt-mutex-adjust-pi-重新检查优先级继承（pi）链" class="headerlink" title="rt_mutex_adjust_pi 重新检查优先级继承（pi）链"></a>rt_mutex_adjust_pi 重新检查优先级继承（pi）链</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 注释：重新检查优先级继承（pi）链，以防我们收到了一个优先级设置请求。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 注释：从sched_setscheduler中调用。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @task: 指向其调度属性刚刚被修改的那个任务。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> __sched <span class="title function_">rt_mutex_adjust_pi</span><span class="params">(<span class="keyword">struct</span> task_struct *task)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_mutex_waiter</span> *<span class="title">waiter</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_mutex_base</span> *<span class="title">next_lock</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取保护任务PI相关字段（如pi_blocked_on）的自旋锁，并保存中断状态。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	raw_spin_lock_irqsave(&amp;task-&gt;pi_lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取任务当前正在等待的rt_mutex_waiter结构体。</span></span><br><span class="line"><span class="comment">	 * 如果为NULL，表示任务没有在等待任何RT-Mutex。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	waiter = task-&gt;pi_blocked_on;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果waiter为NULL，或者waiter的树节点与任务的等待节点相等</span></span><br><span class="line"><span class="comment">	 * （这可能表示一种稳定的、已处理过的状态），则无需做任何事。</span></span><br><span class="line"><span class="comment">	 * 直接解锁并返回。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!waiter || rt_waiter_node_equal(&amp;waiter-&gt;tree, task_to_waiter_node(task))) &#123;</span><br><span class="line">		raw_spin_unlock_irqrestore(&amp;task-&gt;pi_lock, flags);</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	</span><br><span class="line">	<span class="comment">/* 如果任务确实在等待，获取它正在等待的那个锁的指针。*/</span></span><br><span class="line">	next_lock = waiter-&gt;lock;</span><br><span class="line">	</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 我们已经获取了所有需要的信息，可以释放pi_lock了，因为</span></span><br><span class="line"><span class="comment">	 * rt_mutex_adjust_prio_chain内部会处理更复杂的加锁。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	raw_spin_unlock_irqrestore(&amp;task-&gt;pi_lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 注释：这个引用计数会在rt_mutex_adjust_prio_chain()中被减少！</span></span><br><span class="line"><span class="comment">	 * 增加task的引用计数，防止在接下来的链调整过程中，该task被释放。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	get_task_struct(task);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用核心的优先级链调整函数。</span></span><br><span class="line"><span class="comment">	 * @task:                      作为本次调整的起点任务。</span></span><br><span class="line"><span class="comment">	 * @RT_MUTEX_MIN_CHAINWALK:    一个标志，指示链调整的深度或行为。</span></span><br><span class="line"><span class="comment">	 * @NULL, @next_lock, @NULL:   其他参数，用于指定旧锁、新锁等，</span></span><br><span class="line"><span class="comment">	 *                             在这里的上下文中，主要关注next_lock。</span></span><br><span class="line"><span class="comment">	 * @task:                      将task自身作为顶级所有者传入。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	rt_mutex_adjust_prio_chain(task, RT_MUTEX_MIN_CHAINWALK, <span class="literal">NULL</span>,</span><br><span class="line">				   next_lock, <span class="literal">NULL</span>, task);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/eecdb22f/">https://wdfk-prog.space/posts/eecdb22f/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/kernel/">kernel</a><a class="post-meta__tags" href="/tags/lock/">lock</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/01.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/cee68899/" title="rwsem"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">rwsem</div></div><div class="info-2"><div class="info-item-1">[TOC] kernel&#x2F;locking&#x2F;rwsem.c 读写信号量(Read-Write Semaphore) 内核中可睡眠的读写锁历史与背景这项技术是为了解决什么特定问题而诞生的？kernel/locking/rwsem.c 实现的读写信号量（Read-Write Semaphore, rwsem）是为了解决rwlock_t（读写自旋锁）无法解决的一类“读多写少”场景的并发控制问题：当临界区的执行时间较长，或者在临界区内需要睡眠时，如何高效地进行读写并发控制。 rwlock_t是一个自旋锁，它要求临界区必须极短且绝对不能睡眠。然而，在内核的许多路径中（特别是与用户空间交互的系统调用），临界区可能很长，并且包含可能导致睡眠的操作（如copy_from_user、kmalloc(GFP_KERNEL)或等待I&#x2F;O）。 rwsem正是为了这种可睡眠的、读多写少的场景而设计的。它是一个睡眠锁，提供了与rwlock_t相同的逻辑：  允许多个读者并发进入。 只允许一个写者独占进入。 读者和写者互斥。  当一个任务试图获取一个被占用的rwsem时，它不会自旋...</div></div></div></a><a class="pagination-related" href="/posts/bb90f1dd/" title="local_lock"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">local_lock</div></div><div class="info-2"><div class="info-item-1">[toc] include&#x2F;linux&#x2F;local_lock.h Per-CPU数据锁(Lock for Per-CPU Data) 一种为保护Per-CPU数据而生的超轻量级锁历史与背景这项技术是为了解决什么特定问题而诞生的？local_lock是一种高度特化的、以性能为首要目标的锁，它的诞生是为了解决一个非常具体的问题：如何以最低的开销来保护Per-CPU（每CPU）数据。 Per-CPU数据是指内核为每个CPU都创建了一个独立副本的数据。理论上，一个CPU上的代码应该只访问自己的那份数据副本。在这种理想情况下，并发访问的来源只有两种：  抢占（Preemption）：当前任务在访问Per-CPU数据时被一个更高优先级的任务抢占，而这个新任务也访问了同一个Per-CPU变量。 中断（Interrupts）：一个硬中断或软中断在当前CPU上发生，其中断处理程序访问了同一个Per-CPU变量。  传统的解决方案是使用spinlock。但是，spinlock是为解决多CPU（SMP）间的并发而设计的，它涉及到昂贵的原子操作和可能导致缓存行争用的内存总线流量。对于...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">dma</div></div><div class="info-2"><div class="info-item-1">[TOC] drivers&#x2F;dma DMA引擎与映射(DMA Engine &amp; Mapping) 内核统一的直接内存访问框架历史与背景这项技术是为了解决什么特定问题而诞生的？DMA（Direct Memory Access，直接内存访问）框架的诞生是为了解决一个根本性的性能瓶颈问题，并为内核提供一个统一、可移植的解决方案。  解决CPU性能瓶颈：在没有DMA的系统中，当外设（如网卡、磁盘）需要与内存交换大量数据时，CPU必须亲自担当“搬运工”的角色。这种方式被称为PIO（Programmed I&#x2F;O），CPU需要逐字节或逐字地从设备读取数据再写入内存，或者反之。对于高速设备，这会消耗大量的CPU周期，导致CPU无暇处理其他计算任务，严重影响系统整体性能。DMA技术通过引入一个专门的硬件控制器（DMAC），允许外设在没有CPU干预的情况下直接与内存进行数据传输，从而将CPU解放出来。 抽象硬件差异：不同的CPU架构和SoC平台，其DMA控制器的设计和编程接口千差万别。如果没有一个统一的软件框架，设备驱动程序的开发者将不得不为每一种不同的DMAC编写特定的...</div></div></div></a><a class="pagination-related" href="/posts/ba80502e/" title="cpu"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">cpu</div></div><div class="info-2"><div class="info-item-1">[TOC] include&#x2F;linux&#x2F;cpumask.hcpumask_check 验证当前cpu数量是否超过了配置的最大cpu数量,并返回cpu1234567891011121314151617// 验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline void cpu_max_bits_warn(unsigned int cpu, unsigned int bits)&#123;#ifdef CONFIG_DEBUG_PER_CPU_MAPS	WARN_ON_ONCE(cpu &gt;= bits);#endif /* CONFIG_DEBUG_PER_CPU_MAPS */&#125;/* verify cpu argument to cpumask_* operators *///验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline unsigned int cpumask_check(unsigned int cpu)&#123;    //small_cpumask_...</div></div></div></a><a class="pagination-related" href="/posts/a3bbff77/" title="debug_locks"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">debug_locks</div></div><div class="info-2"><div class="info-item-1">[TOC] debug_locks 各种锁的常用调试工具的通用位置： 自旋锁、rwlocks、mutex 和 rwsems。  debug_locks 的介绍debug_locks 是 Linux 内核中用于调试各种锁（如自旋锁、自读写锁、互斥锁和读写信号量）的工具。它提供了一种机制，用于检测锁的使用错误，并在发现问题时记录或报告相关信息。 特点 全局控制：通过全局标志 debug_locks，可以一次性启用或禁用所有锁的调试功能。 静默模式：支持通过 debug_locks_silent 实现“静默失败”，即在检测到锁错误时不打印任何信息到控制台。 原子操作：使用 xchg 等原子操作确保在多线程环境中安全地切换调试状态。 减少噪声：在检测到第一个锁错误后，可以关闭后续的调试输出，避免日志被大量错误信息淹没。   使用场景 锁错误检测：  在开发和调试阶段，用于检测锁的使用错误，例如死锁、锁未正确释放等问题。 适用于调试自旋锁（spinlock）、读写锁（rwlock）、互斥锁（mutex）和读写信号量（rwsem）等。   内核模块开发：  在开发内核模块时，debug_lo...</div></div></div></a><a class="pagination-related" href="/posts/1a1175a4/" title="rwlock"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">rwlock</div></div><div class="info-2"><div class="info-item-1">[toc] include&#x2F;linux&#x2F;rwlock.h 读写锁(Read-Write Lock) 允许多读者并发访问的同步原语历史与背景这项技术是为了解决什么特定问题而诞生的？读写锁（Read-Write Lock, rwlock）是为了解决一个非常普遍的并发访问模式的性能问题：对共享数据的访问是“读多写少”。 在使用简单的互斥锁（mutex）或自旋锁（spinlock）时，任何时候都只允许一个任务进入临界区，无论它是读取还是写入。这对于读操作来说是过度限制的，因为读操作本身不会修改数据，允许多个读者同时读取是安全的。如果一个数据结构被内核中成百上千个地方频繁地读取，而只被少数几个地方偶尔写入，那么使用互斥锁会导致所有读者被迫串行执行，极大地降低了系统的并发性能。 rwlock的诞生就是为了优化这种场景。它提供了一种更精细的锁定机制：  读锁（共享锁）：允许多个读者同时持有读锁。 写锁（排他锁）：与互斥锁一样，任何时候只允许一个写者持有写锁。 互斥规则：当有任何读者持有读锁时，写者必须等待；当有写者持有写锁时，所有读者和其他写者都必须等待。  它的发展经历了...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-locking-mutex-c-%E4%BA%92%E6%96%A5%E9%94%81-Mutex-%E5%86%85%E6%A0%B8%E4%B8%AD%E5%9F%BA%E6%9C%AC%E7%9A%84%E7%9D%A1%E7%9C%A0%E9%94%81%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.</span> <span class="toc-text">kernel&#x2F;locking&#x2F;mutex.c 互斥锁(Mutex) 内核中基本的睡眠锁实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-mutex-types-h"><span class="toc-number">2.</span> <span class="toc-text">include&#x2F;linux&#x2F;mutex_types.h</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-mutex-h"><span class="toc-number">3.</span> <span class="toc-text">include&#x2F;linux&#x2F;mutex.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#DEFINE-MUTEX"><span class="toc-number">3.1.</span> <span class="toc-text">DEFINE_MUTEX</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mutex-init"><span class="toc-number">3.2.</span> <span class="toc-text">mutex_init</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-locking-mutex-c"><span class="toc-number">4.</span> <span class="toc-text">kernel&#x2F;locking&#x2F;mutex.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#mutex-trylock-fast-mutex-unlock-fast"><span class="toc-number">4.1.</span> <span class="toc-text">__mutex_trylock_fast __mutex_unlock_fast</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mutex-lock"><span class="toc-number">4.2.</span> <span class="toc-text">mutex_lock</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mutex-unlock"><span class="toc-number">4.3.</span> <span class="toc-text">mutex_unlock</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mutex-init-1"><span class="toc-number">4.4.</span> <span class="toc-text">__mutex_init</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-locking-rtmutex-c-%E5%AE%9E%E6%97%B6%E4%BA%92%E6%96%A5%E9%94%81-Real-Time-Mutex-%E6%94%AF%E6%8C%81%E4%BC%98%E5%85%88%E7%BA%A7%E7%BB%A7%E6%89%BF%E7%9A%84%E5%86%85%E6%A0%B8%E9%94%81"><span class="toc-number">5.</span> <span class="toc-text">kernel&#x2F;locking&#x2F;rtmutex.c 实时互斥锁(Real-Time Mutex) 支持优先级继承的内核锁</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF-1"><span class="toc-number">5.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F-1"><span class="toc-number">5.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F-1"><span class="toc-number">5.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F-1"><span class="toc-number">5.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1-1"><span class="toc-number">5.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F-1"><span class="toc-number">5.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F-1"><span class="toc-number">5.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F-1"><span class="toc-number">5.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF-1"><span class="toc-number">5.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F-1"><span class="toc-number">5.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F-1"><span class="toc-number">5.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90-1"><span class="toc-number">5.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E6%A0%87%E5%87%86mutex%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">5.0.4.1.</span> <span class="toc-text">请将其 与 标准mutex进行详细对比。</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-locking-rtmutex-c"><span class="toc-number">6.</span> <span class="toc-text">kernel&#x2F;locking&#x2F;rtmutex.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E5%85%88%E7%BA%A7%E7%BB%A7%E6%89%BF"><span class="toc-number">6.1.</span> <span class="toc-text">优先级继承</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BC%98%E5%85%88%E7%BA%A7%E7%BB%A7%E6%89%BF%EF%BC%88Priority-Inheritance%EF%BC%89%E9%97%AE%E9%A2%98%E4%B8%8E%E8%A7%A3%E5%86%B3%E6%B5%81%E7%A8%8B%E5%9B%BE"><span class="toc-number">6.1.1.</span> <span class="toc-text">优先级继承（Priority Inheritance）问题与解决流程图</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#1-%E9%97%AE%E9%A2%98%E5%9C%BA%E6%99%AF%EF%BC%9A%E4%BC%98%E5%85%88%E7%BA%A7%E5%8F%8D%E8%BD%AC-Priority-Inversion"><span class="toc-number">6.1.1.1.</span> <span class="toc-text">1. 问题场景：优先级反转 (Priority Inversion)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9A%E4%BC%98%E5%85%88%E7%BA%A7%E7%BB%A7%E6%89%BF-Priority-Inheritance"><span class="toc-number">6.1.1.2.</span> <span class="toc-text">2. 解决方案：优先级继承 (Priority Inheritance)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%86%85%E6%A0%B8%E5%AE%9E%E7%8E%B0%E6%B5%81%E7%A8%8B-rt-mutex-adjust-prio-chain%E7%9A%84%E8%A7%92%E8%89%B2"><span class="toc-number">6.1.1.3.</span> <span class="toc-text">内核实现流程 (rt_mutex_adjust_prio_chain的角色)</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#rt-mutex-adjust-prio-chain-%E8%B0%83%E6%95%B4%E4%BC%98%E5%85%88%E7%BA%A7%E9%93%BE%E7%9A%84%E5%AE%9E%E6%97%B6%E4%BA%92%E6%96%A5%E9%94%81"><span class="toc-number">6.2.</span> <span class="toc-text">rt_mutex_adjust_prio_chain 调整优先级链的实时互斥锁</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#kernel-locking-rtmutex-api-c"><span class="toc-number">7.</span> <span class="toc-text">kernel&#x2F;locking&#x2F;rtmutex_api.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#rt-mutex-adjust-pi-%E9%87%8D%E6%96%B0%E6%A3%80%E6%9F%A5%E4%BC%98%E5%85%88%E7%BA%A7%E7%BB%A7%E6%89%BF%EF%BC%88pi%EF%BC%89%E9%93%BE"><span class="toc-number">7.1.</span> <span class="toc-text">rt_mutex_adjust_pi 重新检查优先级继承（pi）链</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/01.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '08bde515f8d4da142d6e6556a50ff2f6'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

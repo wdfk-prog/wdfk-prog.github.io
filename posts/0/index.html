@@ -1,0 +1,1202 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>workingset | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[toc]  mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制历史与背景这项技术是为了解决什么特定问题而诞生的？mm&#x2F;workingset.c 中的代码是为了解决传统页面回收算法（如vmscan.c中的两阶段LRU）的一个核心痛点：无法精确区分真正的“工作集”和短暂的、非核心的内存使用。 工作集（Workin">
+<meta property="og:type" content="article">
+<meta property="og:title" content="workingset">
+<meta property="og:url" content="https://wdfk-prog.space/posts/0/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[toc]  mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制历史与背景这项技术是为了解决什么特定问题而诞生的？mm&#x2F;workingset.c 中的代码是为了解决传统页面回收算法（如vmscan.c中的两阶段LRU）的一个核心痛点：无法精确区分真正的“工作集”和短暂的、非核心的内存使用。 工作集（Workin">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/09.jpg">
+<meta property="article:published_time" content="2025-10-07T01:50:14.000Z">
+<meta property="article:modified_time" content="2025-10-07T02:37:46.787Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="mm">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/09.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "workingset",
+  "url": "https://wdfk-prog.space/posts/0/",
+  "image": "https://wdfk-prog.space/images/covers/09.jpg",
+  "datePublished": "2025-10-07T01:50:14.000Z",
+  "dateModified": "2025-10-07T02:37:46.787Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/0/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'workingset',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/09.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">workingset</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">workingset<a class="post-edit-link" href="null_posts/linux/mm/workingset.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-07T01:50:14.000Z" title="发表于 2025-10-07 09:50:14">2025-10-07</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-07T02:37:46.787Z" title="更新于 2025-10-07 10:37:46">2025-10-07</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/mm/">mm</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">8.1k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>26分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/0/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-07 10:37:46&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<p>[toc]</p>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/a68fec7b405d47f4900401898a1f4faf.png" alt="在这里插入图片描述"></p>
+<h1 id="mm-workingset-c-工作集检测-Working-Set-Detection-提升页面回收效率的热点内存识别机制"><a href="#mm-workingset-c-工作集检测-Working-Set-Detection-提升页面回收效率的热点内存识别机制" class="headerlink" title="mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制"></a>mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p><code>mm/workingset.c</code> 中的代码是为了解决传统页面回收算法（如<code>vmscan.c</code>中的两阶段LRU）的一个核心痛点：<strong>无法精确区分真正的“工作集”和短暂的、非核心的内存使用</strong>。</p>
+<p>工作集（Working Set）指的是一个进程在当前阶段为了高效运行而需要频繁访问的内存页面集合。传统LRU算法通过<code>active</code>&#x2F;<code>inactive</code>链表来近似这个集合，但存在以下问题：</p>
+<ul>
+<li><strong>抖动（Thrashing）</strong>：当内存压力增大时，一个暂时不活动的进程（例如，用户切换到了另一个窗口），其工作集页面可能会被从<code>active</code>链表老化到<code>inactive</code>链表，并最终被回收。当用户切回该进程时，进程会遭遇大量的缺页中断（page faults），需要从磁盘或交换空间重新读取其工作集，导致系统响应缓慢，磁盘I&#x2F;O飙升。<code>workingset.c</code> 的核心目标就是<strong>识别并保护这些被错误回收的工作集页面</strong>，从而抑制抖动。</li>
+<li><strong>无法区分不同原因的缺页中断</strong>：内核无法轻易区分一个缺页中断是因为访问一个全新的页面（如首次读取文件），还是因为访问一个刚刚被回收的、本应属于工作集的页面。<code>workingset.c</code>提供了一种机制来做出这种区分。</li>
+</ul>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p><code>workingset.c</code> 的实现是由内核开发者 Johannes Weiner 引入的，是对传统LRU机制的一次重要增强。其核心创新是引入了**“影子条目”（Shadow Entries）**机制。</p>
+<ul>
+<li><strong>概念提出与实现</strong>：该机制被设计为一种低开销的方式，用于在页面被从LRU链表中换出后，继续“追踪”它一小段时间。</li>
+<li><strong>与<code>vmscan.c</code>的集成</strong>：<code>workingset.c</code> 的代码被深度集成到<code>vmscan.c</code>的页面回收路径和<code>mm/memory.c</code>的缺页中断处理路径中。它不是一个独立的算法，而是对现有算法的一个“插件式”增强。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p>工作集检测是当前Linux内核内存管理中一项标准的、默认开启的基础功能。它不是一个可选模块，而是内存管理子系统不可或-的一部分。它的效果体现在所有现代Linux系统中，尤其是在以下场景中：</p>
+<ul>
+<li><strong>桌面和移动环境（如Android）</strong>：用户频繁地在多个应用之间切换，工作集保护机制对于保持系统流畅响应至关重要。</li>
+<li><strong>内存过载（Over-committed）的服务器</strong>：在虚拟化和容器环境中，物理内存经常被超额分配。精确的工作集检测可以帮助内核在回收内存时做出更明智的决策，避免杀死错误的进程或导致关键服务性能下降。</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p><code>workingset.c</code> 的核心是巧妙的**“影子条目”**机制，它像是一个页面的“墓碑”，记录了一个页面刚刚“死亡”（被回收）的事实。</p>
+<ol>
+<li><strong>创建影子条目</strong>：当页面回收器（<code>vmscan.c</code>）决定从<code>inactive</code> LRU链表中回收一个页面时，它<strong>不会</strong>立即完全忘记这个页面。相反，它会在一个特殊的数据结构——基于Radix Tree的<code>page_owner</code>中，为这个页面创建一个<strong>影子条目</strong>。这个影子条目非常小，只包含足够识别该页面的信息（不包含数据），因此内存开销很低。</li>
+<li><strong>处理缺页中断</strong>：稍后，如果一个进程试图访问这个刚刚被回收的页面，就会触发一个缺页中断。</li>
+<li><strong>检查影子条目</strong>：在处理缺页中断的路径上，内核会调用<code>workingset_refault()</code>函数。这个函数会检查刚才发生中断的页面地址是否存在对应的<strong>影子条目</strong>。</li>
+<li><strong>做出决策</strong>：<ul>
+<li><strong>情况A：存在影子条目（Refault）</strong>：这是一个强烈的信号，表明这个页面是<strong>工作集的一部分</strong>！因为它刚被回收就立即被再次需要。内核会认为这次缺页中断是一次“再激活”（refault）。作为奖励，当这个页面被重新读入内存时，它会被<strong>直接放入<code>active</code> LRU链表的头部</strong>，绕过了<code>inactive</code>链表。这可以有效防止该页面在下一次回收扫描中被立即再次回收，从而打破了抖动的恶性循环。之后，这个影子条目被移除。</li>
+<li><strong>情况B：不存在影子条目（Cold Fault）</strong>：这表明这是一次真正的“冷”缺页中断，例如进程在访问一个全新的、之前从未访问过的页面。这个页面会按照标准流程被放入<code>inactive</code> LRU链表的头部。</li>
+</ul>
+</li>
+</ol>
+<p>通过统计“再激活”的次数和频率，内核还能对一个进程或整个系统的工作集大小和活跃度进行更精确的评估。</p>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>抑制抖动</strong>：核心优势。通过快速识别和保护被错误回收的工作集页面，显著提高了系统在内存压力下的响应速度。</li>
+<li><strong>提高回收效率</strong>：它为页面回收器提供了更准确的“热度”信号，帮助<code>vmscan.c</code>做出更好的回收决策，避免浪费I&#x2F;O在频繁换入换出同一批页面上。</li>
+<li><strong>更好的可观察性</strong>：通过<code>/proc/meminfo</code>中的<code>PgRefault</code>等指标，它为系统管理员提供了观察和诊断内存抖动问题的数据。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>CPU和内存开销</strong>：虽然影子条目的开销很低，但创建、查找和销毁它们仍然需要消耗一定的CPU时间和内存。在极端的、高频率的回收和缺页场景下，这部分开销可能会变得显著。</li>
+<li><strong>启发式而非完美</strong>：它仍然是一种启发式算法。某些特殊的内存访问模式可能无法从中受益，或者在极少数情况下可能做出错误的判断。</li>
+<li><strong>复杂性</strong>：它为本已极其复杂的内存管理子系统增加了又一层逻辑，使得理解和调试变得更加困难。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？"></a>在哪些具体的业务或技术场景下，它是首选解决方案？</h4><p>它不是一个“可选方案”，而是内核的内建机制。其正面效果在以下场景中表现得最为明显：</p>
+<ul>
+<li><strong>交互式应用</strong>：如上所述，桌面、IDE、浏览器等，用户在多个任务间切换，工作集保护能确保切换回来的应用能快速恢复响应。</li>
+<li><strong>内存数据库</strong>：当数据库的工作集（如频繁查询的索引和数据）略大于可用内存时，该机制能保护核心数据不被后台的批量操作冲刷出内存。</li>
+<li><strong>Java虚拟机（JVM）</strong>：JVM的垃圾回收（GC）过程可能会导致应用的内存访问模式剧烈变化。工作集检测有助于在GC之后快速恢复应用的性能。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><p>不能“不推荐使用”，因为它默认集成且对绝大多数场景有益。但可以理解在哪些场景下其<strong>作用有限</strong>：</p>
+<ul>
+<li><strong>内存充裕的系统</strong>：如果系统几乎没有内存压力，页面回收器很少运行，那么工作集检测机制也大部分时间处于空闲状态。</li>
+<li><strong>内存锁定的应用（硬实时&#x2F;HPC）</strong>：如果一个应用通过<code>mlock()</code>系统调用将其关键数据段锁定在物理内存中，这些内存从一开始就不会参与页面回收，因此工作集检测对这部分内存无效。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><p><code>workingset.c</code> 与 <code>vmscan.c</code> 的关系是<strong>协作</strong>而非<strong>竞争</strong>。它不是<code>vmscan.c</code>的替代品，而是它的一个“智能顾问”。</p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left"><code>workingset.c</code> (工作集检测)</th>
+<th align="left"><code>vmscan.c</code> (页面回收器)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>角色定位</strong></td>
+<td align="left"><strong>信息提供者（Advisor）</strong></td>
+<td align="left"><strong>决策者和执行者（Executor）</strong></td>
+</tr>
+<tr>
+<td align="left"><strong>核心功能</strong></td>
+<td align="left">通过“影子条目”机制，识别被回收后又立即被访问的页面（refault），从而<strong>判断页面的“热度”</strong>。</td>
+<td align="left">扫描<code>active</code>&#x2F;<code>inactive</code> LRU链表，根据页面的访问状态和类型，<strong>决定并执行页面的回收动作</strong>（丢弃、写回、换出）。</td>
+</tr>
+<tr>
+<td align="left"><strong>工作时机</strong></td>
+<td align="left">在<strong>页面被回收时</strong>创建影子条目，在<strong>缺页中断时</strong>检查影子条目。</td>
+<td align="left">在<strong>内存压力下</strong>（由<code>kswapd</code>或直接回收触发）被激活，开始扫描和回收。</td>
+</tr>
+<tr>
+<td align="left"><strong>交互关系</strong></td>
+<td align="left"><code>vmscan.c</code>在回收页面时调用<code>workingset.c</code>来创建影子条目。缺页中断处理代码调用<code>workingset.c</code>，其结果（是否是refault）会<strong>影响新页面被放入哪个LRU链表</strong>，从而影响<code>vmscan.c</code>未来的决策。</td>
+<td align="left"><code>vmscan.c</code>是页面回收的主导者。它利用<code>workingset.c</code>提供的信息，但最终的回收决策由它自己做出。</td>
+</tr>
+<tr>
+<td align="left"><strong>最终目标</strong></td>
+<td align="left"><strong>提高回收决策的质量</strong>，减少不必要的I&#x2F;O，抑制抖动。</td>
+<td align="left"><strong>释放物理内存</strong>，满足新的内存分配请求，维持系统运行。</td>
+</tr>
+</tbody></table>
+<p><strong>与多代LRU（MGLRU）的对比</strong>：<br>MGLRU是比<code>workingset.c</code>所增强的传统两阶段LRU更进一步的演进。</p>
+<ul>
+<li><strong><code>workingset.c</code></strong> 是对两阶段LRU的一个<strong>补丁式增强</strong>，它在不改变核心LRU扫描逻辑的情况下，通过外部信息（影子条目）来修正其行为。</li>
+<li><strong>MGLRU</strong> 则是一种<strong>全新的页面分类和老化算法</strong>，它用多个“代”（generations）来取代简单的<code>active</code>&#x2F;<code>inactive</code>二分法，试图从根本上更精确地模拟页面的生命周期和热度。可以说，MGLRU在设计上就内化了<code>workingset.c</code>想要解决的问题。</li>
+</ul>
+<h2 id="workingset-init-工作集检测与影子LRU初始化"><a href="#workingset-init-工作集检测与影子LRU初始化" class="headerlink" title="workingset_init: 工作集检测与影子LRU初始化"></a>workingset_init: 工作集检测与影子LRU初始化</h2><p>本代码片段负责初始化内核中一个高级的内存管理特性：<strong>工作集（Working Set）检测</strong>。其核心功能是创建一个“影子LRU” (<code>shadow_nodes</code>) 数据结构和一个相应的 <code>shrinker</code>。这个机制在后台追踪近期被从内存中换出（Evicted）的页面，并监测它们是否被迅速地重新载入（Refault）。通过分析这种“换出-重载”模式，内核可以更智能地判断哪些页面是进程真正活跃使用的工作集，从而在未来做出更优的页面回收决策，避免内存颠簸（Thrashing）。</p>
+<h3 id="实现原理分析"><a href="#实现原理分析" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>该机制的实现是内核LRU页面置换算法的一个重要优化，它通过一个轻量级的元数据缓存（影子条目）来获取关于页面访问历史的额外信息。</p>
+<ol>
+<li><p><strong>“换出代价”的量化 (<code>bucket_order</code> 计算)</strong>:</p>
+<ul>
+<li>内核需要一种方法来衡量一个页面被换出后，过了“多久”才被重新载入。这个“多久”不是以时间衡量，而是以期间发生的其他内存分配活动的数量来衡量，这被称为<strong>重载距离（Refault Distance）</strong>。</li>
+<li>为了在一个有限的位宽（<code>BITS_PER_LONG</code>）内记录这个可能非常大的距离，代码采用了一种**分桶（Bucketing）**策略。</li>
+<li><code>timestamp_bits</code> 计算出页标志位中可用于存储时间戳（一个随内存活动递增的计数器）的位数。</li>
+<li><code>max_order</code> 计算出表示系统中总页数所需的位数（即 <code>log2(totalram_pages)</code>）。</li>
+<li>如果总页数太大，以至于重载距离无法直接用 <code>timestamp_bits</code> 来表示（会导致计数器过快回绕），<code>bucket_order</code> 就会被设置为一个正值。它作为一个移位因子，将庞大的重载距离压缩到一个较小的范围内，相当于将连续的距离值分到同一个“桶”里。这是一种以牺牲精度来换取更大测量范围的典型技巧。</li>
+</ul>
+</li>
+<li><p><strong>Shrinker 框架集成</strong>:</p>
+<ul>
+<li>Linux 内核使用 <code>shrinker</code> 机制来统一管理各种可收缩的内存缓存。当系统内存不足时，内核会调用所有已注册的 <code>shrinker</code> 的回调函数来释放内存。</li>
+<li><code>workingset_init</code> 创建了一个专门用于管理“影子条目”元数据的 <code>shrinker</code>。标志 <code>SHRINKER_NUMA_AWARE</code> 和 <code>SHRINKER_MEMCG_AWARE</code> 表明该机制能够感知 NUMA 架构和内存控制组（cgroups），在相应的粒度上进行工作。</li>
+</ul>
+</li>
+<li><p><strong>影子LRU (<code>shadow_nodes</code>)</strong>:</p>
+<ul>
+<li><code>list_lru_init_memcg_key</code> 初始化了核心数据结构 <code>shadow_nodes</code>。这是一个 <code>list_lru</code>，专门用于存储被换出页面的元数据（影子条目），而不是页面本身。</li>
+<li>当一个页面被从页缓存中换出时，内核不会立即丢弃它的所有信息，而是会创建一个小的“影子条目”放入 <code>shadow_nodes</code> 链表中，并记录下当时的“时间戳”。</li>
+<li><code>count_shadow_nodes</code> 和 <code>scan_shadow_nodes</code> 是注册给 <code>shrinker</code> 的回调函数。它们的作用是，当系统内存极度紧张，连存储这些元数据的内存都需要回收时，<code>shrinker</code> 机制会调用它们来清理（释放）最旧的影子条目。</li>
+</ul>
+</li>
+</ol>
+<h3 id="特定场景分析：单核、无MMU的STM32H750平台"><a href="#特定场景分析：单核、无MMU的STM32H750平台" class="headerlink" title="特定场景分析：单核、无MMU的STM32H750平台"></a>特定场景分析：单核、无MMU的STM32H750平台</h3><h4 id="功能相关性：优化-uClinux-的页缓存"><a href="#功能相关性：优化-uClinux-的页缓存" class="headerlink" title="功能相关性：优化 uClinux 的页缓存"></a>功能相关性：优化 uClinux 的页缓存</h4><ul>
+<li>在无 MMU 的 uClinux 系统上，虽然没有匿名页的换出，但**页缓存（Page Cache）**的管理至关重要，尤其是对于从外部 Flash（如 QSPI Flash）执行代码（XIP）或读取数据的场景。</li>
+<li>工作集检测机制在这里的<strong>核心作用</strong>是优化页缓存的替换策略。当 SRAM 不足时，内核需要决定丢弃哪些缓存的页面。如果它错误地丢弃了一个程序马上就要用到的代码页，就会立即引发一次昂贵的从 Flash 重新加载的操作（即“重载”）。</li>
+<li>通过 <code>workingset</code> 机制，内核能够识别出那些被频繁重载的页面，并将它们标记为活跃工作集的一部分，从而在未来的内存回收中倾向于保留它们，而优先回收那些被换出后很久都未被再次访问的“冷”页面。这对于提升应用性能、减少 I&#x2F;O 抖动至关重要。</li>
+</ul>
+<h4 id="平台特性影响"><a href="#平台特性影响" class="headerlink" title="平台特性影响"></a>平台特性影响</h4><ul>
+<li><strong>NUMA 与 Memcg</strong>: STM32H750 是一个典型的 UMA（统一内存访问）平台，并且通常不使用内存控制组。因此，<code>SHRINKER_NUMA_AWARE</code> 和 <code>SHRINKER_MEMCG_AWARE</code> 标志虽然存在，但该机制的实际行为会退化为管理一个单一的、全局的影子 LRU 链表，这完全符合该平台的硬件架构。</li>
+<li><strong><code>bucket_order</code> 计算</strong>: STM32H750 的总内存 <code>totalram_pages()</code> 相对较小。因此，在计算中 <code>max_order</code> 的值会很小，很可能小于 <code>timestamp_bits</code>。这将导致 <code>bucket_order</code> 被设置为 <code>0</code>。这意味着在该平台上，内核可以直接使用高精度的时间戳来计算重载距离，无需进行分桶压缩，这对于内存较小的系统是完全合理的。</li>
+<li><strong>单核并发</strong>: <code>list_lru</code> 内部的锁（<code>list_lru-&gt;lock</code>）是 IRQ 安全的。在单核抢占式内核上，这个锁可以有效防止在更新 <code>shadow_nodes</code> 链表时被中断服务程序打断，从而保证了数据结构的一致性。</li>
+</ul>
+<h3 id="代码分析"><a href="#代码分析" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 我们的 list_lru-&gt;lock 是 IRQ 安全的，因为它嵌套在同样是 IRQ 安全的</span></span><br><span class="line"><span class="comment"> * i_pages 锁内部。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="class"><span class="keyword">struct</span> <span class="title">lock_class_key</span> <span class="title">shadow_nodes_key</span>;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 工作集检测机制的初始化函数。</span></span><br><span class="line"><span class="comment"> * @return 成功返回0，失败返回负数错误码。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __init <span class="title function_">workingset_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">shrinker</span> *<span class="title">workingset_shadow_shrinker</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">int</span> timestamp_bits;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">int</span> max_order;</span><br><span class="line">	<span class="type">int</span> ret = -ENOMEM;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 编译时检查，确保用于存储时间戳和标志位的 long 类型足够大。</span></span><br><span class="line">	BUILD_BUG_ON(BITS_PER_LONG &lt; EVICTION_SHIFT);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 计算换出桶的大小，以覆盖最长的可操作重载距离，</span></span><br><span class="line"><span class="comment">	 * 目前该距离是内存的一半 (totalram_pages/2)。然而，内存热插拔</span></span><br><span class="line"><span class="comment">	 * 可能会在运行时增加更多页面，因此我们以 totalram_pages 为基准，</span></span><br><span class="line"><span class="comment">	 * 这样可以处理高达初始内存两倍的情况。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="comment">// 计算可用于时间戳的位数。</span></span><br><span class="line">	timestamp_bits = BITS_PER_LONG - EVICTION_SHIFT;</span><br><span class="line">	<span class="comment">// 计算表示总页数所需的位数 (log2)。</span></span><br><span class="line">	max_order = fls_long(totalram_pages() - <span class="number">1</span>);</span><br><span class="line">	<span class="comment">// 如果表示总页数所需的位数超过了时间戳的位数，则需要分桶。</span></span><br><span class="line">	<span class="keyword">if</span> (max_order &gt; timestamp_bits)</span><br><span class="line">		<span class="comment">// bucket_order 是一个移位值，用于压缩重载距离以防止时间戳回绕。</span></span><br><span class="line">		bucket_order = max_order - timestamp_bits;</span><br><span class="line">	pr_info(<span class="string">&quot;workingset: timestamp_bits=%d max_order=%d bucket_order=%u\n&quot;</span>,</span><br><span class="line">	       timestamp_bits, max_order, bucket_order);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 分配一个 shrinker 实例，用于管理影子节点的元数据。</span></span><br><span class="line">	<span class="comment">// SHRINKER_NUMA_AWARE 和 SHRINKER_MEMCG_AWARE 使其能感知 NUMA 和 cgroup。</span></span><br><span class="line">	workingset_shadow_shrinker = shrinker_alloc(SHRINKER_NUMA_AWARE |</span><br><span class="line">						    SHRINKER_MEMCG_AWARE,</span><br><span class="line">						    <span class="string">&quot;mm-shadow&quot;</span>);</span><br><span class="line">	<span class="keyword">if</span> (!workingset_shadow_shrinker)</span><br><span class="line">		<span class="keyword">goto</span> err;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 初始化用于存储影子节点的 list_lru 数据结构。</span></span><br><span class="line">	ret = list_lru_init_memcg_key(&amp;shadow_nodes, workingset_shadow_shrinker,</span><br><span class="line">				      &amp;shadow_nodes_key);</span><br><span class="line">	<span class="keyword">if</span> (ret)</span><br><span class="line">		<span class="keyword">goto</span> err_list_lru;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 注册 shrinker 的回调函数。</span></span><br><span class="line">	workingset_shadow_shrinker-&gt;count_objects = count_shadow_nodes; <span class="comment">// 用于计算可收缩对象数量</span></span><br><span class="line">	workingset_shadow_shrinker-&gt;scan_objects = scan_shadow_nodes;  <span class="comment">// 用于执行收缩操作</span></span><br><span class="line">	<span class="comment">// -&gt;count 只报告完全可丢弃的节点，因此 seeks 设为0，表示扫描开销很小。</span></span><br><span class="line">	workingset_shadow_shrinker-&gt;seeks = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 向内核注册此 shrinker，使其生效。</span></span><br><span class="line">	shrinker_register(workingset_shadow_shrinker);</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 错误处理路径</span></span><br><span class="line">err_list_lru:</span><br><span class="line">	shrinker_free(workingset_shadow_shrinker);</span><br><span class="line">err:</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 将 workingset_init 注册为模块初始化函数。</span></span><br><span class="line">module_init(workingset_init);</span><br></pre></td></tr></table></figure>
+
+<h2 id="工作集影子节点-LRU-状态同步：workingset-update-node"><a href="#工作集影子节点-LRU-状态同步：workingset-update-node" class="headerlink" title="工作集影子节点 LRU 状态同步：workingset_update_node"></a>工作集影子节点 LRU 状态同步：workingset_update_node</h2><p>本代码片段定义了工作集（Working Set）检测机制的核心更新函数 <code>workingset_update_node</code>。其主要功能是：在页缓存的 XArray 树节点 (<code>xa_node</code>) 内容发生变化时被调用，动态地判断该节点是否应该被纳入“影子节点 LRU 链表” (<code>shadow_nodes</code>) 的管理之下，并同步更新其在链表中的存在状态以及相关的内核统计计数。</p>
+<h3 id="实现原理分析-1"><a href="#实现原理分析-1" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>该函数是工作集检测机制与 <code>list_lru</code> 回收框架之间的关键“胶水”逻辑。它通过一个精确的条件判断，决定一个 <code>xa_node</code> 的生命周期状态。</p>
+<ol>
+<li><p><strong>状态判断条件</strong>: 函数的核心是 <code>if (node-&gt;count &amp;&amp; node-&gt;count == node-&gt;nr_values)</code> 这个条件。</p>
+<ul>
+<li><code>node-&gt;count</code> 记录了 <code>xa_node</code> 中条目的总数（包括实际的页面指针和影子条目）。</li>
+<li><code>node-&gt;nr_values</code> 专门记录了影子条目的数量。</li>
+<li>因此，当且仅当一个节点<strong>非空</strong> (<code>node-&gt;count != 0</code>) 并且其<strong>所有条目都是影子条目</strong>时，这个条件为真。这种节点被称为“纯影子节点”，它不再持有任何有用的页面缓存数据，但其包含的影子条目仍然对工作集检测有价值。然而，这些节点本身占用了内存，因此它们是内存回收的候选对象。</li>
+</ul>
+</li>
+<li><p><strong>动态链表管理</strong>:</p>
+<ul>
+<li>当一个节点<strong>变成</strong>纯影子节点时，<code>workingset_update_node</code> 会检查它是否已在 <code>shadow_nodes</code> 链表上 (<code>list_empty</code>)。如果不在，就通过 <code>list_lru_add_obj</code> 将其加入链表尾部，并增加 <code>WORKINGSET_NODES</code> 计数。</li>
+<li>反之，当一个节点<strong>不再是</strong>纯影子节点时（因为它变为空，或者一个页面被插入其中），函数会检查它是否仍在链表上。如果在，就通过 <code>list_lru_del_obj</code> 将其移除，并减少 <code>WORKINGSET_NODES</code> 计数。</li>
+</ul>
+</li>
+<li><p><strong>锁与同步</strong>:</p>
+<ul>
+<li><code>lockdep_assert_held(&amp;node-&gt;array-&gt;xa_lock)</code> 断言明确指出，调用此函数时必须持有 XArray 的锁（即页缓存的 <code>i_pages</code> 锁）。这个锁保证了在函数执行期间，<code>node-&gt;count</code> 和 <code>node-&gt;nr_values</code> 的值不会被并发修改，从而确保了状态判断的原子性和正确性。</li>
+<li><code>list_empty</code> 检查是在持有 <code>i_pages</code> 锁的情况下进行的，这是安全的。而 <code>list_lru_add_obj</code> 和 <code>list_lru_del_obj</code> 内部会获取 <code>shadow_nodes</code> 自己的自旋锁，实现了对 LRU 链表自身的保护。这种两级锁的策略确保了数据的一致性。</li>
+</ul>
+</li>
+<li><p><strong>优化</strong>: 代码通过 <code>if (list_empty(...))</code> 的预检查，避免了在节点的 LRU 状态已经是期望状态时，去调用 <code>list_lru_add/del_obj</code>，从而减少了不必要的 LRU 锁获取和释放开销。</p>
+</li>
+</ol>
+<h3 id="代码分析-1"><a href="#代码分析-1" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @struct shadow_nodes</span></span><br><span class="line"><span class="comment"> * @brief 一个全局的 list_lru 实例。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这个 LRU 链表专门用于追踪所有“纯影子节点”（即仅包含影子条目的 xa_node）。</span></span><br><span class="line"><span class="comment"> * 当系统内存紧张时，内核的 shrinker 机制会遍历此链表，回收这些节点以释放内存。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">list_lru</span> <span class="title">shadow_nodes</span>;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief workingset_update_node - 更新一个 xa_node 在影子 LRU 链表中的状态。</span></span><br><span class="line"><span class="comment"> * @param node: 指向被修改的 xa_node 结构体的指针。</span></span><br><span class="line"><span class="comment"> * @note 此函数必须在持有 xa_node 所属 XArray 的锁 (xa_lock/i_pages lock) 的情况下调用。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">workingset_update_node</span><span class="params">(<span class="keyword">struct</span> xa_node *node)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 获取 node 结构体所在的物理页的 page 结构体指针，用于更新页状态计数。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page</span> *<span class="title">page</span> =</span> virt_to_page(node);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 这是一个调试断言，确保调用者已经持有了保护此节点的锁。</span></span><br><span class="line">	lockdep_assert_held(&amp;node-&gt;<span class="built_in">array</span>-&gt;xa_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 条件判断：如果节点非空，并且节点中的总条目数等于影子条目数，</span></span><br><span class="line">	<span class="comment">// 这意味着它是一个“纯影子节点”，应该被 LRU 链表追踪。</span></span><br><span class="line">	<span class="keyword">if</span> (node-&gt;count &amp;&amp; node-&gt;count == node-&gt;nr_values) &#123;</span><br><span class="line">		<span class="comment">// 如果此纯影子节点尚未在 LRU 链表上。</span></span><br><span class="line">		<span class="keyword">if</span> (list_empty(&amp;node-&gt;private_list)) &#123;</span><br><span class="line">			<span class="comment">// 将其添加到 shadow_nodes LRU 链表中。</span></span><br><span class="line">			list_lru_add_obj(&amp;shadow_nodes, &amp;node-&gt;private_list);</span><br><span class="line">			<span class="comment">// 增加全局的 WORKINGSET_NODES 统计计数。</span></span><br><span class="line">			__inc_node_page_state(page, WORKINGSET_NODES);</span><br><span class="line">		&#125;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		<span class="comment">// 否则，此节点或为空，或包含实际的页面，不应被 LRU 追踪。</span></span><br><span class="line">		<span class="comment">// 如果此节点当前仍在 LRU 链表上。</span></span><br><span class="line">		<span class="keyword">if</span> (!list_empty(&amp;node-&gt;private_list)) &#123;</span><br><span class="line">			<span class="comment">// 将其从 shadow_nodes LRU 链表中移除。</span></span><br><span class="line">			list_lru_del_obj(&amp;shadow_nodes, &amp;node-&gt;private_list);</span><br><span class="line">			<span class="comment">// 减少全局的 WORKINGSET_NODES 统计计数。</span></span><br><span class="line">			__dec_node_page_state(page, WORKINGSET_NODES);</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="工作集影子节点收缩器：count-shadow-nodes-scan-shadow-nodes-及-shadow-lru-isolate"><a href="#工作集影子节点收缩器：count-shadow-nodes-scan-shadow-nodes-及-shadow-lru-isolate" class="headerlink" title="工作集影子节点收缩器：count_shadow_nodes, scan_shadow_nodes 及 shadow_lru_isolate"></a>工作集影子节点收缩器：count_shadow_nodes, scan_shadow_nodes 及 shadow_lru_isolate</h2><p>本代码片段展示了 Linux 内核内存管理中，用于回收“工作集”检测机制所使用的“影子条目”的 shrinker 实现。其核心功能是：在系统面临内存压力时，精确地计算应回收的、用于存储影子条目的 <code>xa_node</code> 数量，并安全地从 LRU 链表上将其隔离和释放，从而回收这部分元数据所占用的内存。这套机制由三个函数协同完成：<code>count_shadow_nodes</code> 负责决策，<code>scan_shadow_nodes</code> 负责发起扫描，<code>shadow_lru_isolate</code> 负责具体执行。</p>
+<h3 id="实现原理分析-2"><a href="#实现原理分析-2" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>此机制是内核 shrinker 框架的一个实例，专门用于管理工作集检测（working set detection）的内存开销。工作集检测通过在页缓存（Page Cache）的基数树（Radix Tree，现为 XArray）中留下“影子条目”来判断一个页面被回收后是否很快被重新访问（即“refault”）。这些影子条目本身存储在 <code>xa_node</code> 结构中，也消耗内存，因此需要被管理和回收。</p>
+<ol>
+<li><p><strong>回收数量决策 (<code>count_shadow_nodes</code>)</strong>:</p>
+<ul>
+<li>此函数是 shrinker 的 <code>count</code> 回调，用于判断有多少个影子节点<em>可以被</em>回收。</li>
+<li>它首先通过 <code>list_lru_shrink_count</code> 获取当前 LRU 链表上影子节点的总数 <code>nodes</code>。</li>
+<li>核心原理是计算一个允许存在的最大影子节点数 <code>max_nodes</code>。这个最大值与系统或内存控制组（cgroup）中的总页数 <code>pages</code> 成正比。其计算公式为 <code>max_nodes = pages &gt;&gt; (XA_CHUNK_SHIFT - 3)</code>。</li>
+<li><strong>公式解析</strong>: <code>XA_CHUNK_SHIFT</code> 是 XArray 一个节点能容纳的条目数量的对数（通常为6，代表64个条目）。<code>- 3</code> 等价于 <code>* 8</code>。因此，公式可以理解为 <code>max_nodes = pages / (ENTRIES_PER_NODE / 8)</code>。这是一种启发式算法，其意图是：我们允许用于存储影子节点的内存开销，与被监控的总内存大小成一个固定的比例。这个比例被设定为，在最坏情况下（每个节点只有一个影子条目），我们最多愿意为每 <code>ENTRIES_PER_NODE / 8</code> 个页面就分配一个 <code>xa_node</code> 来跟踪其工作集。这在内存开销和工作集检测精度之间取得了平衡。</li>
+<li>最终，函数返回 <code>nodes - max_nodes</code>，即超出阈值的、需要被回收的节点数量。</li>
+</ul>
+</li>
+<li><p><strong>节点扫描与隔离 (<code>scan_shadow_nodes</code> 和 <code>shadow_lru_isolate</code>)</strong>:</p>
+<ul>
+<li><code>scan_shadow_nodes</code> 是 shrinker 的 <code>scan</code> 回调。它非常简单，直接调用 <code>list_lru_shrink_walk_irq</code> 函数，该函数会遍历 <code>shadow_nodes</code> 这个 LRU 链表，并对链表上的每个节点调用 <code>shadow_lru_isolate</code> 回调函数。</li>
+<li><code>shadow_lru_isolate</code> 是实际执行节点回收的核心逻辑。其过程体现了内核中复杂的锁同步技巧：<br>a.  <strong>锁顺序反转</strong>: 正常情况下，修改页缓存树需要先持有 <code>address_space</code> 的 <code>i_pages</code> 锁，再持有 LRU 链表锁。但此函数从 LRU 链表开始，已经持有了 LRU 锁。为了安全地操作节点的 <code>address_space</code>，它必须再去获取 <code>i_pages</code> 锁。<br>b.  <strong>非阻塞尝试</strong>: 由于在持有自旋锁（LRU 锁）时不能睡眠，它必须使用 <code>xa_trylock</code> 来尝试获取 <code>i_pages</code> 锁。如果失败，说明该 <code>address_space</code> 正被其他任务锁定，此时必须放弃，释放 LRU 锁并返回 <code>LRU_RETRY</code>，以便 shrinker 稍后重试。对于与 inode 关联的页缓存，还需额外尝试获取 <code>inode-&gt;i_lock</code>。<br>c.  <strong>隔离与删除</strong>: 成功获取所有需要的锁之后，它将节点从 LRU 链表中移除 (<code>list_lru_isolate</code>)，更新相关的统计计数，然后调用 <code>xa_delete_node</code> 将节点从 XArray 中彻底删除，并释放其占用的内存。<br>d.  <strong>状态验证</strong>: 通过 <code>WARN_ON_ONCE</code> 宏进行健全性检查，确保被回收的节点确实只包含影子条目 (<code>node-&gt;nr_values</code>)，而不包含任何实际的页面 (<code>node-&gt;count</code>)。</li>
+</ul>
+</li>
+</ol>
+<h3 id="特定场景分析：单核、无MMU的-STM32H750-平台"><a href="#特定场景分析：单核、无MMU的-STM32H750-平台" class="headerlink" title="特定场景分析：单核、无MMU的 STM32H750 平台"></a>特定场景分析：单核、无MMU的 STM32H750 平台</h3><h4 id="功能相关性"><a href="#功能相关性" class="headerlink" title="功能相关性"></a>功能相关性</h4><p>在标准的、用于嵌入式场景的 STM32H750 应用中，通常不会启用完整的 Linux 内存管理子系统，尤其是像工作集检测这样的高级功能。工作集检测（<code>CONFIG_WORKING_SET_DETECTION</code>）的核心前提是存在基于页（Page）的按需换页（demand paging）和页面回收机制。</p>
+<ol>
+<li><strong>无 MMU 的影响</strong>: 在没有内存管理单元（MMU）的 ARMv7-M 架构上，无法实现虚拟内存，也就没有传统意义上的“页错误”（Page Fault）和页面换出（swap out）。内存管理较为直接，不存在页面被“回收”到后备存储后又被“refault”回内存的场景。</li>
+<li><strong>结论</strong>: 因此，工作集检测机制及其影子条目对于无 MMU 的平台是<strong>没有意义的</strong>。在为 STM32H750 这类平台配置内核时，<code>CONFIG_WORKING_SET_DETECTION</code> 选项几乎总会被禁用。所以，这段代码（<code>count_shadow_nodes</code>, <code>scan_shadow_nodes</code>, <code>shadow_lru_isolate</code>）在功能上与该特定平台无关，它们对应的代码路径不会被编译进最终的内核镜像，也不会被执行。</li>
+</ol>
+<h4 id="单核环境影响"><a href="#单核环境影响" class="headerlink" title="单核环境影响"></a>单核环境影响</h4><p>尽管此代码在该平台上不适用，但我们可以从纯粹的软件角度分析其在单核环境下的行为。</p>
+<p>代码中使用了 <code>spin_unlock_irq</code> 等自旋锁原语。在单核处理器上，获取一个 <code>spin_lock_irqsave</code> 锁的操作等价于“保存当前中断状态并禁用本地中断”。释放锁则恢复中断状态。这种机制足以防止在临界区代码执行期间被中断服务程序打断，从而保证了对共享数据（如 LRU 链表）访问的原子性。<code>trylock</code> 逻辑在这种环境下依然是正确的，用于处理需要获取多个“锁”（实为中断屏蔽状态）时的复杂同步，避免死锁。因此，代码中的同步机制在单核环境下是正确且有效的。</p>
+<h3 id="代码分析-2"><a href="#代码分析-2" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br><span class="line">145</span><br><span class="line">146</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief count_shadow_nodes - 计算应被回收的影子节点的数量。</span></span><br><span class="line"><span class="comment"> * @param shrinker: 指向 shrinker 控制块的指针 (未使用)。</span></span><br><span class="line"><span class="comment"> * @param sc: 指向 shrinker 控制参数的指针，包含了目标节点和 cgroup 信息。</span></span><br><span class="line"><span class="comment"> * @return unsigned long 返回值: 如果当前节点数未超过阈值，返回0；否则返回超出阈值的节点数。如果链表为空，返回 SHRINK_EMPTY。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">unsigned</span> <span class="type">long</span> <span class="title function_">count_shadow_nodes</span><span class="params">(<span class="keyword">struct</span> shrinker *shrinker,</span></span><br><span class="line"><span class="params">					<span class="keyword">struct</span> shrink_control *sc)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> max_nodes; <span class="comment">/// &lt; 允许存在的最大节点数。</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> nodes;     <span class="comment">/// &lt; 当前LRU链表上的节点总数。</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> pages;     <span class="comment">/// &lt; 用于计算阈值的总页面数。</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 获取 shadow_nodes 这个 LRU 链表上的对象数量。</span></span><br><span class="line">	nodes = list_lru_shrink_count(&amp;shadow_nodes, sc);</span><br><span class="line">	<span class="comment">// 如果链表为空，则无需回收。</span></span><br><span class="line">	<span class="keyword">if</span> (!nodes)</span><br><span class="line">		<span class="keyword">return</span> SHRINK_EMPTY;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_MEMCG</span></span><br><span class="line">	<span class="comment">// 如果是在一个内存控制组 (cgroup) 的上下文中进行回收。</span></span><br><span class="line">	<span class="keyword">if</span> (sc-&gt;memcg) &#123;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">lruvec</span> *<span class="title">lruvec</span>;</span></span><br><span class="line">		<span class="type">int</span> i;</span><br><span class="line"></span><br><span class="line">		<span class="comment">// 刷新 cgroup 的统计数据（有速率限制）。</span></span><br><span class="line">		mem_cgroup_flush_stats_ratelimited(sc-&gt;memcg);</span><br><span class="line">		<span class="comment">// 获取指定 cgroup 和 NUMA 节点的 lruvec。</span></span><br><span class="line">		lruvec = mem_cgroup_lruvec(sc-&gt;memcg, NODE_DATA(sc-&gt;nid));</span><br><span class="line">		<span class="comment">// 累加所有LRU链表（活跃/不活跃的匿名页和文件页）的页面数。</span></span><br><span class="line">		<span class="keyword">for</span> (pages = <span class="number">0</span>, i = <span class="number">0</span>; i &lt; NR_LRU_LISTS; i++)</span><br><span class="line">			pages += lruvec_page_state_local(lruvec,</span><br><span class="line">							 NR_LRU_BASE + i);</span><br><span class="line">		<span class="comment">// 累加可回收和不可回收的 slab 页面数。</span></span><br><span class="line">		pages += lruvec_page_state_local(</span><br><span class="line">			lruvec, NR_SLAB_RECLAIMABLE_B) &gt;&gt; PAGE_SHIFT;</span><br><span class="line">		pages += lruvec_page_state_local(</span><br><span class="line">			lruvec, NR_SLAB_UNRECLAIMABLE_B) &gt;&gt; PAGE_SHIFT;</span><br><span class="line">	&#125; <span class="keyword">else</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">		<span class="comment">// 如果不在 cgroup 上下文中，则使用整个 NUMA 节点的物理页面数。</span></span><br><span class="line">		pages = node_present_pages(sc-&gt;nid);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 计算最大节点数。pages / (2^(XA_CHUNK_SHIFT) / 8)。</span></span><br><span class="line">	<span class="comment">// XA_CHUNK_SHIFT 通常为 6 (64个条目)，所以相当于 pages / (64/8) = pages / 8。</span></span><br><span class="line">	max_nodes = pages &gt;&gt; (XA_CHUNK_SHIFT - <span class="number">3</span>);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 如果当前节点数未超过上限，则不需要回收。</span></span><br><span class="line">	<span class="keyword">if</span> (nodes &lt;= max_nodes)</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	<span class="comment">// 返回需要回收的节点数，即当前数量减去允许的最大数量。</span></span><br><span class="line">	<span class="keyword">return</span> nodes - max_nodes;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief shadow_lru_isolate - 从LRU链表中隔离一个影子节点以准备回收。</span></span><br><span class="line"><span class="comment"> * @param item: 指向节点在LRU链表中的 list_head 成员的指针。</span></span><br><span class="line"><span class="comment"> * @param lru: 指向 list_lru_one 实例的指针。</span></span><br><span class="line"><span class="comment"> * @param arg: 用户自定义参数 (未使用)。</span></span><br><span class="line"><span class="comment"> * @return enum lru_status: 返回隔离操作的状态 (成功、重试等)。</span></span><br><span class="line"><span class="comment"> * @note 此函数在执行时必须已持有 lru-&gt;lock。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">enum</span> lru_status <span class="title function_">shadow_lru_isolate</span><span class="params">(<span class="keyword">struct</span> list_head *item,</span></span><br><span class="line"><span class="params">					  <span class="keyword">struct</span> list_lru_one *lru,</span></span><br><span class="line"><span class="params">					  <span class="type">void</span> *arg)</span> __<span class="title function_">must_hold</span><span class="params">(lru-&gt;lock)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 通过 list_head 指针找到其所属的 xa_node 结构体。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">xa_node</span> *<span class="title">node</span> =</span> container_of(item, <span class="keyword">struct</span> xa_node, private_list);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">address_space</span> *<span class="title">mapping</span>;</span> <span class="comment">/// &lt; 节点所属的地址空间。</span></span><br><span class="line">	<span class="type">int</span> ret; <span class="comment">/// &lt; 操作返回值。</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 从节点的 XArray 成员找到其所属的 address_space 结构体。</span></span><br><span class="line">	mapping = container_of(node-&gt;<span class="built_in">array</span>, <span class="keyword">struct</span> address_space, i_pages);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 从LRU链表开始，需要反转锁的获取顺序。尝试获取 i_pages 锁。</span></span><br><span class="line">	<span class="keyword">if</span> (!xa_trylock(&amp;mapping-&gt;i_pages)) &#123;</span><br><span class="line">		<span class="comment">// 如果无法立即获取(锁被占用)，则释放LRU锁，要求上层重试。</span></span><br><span class="line">		spin_unlock_irq(&amp;lru-&gt;lock);</span><br><span class="line">		ret = LRU_RETRY;</span><br><span class="line">		<span class="keyword">goto</span> out;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 对于页缓存，我们还需要持有 inode 的 i_lock。</span></span><br><span class="line">	<span class="keyword">if</span> (mapping-&gt;host != <span class="literal">NULL</span>) &#123;</span><br><span class="line">		<span class="comment">// 尝试获取 inode 锁。</span></span><br><span class="line">		<span class="keyword">if</span> (!spin_trylock(&amp;mapping-&gt;host-&gt;i_lock)) &#123;</span><br><span class="line">			<span class="comment">// 如果失败，释放已获取的 i_pages 锁和 LRU 锁，然后要求重试。</span></span><br><span class="line">			xa_unlock(&amp;mapping-&gt;i_pages);</span><br><span class="line">			spin_unlock_irq(&amp;lru-&gt;lock);</span><br><span class="line">			ret = LRU_RETRY;</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 成功获取所有锁后，将节点从 LRU 链表中隔离出来。</span></span><br><span class="line">	list_lru_isolate(lru, item);</span><br><span class="line">	<span class="comment">// 将此节点的页状态计数器(WORKINGSET_NODES)减一。</span></span><br><span class="line">	__dec_node_page_state(virt_to_page(node), WORKINGSET_NODES);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 此时已将节点与LRU解耦，可以释放LRU锁了。</span></span><br><span class="line">	spin_unlock(&amp;lru-&gt;lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 警告：如果节点中没有影子条目，说明状态异常。</span></span><br><span class="line">	<span class="keyword">if</span> (WARN_ON_ONCE(!node-&gt;nr_values))</span><br><span class="line">		<span class="keyword">goto</span> out_invalid;</span><br><span class="line">	<span class="comment">// 警告：如果节点中的总条目数不等于影子条目数（意味着含有页面），状态异常。</span></span><br><span class="line">	<span class="keyword">if</span> (WARN_ON_ONCE(node-&gt;count != node-&gt;nr_values))</span><br><span class="line">		<span class="keyword">goto</span> out_invalid;</span><br><span class="line">	<span class="comment">// 从 XArray 中删除此节点，删除过程中会调用 workingset_update_node 更新状态。</span></span><br><span class="line">	xa_delete_node(node, workingset_update_node);</span><br><span class="line">	<span class="comment">// 增加 lruvec 中节点回收的统计计数。</span></span><br><span class="line">	__inc_lruvec_kmem_state(node, WORKINGSET_NODERECLAIM);</span><br><span class="line"></span><br><span class="line">out_invalid:</span><br><span class="line">	<span class="comment">// 释放 i_pages 锁，并恢复中断。</span></span><br><span class="line">	xa_unlock_irq(&amp;mapping-&gt;i_pages);</span><br><span class="line">	<span class="comment">// 如果存在宿主 inode。</span></span><br><span class="line">	<span class="keyword">if</span> (mapping-&gt;host != <span class="literal">NULL</span>) &#123;</span><br><span class="line">		<span class="comment">// 如果这个 mapping 是可收缩的，则将其 inode 添加到 LRU 中以便后续处理。</span></span><br><span class="line">		<span class="keyword">if</span> (mapping_shrinkable(mapping))</span><br><span class="line">			inode_add_lru(mapping-&gt;host);</span><br><span class="line">		<span class="comment">// 释放 inode 锁。</span></span><br><span class="line">		spin_unlock(&amp;mapping-&gt;host-&gt;i_lock);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// 返回状态，表示已成功移除一个节点，并建议重试扫描，因为锁已被释放。</span></span><br><span class="line">	ret = LRU_REMOVED_RETRY;</span><br><span class="line">out:</span><br><span class="line">	<span class="comment">// 提供一个调度点，允许其他任务运行。</span></span><br><span class="line">	cond_resched();</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief scan_shadow_nodes - 扫描并回收超出限额的影子节点。</span></span><br><span class="line"><span class="comment"> * @param shrinker: 指向 shrinker 控制块的指针 (未使用)。</span></span><br><span class="line"><span class="comment"> * @param sc: 指向 shrinker 控制参数的指针。</span></span><br><span class="line"><span class="comment"> * @return unsigned long: 返回成功回收的对象数量。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">unsigned</span> <span class="type">long</span> <span class="title function_">scan_shadow_nodes</span><span class="params">(<span class="keyword">struct</span> shrinker *shrinker,</span></span><br><span class="line"><span class="params">				       <span class="keyword">struct</span> shrink_control *sc)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 调用通用的 LRU 链表遍历和收缩函数。</span></span><br><span class="line">	<span class="comment">// 它会遍历 shadow_nodes 链表，并对每个元素调用 shadow_lru_isolate 函数。</span></span><br><span class="line">	<span class="keyword">return</span> list_lru_shrink_walk_irq(&amp;shadow_nodes, sc, shadow_lru_isolate,</span><br><span class="line">					<span class="literal">NULL</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/0/">https://wdfk-prog.space/posts/0/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/mm/">mm</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/09.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/b4dd5ab6/" title="fcntl"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">fcntl</div></div><div class="info-2"><div class="info-item-1">  [toc] fs&#x2F;fcntl.c 文件控制(File Control) 管理文件锁和文件描述符属性 历史与背景这项技术是为了解决什么特定问题而诞生的？fs/fcntl.c 实现的 fcntl() 系统调用是为了解决一个基本问题：在文件被打开之后，如何查询和修改其属性及状态。标准的 open(), read(), write(), close() 提供了对文件内容的基本I&#x2F;O操作，但现实世界的应用程序需要更精细的控制能力，主要包括：  并发访问控制：当多个进程同时访问同一个文件时，如何防止数据损坏？这就需要一种机制来协调访问，即文件锁（File Locking）。 修改描述符行为：如何将一个阻塞的文件描述符（File Descriptor, FD）变为非阻塞的？如何防止一个打开的FD被子进程继承？这就需要对FD的属性进行管理。 复制文件描述符：如何创建一个新的FD，使其指向与现有FD相同的打开文件实例（struct file），例如用于重定向标准输入&#x2F;输出。  fcntl() 被设计成一个多功能的“瑞士军刀”，通过一个单一的系统调用入口，提供了对上...</div></div></div></a><a class="pagination-related" href="/posts/e8ec9031/" title="vmscan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">vmscan</div></div><div class="info-2"><div class="info-item-1">   [toc]  mm&#x2F;vmscan.c 页面回收(Page Reclaim) 内核内存管理的核心压力调节器历史与背景这项技术是为了解决什么特定问题而诞生的？mm/vmscan.c 中的代码是为了解决计算机科学中最基本的问题之一：物理内存是一种有限资源。当系统运行的应用程序和内核本身需要的内存总量超过了可用的物理RAM时，操作系统必须有一种机制来释放一些当前已分配但“不那么重要”的内存，以便为新的、更紧迫的内存请求腾出空间。 如果没有页面回收机制，系统在内存耗尽时唯一的选择就是拒绝新的内存分配请求，这将导致应用程序崩溃或系统完全停止响应。vmscan.c 实现的页面回收（Page Reclaim）算法，其核心目标是在内存压力（Memory Pressure）下，智能地选择并回收内存页面，从而保证系统的持续运行和响应能力。 它的发展经历了哪些重要的里程碑或版本迭代？Linux的页面回收算法经历了重大的演进，以适应不断变化的硬件和工作负载：  早期的LRU：最初的Linux内核使用了相当简单的“最近最少使用”（Least Recently Used, LRU）算法。 两阶...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1"> [TOC] init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的 i...</div></div></div></a><a class="pagination-related" href="/posts/e8ec9031/" title="vmscan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">vmscan</div></div><div class="info-2"><div class="info-item-1">   [toc]  mm&#x2F;vmscan.c 页面回收(Page Reclaim) 内核内存管理的核心压力调节器历史与背景这项技术是为了解决什么特定问题而诞生的？mm/vmscan.c 中的代码是为了解决计算机科学中最基本的问题之一：物理内存是一种有限资源。当系统运行的应用程序和内核本身需要的内存总量超过了可用的物理RAM时，操作系统必须有一种机制来释放一些当前已分配但“不那么重要”的内存，以便为新的、更紧迫的内存请求腾出空间。 如果没有页面回收机制，系统在内存耗尽时唯一的选择就是拒绝新的内存分配请求，这将导致应用程序崩溃或系统完全停止响应。vmscan.c 实现的页面回收（Page Reclaim）算法，其核心目标是在内存压力（Memory Pressure）下，智能地选择并回收内存页面，从而保证系统的持续运行和响应能力。 它的发展经历了哪些重要的里程碑或版本迭代？Linux的页面回收算法经历了重大的演进，以适应不断变化的硬件和工作负载：  早期的LRU：最初的Linux内核使用了相当简单的“最近最少使用”（Least Recently Used, LRU）算法。 两阶...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/e5a511c0/" title="mmzone"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">mmzone</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;vmscan.c lruvec 结构体 页面回收的核心数据结构lruvec 是 Linux 内核中用于管理 LRU（Least Recently Used，最近最少使用）页面列表的一个核心数据结构。它是内存管理子系统的一部分，定义于 mm/vmscan.c 相关头文件中，主要作用是在页面回收（Page Reclamation）过程中，对不同类型、不同状态的内存页面进行分组和跟踪，是内核决定回收哪些页面的关键依据。 历史与背景这项技术是为了解决什么特定问题而诞生的？lruvec 的诞生是为了解决在现代计算机体系结构下，如何高效、精确、可扩展地管理内存页面以供回收的问题。  区分页面类型：不同类型的内存页面回收成本和策略完全不同。例如，文件页（File-backed pages）如果内容未被修改（是干净的），可以直接丢弃，需要时再从磁盘读回；而匿名页（Anonymous pages，如进程堆栈、malloc分配的内存）则必须先交换到交换空间（Swap Area）才能释放，成本更高。lruvec 需要将它们分开管理。 近似LRU算法：真正的LRU算法要求跟踪...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">dma</div></div><div class="info-2"><div class="info-item-1">[TOC] drivers&#x2F;dma DMA引擎与映射(DMA Engine &amp; Mapping) 内核统一的直接内存访问框架历史与背景这项技术是为了解决什么特定问题而诞生的？DMA（Direct Memory Access，直接内存访问）框架的诞生是为了解决一个根本性的性能瓶颈问题，并为内核提供一个统一、可移植的解决方案。  解决CPU性能瓶颈：在没有DMA的系统中，当外设（如网卡、磁盘）需要与内存交换大量数据时，CPU必须亲自担当“搬运工”的角色。这种方式被称为PIO（Programmed I&#x2F;O），CPU需要逐字节或逐字地从设备读取数据再写入内存，或者反之。对于高速设备，这会消耗大量的CPU周期，导致CPU无暇处理其他计算任务，严重影响系统整体性能。DMA技术通过引入一个专门的硬件控制器（DMAC），允许外设在没有CPU干预的情况下直接与内存进行数据传输，从而将CPU解放出来。 抽象硬件差异：不同的CPU架构和SoC平台，其DMA控制器的设计和编程接口千差万别。如果没有一个统一的软件框架，设备驱动程序的开发者将不得不为每一种不同的DMAC编写特定的...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-workingset-c-%E5%B7%A5%E4%BD%9C%E9%9B%86%E6%A3%80%E6%B5%8B-Working-Set-Detection-%E6%8F%90%E5%8D%87%E9%A1%B5%E9%9D%A2%E5%9B%9E%E6%94%B6%E6%95%88%E7%8E%87%E7%9A%84%E7%83%AD%E7%82%B9%E5%86%85%E5%AD%98%E8%AF%86%E5%88%AB%E6%9C%BA%E5%88%B6"><span class="toc-number">1.</span> <span class="toc-text">mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#workingset-init-%E5%B7%A5%E4%BD%9C%E9%9B%86%E6%A3%80%E6%B5%8B%E4%B8%8E%E5%BD%B1%E5%AD%90LRU%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="toc-number">1.1.</span> <span class="toc-text">workingset_init: 工作集检测与影子LRU初始化</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">1.1.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E5%88%86%E6%9E%90%EF%BC%9A%E5%8D%95%E6%A0%B8%E3%80%81%E6%97%A0MMU%E7%9A%84STM32H750%E5%B9%B3%E5%8F%B0"><span class="toc-number">1.1.2.</span> <span class="toc-text">特定场景分析：单核、无MMU的STM32H750平台</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8A%9F%E8%83%BD%E7%9B%B8%E5%85%B3%E6%80%A7%EF%BC%9A%E4%BC%98%E5%8C%96-uClinux-%E7%9A%84%E9%A1%B5%E7%BC%93%E5%AD%98"><span class="toc-number">1.1.2.1.</span> <span class="toc-text">功能相关性：优化 uClinux 的页缓存</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B9%B3%E5%8F%B0%E7%89%B9%E6%80%A7%E5%BD%B1%E5%93%8D"><span class="toc-number">1.1.2.2.</span> <span class="toc-text">平台特性影响</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">1.1.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E9%9B%86%E5%BD%B1%E5%AD%90%E8%8A%82%E7%82%B9-LRU-%E7%8A%B6%E6%80%81%E5%90%8C%E6%AD%A5%EF%BC%9Aworkingset-update-node"><span class="toc-number">1.2.</span> <span class="toc-text">工作集影子节点 LRU 状态同步：workingset_update_node</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-1"><span class="toc-number">1.2.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-1"><span class="toc-number">1.2.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E9%9B%86%E5%BD%B1%E5%AD%90%E8%8A%82%E7%82%B9%E6%94%B6%E7%BC%A9%E5%99%A8%EF%BC%9Acount-shadow-nodes-scan-shadow-nodes-%E5%8F%8A-shadow-lru-isolate"><span class="toc-number">1.3.</span> <span class="toc-text">工作集影子节点收缩器：count_shadow_nodes, scan_shadow_nodes 及 shadow_lru_isolate</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90-2"><span class="toc-number">1.3.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E5%88%86%E6%9E%90%EF%BC%9A%E5%8D%95%E6%A0%B8%E3%80%81%E6%97%A0MMU%E7%9A%84-STM32H750-%E5%B9%B3%E5%8F%B0"><span class="toc-number">1.3.2.</span> <span class="toc-text">特定场景分析：单核、无MMU的 STM32H750 平台</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8A%9F%E8%83%BD%E7%9B%B8%E5%85%B3%E6%80%A7"><span class="toc-number">1.3.2.1.</span> <span class="toc-text">功能相关性</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8D%95%E6%A0%B8%E7%8E%AF%E5%A2%83%E5%BD%B1%E5%93%8D"><span class="toc-number">1.3.2.2.</span> <span class="toc-text">单核环境影响</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-2"><span class="toc-number">1.3.3.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/09.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '2e3994ba3acf9f05332e4ce7eae5a102'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

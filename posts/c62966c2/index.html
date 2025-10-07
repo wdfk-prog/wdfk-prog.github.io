@@ -1,0 +1,1157 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>page-writeback | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC] mm&#x2F;page-writeback.c 页面回写(Page Writeback) 数据持久化的核心机制历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了解决一个计算机体系结构中的根本性矛盾：内存（RAM）与持久性存储设备（如硬盘、SSD）之间巨大的性能差距。  性能缓冲：应用程序向文件写入数据时，如果每次写入都必须等待慢速的存储设备完成，那么整个系统的性能和响应">
+<meta property="og:type" content="article">
+<meta property="og:title" content="page-writeback">
+<meta property="og:url" content="https://wdfk-prog.space/posts/c62966c2/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC] mm&#x2F;page-writeback.c 页面回写(Page Writeback) 数据持久化的核心机制历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了解决一个计算机体系结构中的根本性矛盾：内存（RAM）与持久性存储设备（如硬盘、SSD）之间巨大的性能差距。  性能缓冲：应用程序向文件写入数据时，如果每次写入都必须等待慢速的存储设备完成，那么整个系统的性能和响应">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/05.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-03T09:23:28.732Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="mm">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/05.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "page-writeback",
+  "url": "https://wdfk-prog.space/posts/c62966c2/",
+  "image": "https://wdfk-prog.space/images/covers/05.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-03T09:23:28.732Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/c62966c2/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'page-writeback',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/05.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">page-writeback</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">page-writeback<a class="post-edit-link" href="null_posts/linux/mm/page-writeback.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-03T09:23:28.732Z" title="更新于 2025-10-03 17:23:28">2025-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/mm/">mm</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6.6k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>23分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/c62966c2/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-03 17:23:28&quot;}" hidden></div><p>[TOC]</p>
+<h1 id="mm-page-writeback-c-页面回写-Page-Writeback-数据持久化的核心机制"><a href="#mm-page-writeback-c-页面回写-Page-Writeback-数据持久化的核心机制" class="headerlink" title="mm&#x2F;page-writeback.c 页面回写(Page Writeback) 数据持久化的核心机制"></a>mm&#x2F;page-writeback.c 页面回写(Page Writeback) 数据持久化的核心机制</h1><h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h4><p>这项技术是为了解决一个计算机体系结构中的根本性矛盾：<strong>内存（RAM）与持久性存储设备（如硬盘、SSD）之间巨大的性能差距</strong>。</p>
+<ul>
+<li><strong>性能缓冲</strong>：应用程序向文件写入数据时，如果每次写入都必须等待慢速的存储设备完成，那么整个系统的性能和响应速度将变得无法接受。页面回写机制利用高速的内存作为<strong>写回缓存（Write-back Cache）</strong>，允许<code>write()</code>系统调用将数据写入内存（即 Page Cache）后立即返回，从而极大地提升了应用程序的写入性能和系统吞吐量。</li>
+<li><strong>数据持久化</strong>：内存中的数据是易失的，断电后会丢失。因此，必须有一个可靠的机制，将在内存中被修改过的数据（称为“脏页”，Dirty Page）在合适的时机写回到持久性存储设备上，确保数据的最终安全性。</li>
+<li><strong>I&#x2F;O效率优化</strong>：该机制可以将多次小的、离散的写入操作在内存中合并成一次大的、连续的写入操作，然后再提交给存储设备。这种**I&#x2F;O合并（I&#x2F;O Coalescing）**大大减少了磁盘寻道次数（对HDD而言）和I&#x2F;O开销，提高了存储设备的利用效率。</li>
+</ul>
+<h4 id="它的发展经历了哪些重要的里程碑或版本迭代？"><a href="#它的发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="它的发展经历了哪些重要的里程碑或版本迭代？"></a>它的发展经历了哪些重要的里程碑或版本迭代？</h4><p>Linux的页面回写机制经历了数次重要的架构演进，以适应不断变化的硬件和工作负载。</p>
+<ul>
+<li><strong>早期的 <code>bdflush</code> 守护进程</strong>：在非常早期的内核中（2.4之前），一个名为 <code>bdflush</code> 的内核守护进程负责回写所有的脏数据。这是一种简单但粗粒度的全局性机制。</li>
+<li><strong><code>pdflush</code> 时代</strong>：为了解决 <code>bdflush</code> 的单线程瓶颈问题，内核引入了 <code>pdflush</code>。这是一个由多个内核线程组成的线程池。任何一个 <code>pdflush</code> 线程都可以回写任何设备上的脏页。这提高了并行性，但也带来了新问题：<strong>I&#x2F;O调度器难以区分来自不同设备的回写请求</strong>，可能导致多个 <code>pdflush</code> 线程同时向同一个慢速设备写入数据，引发I&#x2F;O拥塞。</li>
+<li><strong>BDI Flusher（现代机制）</strong>：为了解决<code>pdflush</code>的问题，内核引入了<strong>Backing Device Info (<code>struct backing_dev_info</code>)</strong> 的概念。每个块设备都有自己的BDI结构，该结构描述了设备的I&#x2F;O特性。回写工作现在由与特定BDI关联的专有flusher线程（通过通用kworker实现）来完成。这使得回写操作可以基于每个设备进行调度和调整，从而实现了更精细的I&#x2F;O控制，避免了不必要的I&#x2F;O竞争，是目前仍在使用的核心架构。</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><p>页面回写是Linux内存管理和I&#x2F;O子系统的绝对核心，其代码稳定、高效且仍在不断优化。</p>
+<ul>
+<li><strong>社区活跃度</strong>：作为内核性能的关键路径，任何与I&#x2F;O栈、内存管理相关的重大改进都会涉及对页面回写机制的审视和微调。社区持续对其进行性能分析和优化，以适应新的存储硬件（如NVMe SSDs）和工作负载。</li>
+<li><strong>主流应用</strong>：该机制是所有标准Linux文件系统（如ext4, XFS, btrfs）进行I&#x2F;O操作的基础。从嵌入式设备、桌面系统到大型数据库服务器和超级计算机，任何涉及文件写入的场景都在使用页面回写。对 <code>/proc/sys/vm/dirty_*</code> 等参数的调整，是Linux系统性能调优的关键部分。</li>
+</ul>
+<h3 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h4><p>页面回写机制是一个由多个策略和触发器驱动的复杂系统。</p>
+<ol>
+<li><p><strong>页面的“变脏”</strong>：当进程通过<code>write()</code>系统调用或写入内存映射文件（memory-mapped file）时，内核会找到对应的Page Cache中的页面，修改其内容，并将其标记为**“Dirty”**状态。此时，<code>write()</code>调用可以立即返回，应用程序无需等待数据落盘。</p>
+</li>
+<li><p><strong>脏页的追踪</strong>：所有脏页都被链接到其所属文件的<code>inode</code>的<code>address_space</code>结构中，同时也被内核的内存管理系统进行全局追踪。</p>
+</li>
+<li><p><strong>回写的触发</strong>：回写操作由以下几种条件自动触发：</p>
+<ul>
+<li><strong>基于时间的触发</strong>：当一个页面变为“脏”状态后，它有一个“保鲜期”。如果它持续处于脏状态超过一定时间（由 <code>/proc/sys/vm/dirty_expire_centisecs</code> 控制），flusher线程就会被唤醒来回写这些“过期”的脏页。</li>
+<li><strong>基于全局阈值的触发</strong>：<ul>
+<li><strong>后台阈值（Background Threshold）</strong>：当整个系统的脏页总量超过一个设定的阈值（由 <code>/proc/sys/vm/dirty_background_ratio</code> 或 <code>dirty_background_bytes</code> 控制）时，内核会唤醒flusher线程在<strong>后台</strong>开始回写脏页，这个过程对应用程序是透明的。</li>
+<li><strong>主动阈值（Active Threshold）</strong>：当脏页总量继续增长，超过一个更高的阈值（由 <code>/proc/sys/vm/dirty_ratio</code> 或 <code>dirty_bytes</code> 控制）时，系统认为脏页压力过大。此时，<strong>正在产生脏页的进程本身</strong>将会被阻塞，并被强制要求执行回写操作（即“写时阻塞”），直到脏页数量降到阈值以下。这是一种反向压力机制，防止系统被无限的脏页淹没。</li>
+</ul>
+</li>
+<li><strong>显式调用触发</strong>：当用户或应用程序调用<code>sync()</code>、<code>fsync()</code>、<code>msync()</code>等系统调用时，会强制、同步地将指定的脏页（或全部脏页）回写到存储设备。</li>
+<li><strong>内存回收触发</strong>：当系统内存不足，需要回收页面时，如果遇到一个干净的页面，可以直接回收；如果遇到一个脏的页面，必须先将其回写到磁盘，才能将其回收。</li>
+</ul>
+</li>
+<li><p><strong>回写的执行</strong>：被唤醒的flusher线程会扫描脏页列表，通过文件系统的<code>writepages</code>方法，将脏页的数据提交给块设备层，最终由I&#x2F;O调度器安排写入物理设备。</p>
+</li>
+</ol>
+<h4 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h4><ul>
+<li><strong>高性能</strong>：通过将写操作缓冲在内存中，极大地降低了应用程序感受到的I&#x2F;O延迟。</li>
+<li><strong>高吞吐量</strong>：通过I&#x2F;O合并，将多次小写操作聚合成大写操作，提升了存储设备的利用效率。</li>
+<li><strong>系统响应性</strong>：防止了应用程序因等待慢速I&#x2F;O而被长时间阻塞。</li>
+<li><strong>可调优性</strong>：提供了丰富的<code>sysctl</code>参数，允许系统管理员根据具体的硬件和工作负载进行精细的性能调优。</li>
+</ul>
+<h4 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h4><ul>
+<li><strong>数据丢失风险</strong>：这是写回缓存的固有权衡。在数据被写入内存但尚未回写到磁盘的时间窗口内，如果发生系统崩溃或断电，这部分数据将会永久丢失。需要高数据一致性的应用（如数据库）必须使用<code>fsync()</code>等调用来确保关键数据的落盘。</li>
+<li><strong>I&#x2F;O突发</strong>：当积累了大量脏页后，回写操作可能导致突发性的、剧烈的I&#x2F;O活动（I&#x2F;O Storm），这可能会影响系统中其他对延迟敏感的应用的性能。</li>
+<li><strong>调优复杂性</strong>：默认的内核参数是为通用场景设计的，可能不适用于特定 workload。例如，对于大量突发写入的场景，不当的参数可能会导致系统响应迟钝或性能下降，找到最优参数需要深入的知识和实验。</li>
+</ul>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"></a>在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</h4><p>页面回写是Linux文件I&#x2F;O的默认和基础行为，因此它适用于几乎所有标准的文件操作场景。</p>
+<ul>
+<li><strong>通用文件操作</strong>：用户执行<code>cp</code>或<code>mv</code>命令复制大文件。<code>cp</code>进程会快速地将数据读入和写出Page Cache，命令执行完毕可能远早于数据完全落盘的时间点，用户可以继续执行其他操作，而内核的flusher线程在后台完成回写。</li>
+<li><strong>数据库系统</strong>：数据库在处理事务时，会修改其数据文件，从而产生大量脏页。数据库依赖内核高效的回写机制来处理大部分的I&#x2F;O。但在事务提交（Commit）的关键点，数据库必须调用<code>fsync()</code>来强制回写其事务日志（WAL&#x2F;Redo Log），以保证事务的持久性（ACID中的D）。</li>
+<li><strong>Web服务器和日志记录</strong>：Web服务器持续不断地写入访问日志。页面回写机制将这些频繁的小写入缓存在内存中，合并成较大的写入操作，大大降低了对日志文件所在磁盘的I&#x2F;O压力。</li>
+</ul>
+<h4 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h4><ul>
+<li><strong>需要自己管理缓存的应用程序</strong>：一些高性能数据库（如Oracle）或存储应用，为了实现更精细的I&#x2F;O控制和避免内核Page Cache与应用层缓存造成的“双重缓存”（Double Cache）问题，会选择绕过Page Cache。它们通过打开文件时指定<code>O_DIRECT</code>标志来实现<strong>直接I&#x2F;O（Direct I&#x2F;O）</strong>。在这种模式下，数据直接在应用程序的用户空间缓冲区和存储设备之间传输，完全绕过了页面回写机制。</li>
+</ul>
+<h3 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h3><h4 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h4><p>页面回写（Write-back Caching）是缓存策略的一种，可以与其他策略和技术进行对比。</p>
+<p><strong>对比一：Write-back vs. Write-through Caching</strong></p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">Page Writeback (写回缓存)</th>
+<th align="left">Write-through Caching (写穿缓存)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>写操作流程</strong></td>
+<td align="left">数据写入缓存后，写操作立即返回。缓存块被标记为“脏”，由后台机制在稍后写回存储。</td>
+<td align="left">数据写入缓存的同时，也必须同步地写入后端存储。只有当两者都完成后，写操作才返回。</td>
+</tr>
+<tr>
+<td align="left"><strong>性能</strong></td>
+<td align="left"><strong>高</strong>。应用程序延迟低，不直接受存储速度影响。</td>
+<td align="left"><strong>低</strong>。应用程序延迟直接受限于后端存储的写入速度。</td>
+</tr>
+<tr>
+<td align="left"><strong>数据一致性</strong></td>
+<td align="left"><strong>较低</strong>。在发生故障时，存在数据丢失的风险窗口。</td>
+<td align="left"><strong>高</strong>。写操作一旦返回，数据就保证已在持久化存储中。</td>
+</tr>
+<tr>
+<td align="left"><strong>Linux中实现</strong></td>
+<td align="left"><strong>默认行为</strong>。</td>
+<td align="left">可以通过以<code>sync</code>模式挂载文件系统来模拟。这会导致所有写操作都同步进行，性能极差，通常只用于特殊场景。</td>
+</tr>
+</tbody></table>
+<p><strong>对比二：Page Writeback vs. 文件系统日志 (Journaling)</strong></p>
+<p>这两者是互补而非竞争关系，但常常被混淆。它们解决了不同层面的问题。</p>
+<table>
+<thead>
+<tr>
+<th align="left">特性</th>
+<th align="left">Page Writeback (页面回写)</th>
+<th align="left">Filesystem Journaling (如ext4, XFS的日志)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left"><strong>保护对象</strong></td>
+<td align="left"><strong>文件数据 (Data)</strong>。关注的是文件内容本身是否最终被写入。</td>
+<td align="left"><strong>文件系统元数据 (Metadata)</strong>。关注的是文件系统的结构一致性，如目录条目、inode表、空闲块位图等。</td>
+</tr>
+<tr>
+<td align="left"><strong>核心目标</strong></td>
+<td align="left"><strong>性能</strong>和最终的<strong>数据持久化</strong>。</td>
+<td align="left"><strong>一致性 (Consistency)</strong>。防止系统崩溃导致文件系统结构损坏（例如，文件大小正确但数据块丢失）。</td>
+</tr>
+<tr>
+<td align="left"><strong>工作方式</strong></td>
+<td align="left">将脏的数据页缓存起来，延迟写入。</td>
+<td align="left">在修改元数据之前，先将要做的修改操作（“事务”）以日志的形式写入一块连续的磁盘区域（Journal）。即使在修改过程中崩溃，重启后可以通过回放日志来恢复文件系统的一致状态。</td>
+</tr>
+<tr>
+<td align="left"><strong>关系</strong></td>
+<td align="left">页面回写负责最终将<strong>数据块</strong>和<strong>元数据块</strong>写入其在磁盘上的最终位置。而日志系统则确保了在这些写入（特别是元数据写入）发生之前，操作已经被安全地记录。它们协同工作，<code>fsync</code>通常会同时触发数据回写和日志提交。</td>
+<td align="left"></td>
+</tr>
+</tbody></table>
+<h1 id="mm-page-writeback-c"><a href="#mm-page-writeback-c" class="headerlink" title="mm&#x2F;page-writeback.c"></a>mm&#x2F;page-writeback.c</h1><h2 id="wb-bandwidth-estimate-start-初始化或更新写回设备（bdi-writeback）的带宽估算状态"><a href="#wb-bandwidth-estimate-start-初始化或更新写回设备（bdi-writeback）的带宽估算状态" class="headerlink" title="wb_bandwidth_estimate_start 初始化或更新写回设备（bdi_writeback）的带宽估算状态"></a>wb_bandwidth_estimate_start 初始化或更新写回设备（bdi_writeback）的带宽估算状态</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* 间隔之后，我们认为 wb 空闲，不估计带宽 */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> WB_BANDWIDTH_IDLE_JIF (HZ)</span></span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wb_bandwidth_estimate_start</span><span class="params">(<span class="keyword">struct</span> bdi_writeback *wb)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> now = jiffies;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> elapsed = now - READ_ONCE(wb-&gt;bw_time_stamp);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 如果时间间隔超过定义的空闲时间 */</span></span><br><span class="line">	<span class="keyword">if</span> (elapsed &gt; WB_BANDWIDTH_IDLE_JIF &amp;&amp;</span><br><span class="line">    <span class="comment">/* 当前没有正在写回的 inode，则认为写回设备处于空闲状态 */</span></span><br><span class="line">	    !<span class="type">atomic_read</span>(&amp;wb-&gt;writeback_inodes)) &#123;</span><br><span class="line">		spin_lock(&amp;wb-&gt;list_lock);</span><br><span class="line">        <span class="comment">/* 记录脏页面的统计值。 */</span></span><br><span class="line">		wb-&gt;dirtied_stamp = wb_stat(wb, WB_DIRTIED);</span><br><span class="line">        <span class="comment">/* 记录已写回页面的统计值。 */</span></span><br><span class="line">		wb-&gt;written_stamp = wb_stat(wb, WB_WRITTEN);</span><br><span class="line">        <span class="comment">/* 更新带宽估算的时间戳。 */</span></span><br><span class="line">		WRITE_ONCE(wb-&gt;bw_time_stamp, now);</span><br><span class="line">		spin_unlock(&amp;wb-&gt;list_lock);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="update-dirty-limit-用于动态调整写回域（wb-domain）的脏页面限制（dirty-limit）"><a href="#update-dirty-limit-用于动态调整写回域（wb-domain）的脏页面限制（dirty-limit）" class="headerlink" title="update_dirty_limit 用于动态调整写回域（wb_domain）的脏页面限制（dirty_limit）"></a>update_dirty_limit 用于动态调整写回域（wb_domain）的脏页面限制（dirty_limit）</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">update_dirty_limit</span><span class="params">(<span class="keyword">struct</span> dirty_throttle_control *dtc)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wb_domain</span> *<span class="title">dom</span> =</span> dtc_dom(dtc);</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> thresh = dtc-&gt;thresh;<span class="comment">/* 目标阈值（thresh） */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> limit = dom-&gt;dirty_limit;<span class="comment">/* 当前的脏页面限制值 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果当前限制值低于目标阈值，函数直接将限制值提升到阈值。</span></span><br><span class="line"><span class="comment">        这种快速提升避免了系统因限制过低而导致性能下降</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (limit &lt; thresh) &#123;</span><br><span class="line">		limit = thresh;</span><br><span class="line">		<span class="keyword">goto</span> update;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 慢慢跟着。使用较高的 target 作为目标，因为 thresh 可能会低于 dirty。这正是引入 dom-&gt;dirty_limit 的原因，它保证位于脏页面之上。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 如果当前限制值高于目标阈值，函数缓慢降低限制值。</span></span><br><span class="line"><span class="comment">    使用位移操作（&gt;&gt; 5）实现逐步调整，确保限制值不会突然下降，避免影响系统稳定性。 */</span></span><br><span class="line">	thresh = max(thresh, dtc-&gt;dirty);</span><br><span class="line">	<span class="keyword">if</span> (limit &gt; thresh) &#123;</span><br><span class="line">		limit -= (limit - thresh) &gt;&gt; <span class="number">5</span>;</span><br><span class="line">		<span class="keyword">goto</span> update;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span>;</span><br><span class="line">update:</span><br><span class="line">	dom-&gt;dirty_limit = limit;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="domain-update-dirty-limit-更新写回域（wb-domain）的脏页面限制"><a href="#domain-update-dirty-limit-更新写回域（wb-domain）的脏页面限制" class="headerlink" title="domain_update_dirty_limit 更新写回域（wb_domain）的脏页面限制"></a>domain_update_dirty_limit 更新写回域（wb_domain）的脏页面限制</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">domain_update_dirty_limit</span><span class="params">(<span class="keyword">struct</span> dirty_throttle_control *dtc,</span></span><br><span class="line"><span class="params">				      <span class="type">unsigned</span> <span class="type">long</span> now)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="comment">/* 获取写回域（wb_domain） */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wb_domain</span> *<span class="title">dom</span> =</span> dtc_dom(dtc);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 首先检查 lockless 以最长时间地优化 away lock</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 检查当前时间（now）是否在脏页面限制的更新时间间隔</span></span><br><span class="line"><span class="comment">    如果时间未超过间隔，直接返回 */</span></span><br><span class="line">	<span class="keyword">if</span> (time_before(now, dom-&gt;dirty_limit_tstamp + BANDWIDTH_INTERVAL))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">	spin_lock(&amp;dom-&gt;lock);</span><br><span class="line">	<span class="keyword">if</span> (time_after_eq(now, dom-&gt;dirty_limit_tstamp + BANDWIDTH_INTERVAL)) &#123;</span><br><span class="line">        <span class="comment">/* 更新脏页面限制 */</span></span><br><span class="line">		update_dirty_limit(dtc);</span><br><span class="line">		dom-&gt;dirty_limit_tstamp = now;</span><br><span class="line">	&#125;</span><br><span class="line">	spin_unlock(&amp;dom-&gt;lock);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="wb-update-write-bandwidth-更新写回设备（bdi-writeback）的写回带宽统计信息"><a href="#wb-update-write-bandwidth-更新写回设备（bdi-writeback）的写回带宽统计信息" class="headerlink" title="wb_update_write_bandwidth 更新写回设备（bdi_writeback）的写回带宽统计信息"></a>wb_update_write_bandwidth 更新写回设备（bdi_writeback）的写回带宽统计信息</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wb_update_write_bandwidth</span><span class="params">(<span class="keyword">struct</span> bdi_writeback *wb,</span></span><br><span class="line"><span class="params">				      <span class="type">unsigned</span> <span class="type">long</span> elapsed,</span></span><br><span class="line"><span class="params">				      <span class="type">unsigned</span> <span class="type">long</span> written)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">const</span> <span class="type">unsigned</span> <span class="type">long</span> period = roundup_pow_of_two(<span class="number">3</span> * HZ);</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> avg = wb-&gt;avg_write_bandwidth;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> old = wb-&gt;write_bandwidth;</span><br><span class="line">	u64 bw;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * bw = written * HZ / elapsed</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 *                   bw * elapsed + write_bandwidth * (period - elapsed)</span></span><br><span class="line"><span class="comment">	 * write_bandwidth = ---------------------------------------------------</span></span><br><span class="line"><span class="comment">	 *                                          period</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 定义写回带宽的计算周期，周期长度为 3 秒（3 * HZ），并向上取整为 2 的幂次。</span></span><br><span class="line"><span class="comment">        这种周期设计有助于优化计算效率，同时平滑带宽变化</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 计算写回页面的增量，并将其转换为每秒的写回速率（bw） */</span></span><br><span class="line">	bw = written - min(written, wb-&gt;written_stamp);</span><br><span class="line">	bw *= HZ;</span><br><span class="line">    <span class="comment">/* 时间间隔（elapsed）超过周期长度，直接计算带宽并跳转到更新逻辑 */</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(elapsed &gt; period)) &#123;</span><br><span class="line">		bw = div64_ul(bw, elapsed);</span><br><span class="line">		avg = bw;</span><br><span class="line">		<span class="keyword">goto</span> out;</span><br><span class="line">	&#125;</span><br><span class="line">	bw += (u64)wb-&gt;write_bandwidth * (period - elapsed);</span><br><span class="line">	bw &gt;&gt;= ilog2(period);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 多一级平滑，用于过滤掉突然的尖峰</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 使用加权平均法平滑带宽变化，避免因突发写回操作导致的带宽波动 </span></span><br><span class="line"><span class="comment">        通过比较当前带宽（bw）、旧带宽（old）和平均带宽（avg），逐步调整平均值*/</span></span><br><span class="line">	<span class="keyword">if</span> (avg &gt; old &amp;&amp; old &gt;= (<span class="type">unsigned</span> <span class="type">long</span>)bw)</span><br><span class="line">		avg -= (avg - old) &gt;&gt; <span class="number">3</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (avg &lt; old &amp;&amp; old &lt;= (<span class="type">unsigned</span> <span class="type">long</span>)bw)</span><br><span class="line">		avg += (old - avg) &gt;&gt; <span class="number">3</span>;</span><br><span class="line"></span><br><span class="line">out:</span><br><span class="line">	<span class="comment">/* 确保平均带宽（avg）始终大于零，以避免统计数据无效 */</span></span><br><span class="line">	avg = max(avg, <span class="number">1LU</span>);</span><br><span class="line">    <span class="comment">/* 如果写回设备有脏数据，更新全局写回带宽（tot_write_bandwidth） */</span></span><br><span class="line">	<span class="keyword">if</span> (wb_has_dirty_io(wb)) &#123;</span><br><span class="line">		<span class="type">long</span> delta = avg - wb-&gt;avg_write_bandwidth;</span><br><span class="line">		WARN_ON_ONCE(atomic_long_add_return(delta,</span><br><span class="line">					&amp;wb-&gt;bdi-&gt;tot_write_bandwidth) &lt;= <span class="number">0</span>);</span><br><span class="line">	&#125;</span><br><span class="line">	wb-&gt;write_bandwidth = bw;</span><br><span class="line">	WRITE_ONCE(wb-&gt;avg_write_bandwidth, avg);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="wb-update-dirty-ratelimit-动态调整写回设备（bdi-writeback）的脏页面速率限制（dirty-ratelimit）"><a href="#wb-update-dirty-ratelimit-动态调整写回设备（bdi-writeback）的脏页面速率限制（dirty-ratelimit）" class="headerlink" title="wb_update_dirty_ratelimit 动态调整写回设备（bdi_writeback）的脏页面速率限制（dirty_ratelimit）"></a>wb_update_dirty_ratelimit 动态调整写回设备（bdi_writeback）的脏页面速率限制（dirty_ratelimit）</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment">* 保持 wb-&gt;dirty_ratelimit，即基本脏油门率。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 从长远来看，正常的 wb 任务将受到限制。</span></span><br><span class="line"><span class="comment"> * 显然，当有 N dd 个任务时，它应该在 （write_bw / N） 左右。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wb_update_dirty_ratelimit</span><span class="params">(<span class="keyword">struct</span> dirty_throttle_control *dtc,</span></span><br><span class="line"><span class="params">				      <span class="type">unsigned</span> <span class="type">long</span> dirtied,</span></span><br><span class="line"><span class="params">				      <span class="type">unsigned</span> <span class="type">long</span> elapsed)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span> =</span> dtc-&gt;wb;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> dirty = dtc-&gt;dirty;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> freerun = dirty_freerun_ceiling(dtc-&gt;thresh, dtc-&gt;bg_thresh);</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> limit = hard_dirty_limit(dtc_dom(dtc), dtc-&gt;thresh);</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> setpoint = (freerun + limit) / <span class="number">2</span>;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> write_bw = wb-&gt;avg_write_bandwidth;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> dirty_ratelimit = wb-&gt;dirty_ratelimit;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> dirty_rate;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> task_ratelimit;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> balanced_dirty_ratelimit;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> step;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> x;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> shift;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 脏页率将长期与写出率匹配，除非脏页被用户空间截断或被 FS 重新弄脏。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 计算脏页面生成速率  该速率反映了系统在过去一段时间内生成脏页面的速度*/</span></span><br><span class="line">	dirty_rate = (dirtied - wb-&gt;dirtied_stamp) * HZ / elapsed;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * task_ratelimit 反映了每个 DD 在过去 200 毫秒内的脏速率。</span></span><br><span class="line"><span class="comment">     * 根据当前速率限制（dirty_ratelimit）和位置比例（pos_ratio），计算每个写回任务的速率限制（task_ratelimit）</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	task_ratelimit = (u64)dirty_ratelimit *</span><br><span class="line">					dtc-&gt;pos_ratio &gt;&gt; RATELIMIT_CALC_SHIFT;</span><br><span class="line">	task_ratelimit++; <span class="comment">/* 通过增加一个单位值，确保速率限制能够从较小值逐步提升 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如何通过线性估算计算“平衡的节流速率”（balanced throttle rate），以优化写回设备（wb）的脏页面生成速率（dirty_rate）</span></span><br><span class="line"><span class="comment">     * 理论：如果有 N 个写回任务（dd tasks），每个任务的速率限制为 task_ratelimit，那么写回设备的脏页面生成速率（dirty_rate）将被测量为 N * task_ratelimit。基于此，平衡的节流速率可以通过公式 write_bw / N 计算，其中 write_bw 是写回设备的平均写回带宽。</span></span><br><span class="line"><span class="comment">     * 速率反馈公式：rate_(i+1) = rate_(i) * (write_bw / dirty_rate) (1)</span></span><br><span class="line"><span class="comment">     表示下一轮的速率限制（rate_(i+1)）是当前速率限制（rate_(i)）乘以写回带宽与脏页面生成速率的比值。</span></span><br><span class="line"><span class="comment">     * 引入位置比例：rate_(i+1) = rate_(i) * (write_bw / dirty_rate) * pos_ratio (2)</span></span><br><span class="line"><span class="comment">     公式（2）在公式（1）的基础上引入了位置比例（pos_ratio），用于进一步平衡脏页面生成速率。pos_ratio 是一个动态调整的参数，反映了脏页面数量与目标值的关系。</span></span><br><span class="line"><span class="comment">     * 公式（1）在某些情况下可能无法实现理想的速率调整。例如，当 pos_ratio = 0.5 时，速率限制可能会陷入一个固定状态，无法进一步优化。为了解决这一问题，公式（2）被采用，因为它能够确保速率限制始终趋向于 write_bw / N，无论 pos_ratio 的具体值如何。</span></span><br><span class="line"><span class="comment">     * 平衡速率的动态调整: 通过公式（2），速率限制能够逐步调整到平衡状态（rate_(i+1) ~= write_bw / N）。当速率限制达到这一状态时，pos_ratio 会逐渐趋向于 1.0。这不仅使脏页面数量达到目标值（setpoint），还确保位置比例的变化最为平缓，从而减少任务速率限制的波动。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	balanced_dirty_ratelimit = div_u64((u64)task_ratelimit * write_bw,</span><br><span class="line">					   dirty_rate | <span class="number">1</span>);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * balanced_dirty_ratelimit ~= (write_bw / N) &lt;= write_bw</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(balanced_dirty_ratelimit &gt; write_bw))</span><br><span class="line">		balanced_dirty_ratelimit = write_bw;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 直接设置速率限制的局限性</span></span><br><span class="line"><span class="comment">        虽然可以直接将 dirty_ratelimit 设置为 balanced_dirty_ratelimit 并立即返回，但这种简单的做法可能导致速率限制的不稳定性。balanced_dirty_ratelimit 是通过线性估算计算的理想速率限制，但它可能包含异常点或剧烈波动，尤其是在脏页面生成速率（dirty_rate）估算周期较短（如 200 毫秒）时。</span></span><br><span class="line"><span class="comment">     * 使用相对值过滤异常点</span></span><br><span class="line"><span class="comment">        为了获得更稳定的 dirty_ratelimit，代码使用 task_ratelimit 和相对值进行调整：</span></span><br><span class="line"><span class="comment">        task_ratelimit - dirty_ratelimit = (pos_ratio - 1) * dirty_ratelimit</span></span><br><span class="line"><span class="comment">        这个公式反映了脏页面位置误差的方向和大小。</span></span><br><span class="line"><span class="comment">        pos_ratio 是一个动态调整的参数，表示脏页面数量与目标值（setpoint）的关系。当 pos_ratio 接近 1 时，误差最小，速率限制最稳定。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 条件调整速率限制</span></span><br><span class="line"><span class="comment">     * 当 dirty_ratelimit 和 task_ratelimit 都高于 balanced_dirty_ratelimit 时，降低 dirty_ratelimit 有助于同时满足位置和速率控制目标。</span></span><br><span class="line"><span class="comment">     * 如果调整只会满足速率目标而无法改善位置误差，则不更新 dirty_ratelimit。这种设计确保用户感受到的是稳定的脏页面生成速率和较小的误差。</span></span><br><span class="line"><span class="comment">     * 限制步长以减少波动</span></span><br><span class="line"><span class="comment">        为了避免 balanced_dirty_ratelimit 的剧烈跳动，代码使用步长限制来平滑调整过程：</span></span><br><span class="line"><span class="comment">        |task_ratelimit - dirty_ratelimit|</span></span><br><span class="line"><span class="comment">        步长限制过滤掉异常点，并限制速率限制的调整幅度。</span></span><br><span class="line"><span class="comment">        这种设计减少了由于短时间估算周期导致的速率限制波动，同时保持调整的灵活性。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	step = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 对于 strictlimit 情况，上述计算基于 wb 计数器和限制（从 pos_ratio = wb_position_ratio（） 开始，一直到 balanced_dirty_ratelimit = task_ratelimit * write_bw / dirty_rate）。因此，要正确计算 “step”，我们必须使用 wb_dirty 作为 “dirty” 和 wb_setpoint 作为 “setpoint”。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 启用了严格限制（BDI_CAP_STRICTLIMIT） */</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(wb-&gt;bdi-&gt;capabilities &amp; BDI_CAP_STRICTLIMIT)) &#123;</span><br><span class="line">		dirty = dtc-&gt;wb_dirty;</span><br><span class="line">        <span class="comment">/* setpoint 是脏页面的目标值，取决于阈值（wb_thresh 和 wb_bg_thresh）的平均值 */</span></span><br><span class="line">		setpoint = (dtc-&gt;wb_thresh + dtc-&gt;wb_bg_thresh) / <span class="number">2</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 如果当前脏页面数量低于目标值，代码选择最小的速率限制值（min3），包括平衡速率限制（balanced_dirty_ratelimit）、任务速率限制（task_ratelimit） */</span></span><br><span class="line">	<span class="keyword">if</span> (dirty &lt; setpoint) &#123;</span><br><span class="line">		x = min3(wb-&gt;balanced_dirty_ratelimit,</span><br><span class="line">			 balanced_dirty_ratelimit, task_ratelimit);</span><br><span class="line">        <span class="comment">/* 如果当前速率限制（dirty_ratelimit）小于选定值，则计算步长（step）为两者的差值 */</span></span><br><span class="line">		<span class="keyword">if</span> (dirty_ratelimit &lt; x)</span><br><span class="line">			step = x - dirty_ratelimit;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">/* 脏页面数量高于目标值 */</span></span><br><span class="line">        <span class="comment">/* 如果当前脏页面数量高于目标值，代码选择最大的速率限制值（max3） */</span></span><br><span class="line">		x = max3(wb-&gt;balanced_dirty_ratelimit,</span><br><span class="line">			 balanced_dirty_ratelimit, task_ratelimit);</span><br><span class="line">        <span class="comment">/* 如果当前速率限制大于选定值，则计算步长为两者的差值 */</span></span><br><span class="line">		<span class="keyword">if</span> (dirty_ratelimit &gt; x)</span><br><span class="line">			step = dirty_ratelimit - x;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 不要追求 100% 的费率匹配。这是不可能的，因为平衡汇率本身是不断波动的。因此，当跟踪速度接近目标时，请降低跟踪速度。有助于消除无意义的震颤。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 函数通过动态调整步长的大小，避免速率限制的剧烈变化，从而减少系统抖动 */</span></span><br><span class="line">	shift = dirty_ratelimit / (<span class="number">2</span> * step + <span class="number">1</span>);</span><br><span class="line">	<span class="keyword">if</span> (shift &lt; BITS_PER_LONG)</span><br><span class="line">		step = DIV_ROUND_UP(step &gt;&gt; shift, <span class="number">8</span>);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		step = <span class="number">0</span>;</span><br><span class="line">    <span class="comment">/* 更新速率限制 */</span></span><br><span class="line">	<span class="keyword">if</span> (dirty_ratelimit &lt; balanced_dirty_ratelimit)</span><br><span class="line">		dirty_ratelimit += step;</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		dirty_ratelimit -= step;</span><br><span class="line"></span><br><span class="line">	WRITE_ONCE(wb-&gt;dirty_ratelimit, max(dirty_ratelimit, <span class="number">1UL</span>));</span><br><span class="line">	wb-&gt;balanced_dirty_ratelimit = balanced_dirty_ratelimit;</span><br><span class="line"></span><br><span class="line">	trace_bdi_dirty_ratelimit(wb, dirty_rate, task_ratelimit);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="wb-update-bandwidth-更新写回设备（bdi-writeback）的带宽统计信息和相关限制"><a href="#wb-update-bandwidth-更新写回设备（bdi-writeback）的带宽统计信息和相关限制" class="headerlink" title="__wb_update_bandwidth 更新写回设备（bdi_writeback）的带宽统计信息和相关限制"></a>__wb_update_bandwidth 更新写回设备（bdi_writeback）的带宽统计信息和相关限制</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> __wb_update_bandwidth(<span class="keyword">struct</span> dirty_throttle_control *gdtc,</span><br><span class="line">				  <span class="keyword">struct</span> dirty_throttle_control *mdtc,</span><br><span class="line">				  <span class="type">bool</span> update_ratelimit)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span> =</span> gdtc-&gt;wb;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> now = jiffies;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> elapsed;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> dirtied;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> written;</span><br><span class="line"></span><br><span class="line">	spin_lock(&amp;wb-&gt;list_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 对运行时间的无锁检查很活泼，IO 完成后的延迟更新根本不会这样做（以确保写入的页面被合理快速地计算在内）。确保 elapsed &gt;= 1 以避免除法错误。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 获取当前时间（jiffies）并计算自上次更新以来的时间间隔（elapsed）。确保时间间隔至少为 1，避免除零错误 */</span></span><br><span class="line">	elapsed = max(now - wb-&gt;bw_time_stamp, <span class="number">1UL</span>);</span><br><span class="line">    <span class="comment">/*  获取脏页面 */</span></span><br><span class="line">	dirtied = percpu_counter_read(&amp;wb-&gt;stat[WB_DIRTIED]);</span><br><span class="line">    <span class="comment">/* 已写回页面 */</span></span><br><span class="line">	written = percpu_counter_read(&amp;wb-&gt;stat[WB_WRITTEN]);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 启用了速率限制更新 */</span></span><br><span class="line">	<span class="keyword">if</span> (update_ratelimit) &#123;</span><br><span class="line">		domain_update_dirty_limit(gdtc, now);</span><br><span class="line">		wb_update_dirty_ratelimit(gdtc, dirtied, elapsed);</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * @mdtc is always NULL if !CGROUP_WRITEBACK but the</span></span><br><span class="line"><span class="comment">		 * compiler has no way to figure that out.  Help it.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (IS_ENABLED(CONFIG_CGROUP_WRITEBACK) &amp;&amp; mdtc) &#123;</span><br><span class="line">			domain_update_dirty_limit(mdtc, now);</span><br><span class="line">			wb_update_dirty_ratelimit(mdtc, dirtied, elapsed);</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">    <span class="comment">/* 更新写回设备的带宽统计信息，基于时间间隔和已写回页面数 */</span></span><br><span class="line">	wb_update_write_bandwidth(wb, elapsed, written);</span><br><span class="line"></span><br><span class="line">	wb-&gt;dirtied_stamp = dirtied;</span><br><span class="line">	wb-&gt;written_stamp = written;</span><br><span class="line">	WRITE_ONCE(wb-&gt;bw_time_stamp, now);</span><br><span class="line">	spin_unlock(&amp;wb-&gt;list_lock);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">void</span> <span class="title function_">wb_update_bandwidth</span><span class="params">(<span class="keyword">struct</span> bdi_writeback *wb)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">dirty_throttle_control</span> <span class="title">gdtc</span> =</span> &#123; GDTC_INIT(wb) &#125;;</span><br><span class="line"></span><br><span class="line">	__wb_update_bandwidth(&amp;gdtc, <span class="literal">NULL</span>, <span class="literal">false</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="do-writepages-将页面缓存（address-space）中的脏页面写入磁盘"><a href="#do-writepages-将页面缓存（address-space）中的脏页面写入磁盘" class="headerlink" title="do_writepages 将页面缓存（address_space）中的脏页面写入磁盘"></a>do_writepages 将页面缓存（address_space）中的脏页面写入磁盘</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">do_writepages</span><span class="params">(<span class="keyword">struct</span> address_space *mapping, <span class="keyword">struct</span> writeback_control *wbc)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> ret;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span>;</span></span><br><span class="line">    <span class="comment">/* 需要写回的页面数量 */</span></span><br><span class="line">	<span class="keyword">if</span> (wbc-&gt;nr_to_write &lt;= <span class="number">0</span>)</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">    <span class="comment">/* 调用 inode_to_wb_wbc 获取与 inode 关联的写回设备（bdi_writeback） */</span></span><br><span class="line">	wb = inode_to_wb_wbc(mapping-&gt;host, wbc);</span><br><span class="line">    <span class="comment">/* 初始化写回带宽估算 */</span></span><br><span class="line">	wb_bandwidth_estimate_start(wb);</span><br><span class="line">	<span class="keyword">while</span> (<span class="number">1</span>) &#123;</span><br><span class="line">		<span class="keyword">if</span> (mapping-&gt;a_ops-&gt;writepages)</span><br><span class="line">			ret = mapping-&gt;a_ops-&gt;writepages(mapping, wbc);</span><br><span class="line">		<span class="keyword">else</span></span><br><span class="line">			<span class="comment">/* 处理 chardevs 和其他特殊文件 */</span></span><br><span class="line">			ret = <span class="number">0</span>;</span><br><span class="line">		<span class="keyword">if</span> (ret != -ENOMEM || wbc-&gt;sync_mode != WB_SYNC_ALL)</span><br><span class="line">			<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 缺少分配上下文或任何 inode 页面的位置或写回状态，请根据本地节点上的写回活动进行限制。这是一个很好的猜测。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">        <span class="comment">/* 基于 NUMA 节点的写回活动进行节流，避免资源过度消耗 */</span></span><br><span class="line">		reclaim_throttle(NODE_DATA(numa_node_id()),</span><br><span class="line">			VMSCAN_THROTTLE_WRITEBACK);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果写回操作持续较长时间，调用 wb_update_bandwidth 更新写回带宽估算。</span></span><br><span class="line"><span class="comment">        这确保写回带宽能够动态调整以适应系统负载。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (time_is_before_jiffies(READ_ONCE(wb-&gt;bw_time_stamp) +</span><br><span class="line">				   BANDWIDTH_INTERVAL))</span><br><span class="line">		wb_update_bandwidth(wb);</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="folio-wait-writeback-等待-folio（页面的抽象表示）的写回操作完成"><a href="#folio-wait-writeback-等待-folio（页面的抽象表示）的写回操作完成" class="headerlink" title="folio_wait_writeback 等待 folio（页面的抽象表示）的写回操作完成"></a>folio_wait_writeback 等待 folio（页面的抽象表示）的写回操作完成</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * folio_wait_writeback - 等待作品集完成写回。</span></span><br><span class="line"><span class="comment"> * @folio：要等待的作品集。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 如果作品集当前正在写回存储，请等待 I/O 完成。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 上下文：睡眠。 必须在进程上下文中调用，并且没有持有自旋锁。 调用方应在作品集上保留引用。如果作品集未锁定，则写回可能会在写回完成后再次开始。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">folio_wait_writeback</span><span class="params">(<span class="keyword">struct</span> folio *folio)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 检查 folio 是否处于写回状态 </span></span><br><span class="line"><span class="comment">	如果 folio 正在写回，函数进入循环等待，直到写回完成*/</span></span><br><span class="line">	<span class="keyword">while</span> (folio_test_writeback(folio)) &#123;</span><br><span class="line">		trace_folio_wait_writeback(folio, folio_mapping(folio));</span><br><span class="line">		<span class="comment">/* 等待 PG_writeback 标志位清除，表示写回操作完成。</span></span><br><span class="line"><span class="comment">		该操作会使当前线程进入睡眠状态，直到写回完成。 */</span></span><br><span class="line">		folio_wait_bit(folio, PG_writeback);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL_GPL(folio_wait_writeback);</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h2 id="wb-domain-init-初始化写回域（wb-domain）"><a href="#wb-domain-init-初始化写回域（wb-domain）" class="headerlink" title="wb_domain_init 初始化写回域（wb_domain）"></a>wb_domain_init 初始化写回域（wb_domain）</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">wb_domain_init</span><span class="params">(<span class="keyword">struct</span> wb_domain *dom, <span class="type">gfp_t</span> gfp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="built_in">memset</span>(dom, <span class="number">0</span>, <span class="keyword">sizeof</span>(*dom));</span><br><span class="line"></span><br><span class="line">	spin_lock_init(&amp;dom-&gt;lock);</span><br><span class="line"></span><br><span class="line">	timer_setup(&amp;dom-&gt;period_timer, writeout_period, TIMER_DEFERRABLE);</span><br><span class="line"></span><br><span class="line">	dom-&gt;dirty_limit_tstamp = jiffies;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> fprop_global_init(&amp;dom-&gt;completions, gfp);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="page-writeback-init"><a href="#page-writeback-init" class="headerlink" title="page_writeback_init"></a>page_writeback_init</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 提早调用以调整页面回写脏页限制。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 我们过去根据总内存与可分配给缓冲区的页面之间的关系来调整脏页比例。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 然而，那是我们使用“dirty_ratio”来根据所有内存进行调整的时候，</span></span><br><span class="line"><span class="comment"> * 而现在我们不再这样做。“dirty_ratio”现在应用于总的非HIGHPAGE内存，</span></span><br><span class="line"><span class="comment"> * 因此我们不再会遇到过去那种疯狂的情况，即脏页数量远远超过少量的非HIGHMEM内存。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 但我们可能仍然希望根据设备的内存量来调整脏页比例。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> __init <span class="title function_">page_writeback_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	BUG_ON(wb_domain_init(&amp;global_wb_domain, GFP_KERNEL));</span><br><span class="line"></span><br><span class="line">	cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, <span class="string">&quot;mm/writeback:online&quot;</span>,</span><br><span class="line">			  page_writeback_cpu_online, <span class="literal">NULL</span>);</span><br><span class="line">	cpuhp_setup_state(CPUHP_MM_WRITEBACK_DEAD, <span class="string">&quot;mm/writeback:dead&quot;</span>, <span class="literal">NULL</span>,</span><br><span class="line">			  page_writeback_cpu_online);</span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_SYSCTL</span></span><br><span class="line">	register_sysctl_init(<span class="string">&quot;vm&quot;</span>, vm_page_writeback_sysctls);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/c62966c2/">https://wdfk-prog.space/posts/c62966c2/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/mm/">mm</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/05.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/db1bbe40/" title="workqueue"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">workqueue</div></div><div class="info-2"><div class="info-item-1">[TOC] kernel&#x2F;workqueue.c 内核工作队列(Kernel Workqueues) 通用的内核后台任务处理框架历史与背景这项技术是为了解决什么特定 “问题而诞生的？kernel/workqueue.c 实现了**工作队列（Workqueues）**机制，它的诞生是为了解决内核中一个极其普遍的需求：将一个函数的执行推迟（defer）到一个安全的进程上下文中去完成，特别是在中断处理程序中。 在内核中，代码的执行上下文非常重要，主要分为两种：  进程上下文（Process Context）：代码代表一个特定的进程（或内核线程）在运行。在这种上下文中，代码可以做任何可能导致**睡眠（blocking&#x2F;sleep）**的操作，例如：获取互斥锁（mutex）、分配大块内存（kmalloc(GFP_KERNEL)）、与用户空间拷贝数据、执行磁盘I&#x2F;O等。 中断上下文（Interrupt Context）：代码是作为对一个硬件中断的响应而运行的。中断处理程序必须尽快完成，并且绝对不能睡眠。如果它睡眠了，可能会导致整个系统死锁或错过其他重要的硬件中断...</div></div></div></a><a class="pagination-related" href="/posts/3356114e/" title="nommu"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">nommu</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;nommu.c NO-MMU内存管理(NO-MMU Memory Management) 适用于无内存管理单元的系统历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了让Linux操作系统能够运行在没有**内存管理单元（MMU）**的简单微控制器（MCU）和嵌入式处理器上。标准的Linux内核设计严重依赖MMU来实现以下核心功能：  虚拟内存：为每个进程提供独立的、巨大的、线性的虚拟地址空间。 内存保护：利用硬件机制防止一个进程访问另一个进程或内核的内存空间，保障系统稳定性和安全性。 内存映射与分页：实现写时复制（Copy-on-Write）、按需分页（Demand Paging）和交换（Swapping）等高级内存管理技术。  许多低成本、低功耗的嵌入式处理器（如ARM Cortex-M系列）为了节省芯片面积和功耗，并不包含MMU。mm/nommu.c 及其相关代码提供了一套替代的、简化的内存管理模型，使得功能强大的Linux内核能够在这种受限的硬件上运行，这通常被称为uClinux（Micro-Controller Linux）。 它的...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1"> [TOC] init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的 i...</div></div></div></a><a class="pagination-related" href="/posts/0/" title="workingset"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">workingset</div></div><div class="info-2"><div class="info-item-1">  [toc]  mm&#x2F;workingset.c 工作集检测(Working Set Detection) 提升页面回收效率的热点内存识别机制历史与背景这项技术是为了解决什么特定问题而诞生的？mm/workingset.c 中的代码是为了解决传统页面回收算法（如vmscan.c中的两阶段LRU）的一个核心痛点：无法精确区分真正的“工作集”和短暂的、非核心的内存使用。 工作集（Working Set）指的是一个进程在当前阶段为了高效运行而需要频繁访问的内存页面集合。传统LRU算法通过active&#x2F;inactive链表来近似这个集合，但存在以下问题：  抖动（Thrashing）：当内存压力增大时，一个暂时不活动的进程（例如，用户切换到了另一个窗口），其工作集页面可能会被从active链表老化到inactive链表，并最终被回收。当用户切回该进程时，进程会遭遇大量的缺页中断（page faults），需要从磁盘或交换空间重新读取其工作集，导致系统响应缓慢，磁盘I&#x2F;O飙升。workingset.c 的核心目标就是识别并保护这些被错误回收的工作集页面，从而抑...</div></div></div></a><a class="pagination-related" href="/posts/e8ec9031/" title="vmscan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">vmscan</div></div><div class="info-2"><div class="info-item-1">   [toc]  mm&#x2F;vmscan.c 页面回收(Page Reclaim) 内核内存管理的核心压力调节器历史与背景这项技术是为了解决什么特定问题而诞生的？mm/vmscan.c 中的代码是为了解决计算机科学中最基本的问题之一：物理内存是一种有限资源。当系统运行的应用程序和内核本身需要的内存总量超过了可用的物理RAM时，操作系统必须有一种机制来释放一些当前已分配但“不那么重要”的内存，以便为新的、更紧迫的内存请求腾出空间。 如果没有页面回收机制，系统在内存耗尽时唯一的选择就是拒绝新的内存分配请求，这将导致应用程序崩溃或系统完全停止响应。vmscan.c 实现的页面回收（Page Reclaim）算法，其核心目标是在内存压力（Memory Pressure）下，智能地选择并回收内存页面，从而保证系统的持续运行和响应能力。 它的发展经历了哪些重要的里程碑或版本迭代？Linux的页面回收算法经历了重大的演进，以适应不断变化的硬件和工作负载：  早期的LRU：最初的Linux内核使用了相当简单的“最近最少使用”（Least Recently Used, LRU）算法。 两阶...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/e5a511c0/" title="mmzone"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">mmzone</div></div><div class="info-2"><div class="info-item-1">[TOC] mm&#x2F;vmscan.c lruvec 结构体 页面回收的核心数据结构lruvec 是 Linux 内核中用于管理 LRU（Least Recently Used，最近最少使用）页面列表的一个核心数据结构。它是内存管理子系统的一部分，定义于 mm/vmscan.c 相关头文件中，主要作用是在页面回收（Page Reclamation）过程中，对不同类型、不同状态的内存页面进行分组和跟踪，是内核决定回收哪些页面的关键依据。 历史与背景这项技术是为了解决什么特定问题而诞生的？lruvec 的诞生是为了解决在现代计算机体系结构下，如何高效、精确、可扩展地管理内存页面以供回收的问题。  区分页面类型：不同类型的内存页面回收成本和策略完全不同。例如，文件页（File-backed pages）如果内容未被修改（是干净的），可以直接丢弃，需要时再从磁盘读回；而匿名页（Anonymous pages，如进程堆栈、malloc分配的内存）则必须先交换到交换空间（Swap Area）才能释放，成本更高。lruvec 需要将它们分开管理。 近似LRU算法：真正的LRU算法要求跟踪...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-page-writeback-c-%E9%A1%B5%E9%9D%A2%E5%9B%9E%E5%86%99-Page-Writeback-%E6%95%B0%E6%8D%AE%E6%8C%81%E4%B9%85%E5%8C%96%E7%9A%84%E6%A0%B8%E5%BF%83%E6%9C%BA%E5%88%B6"><span class="toc-number">1.</span> <span class="toc-text">mm&#x2F;page-writeback.c 页面回写(Page Writeback) 数据持久化的核心机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.0.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">1.0.1.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.0.1.2.</span> <span class="toc-text">它的发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.0.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">1.0.2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.0.2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E3%80%82"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">1.0.4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#mm-page-writeback-c"><span class="toc-number">2.</span> <span class="toc-text">mm&#x2F;page-writeback.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-bandwidth-estimate-start-%E5%88%9D%E5%A7%8B%E5%8C%96%E6%88%96%E6%9B%B4%E6%96%B0%E5%86%99%E5%9B%9E%E8%AE%BE%E5%A4%87%EF%BC%88bdi-writeback%EF%BC%89%E7%9A%84%E5%B8%A6%E5%AE%BD%E4%BC%B0%E7%AE%97%E7%8A%B6%E6%80%81"><span class="toc-number">2.1.</span> <span class="toc-text">wb_bandwidth_estimate_start 初始化或更新写回设备（bdi_writeback）的带宽估算状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#update-dirty-limit-%E7%94%A8%E4%BA%8E%E5%8A%A8%E6%80%81%E8%B0%83%E6%95%B4%E5%86%99%E5%9B%9E%E5%9F%9F%EF%BC%88wb-domain%EF%BC%89%E7%9A%84%E8%84%8F%E9%A1%B5%E9%9D%A2%E9%99%90%E5%88%B6%EF%BC%88dirty-limit%EF%BC%89"><span class="toc-number">2.2.</span> <span class="toc-text">update_dirty_limit 用于动态调整写回域（wb_domain）的脏页面限制（dirty_limit）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#domain-update-dirty-limit-%E6%9B%B4%E6%96%B0%E5%86%99%E5%9B%9E%E5%9F%9F%EF%BC%88wb-domain%EF%BC%89%E7%9A%84%E8%84%8F%E9%A1%B5%E9%9D%A2%E9%99%90%E5%88%B6"><span class="toc-number">2.3.</span> <span class="toc-text">domain_update_dirty_limit 更新写回域（wb_domain）的脏页面限制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-update-write-bandwidth-%E6%9B%B4%E6%96%B0%E5%86%99%E5%9B%9E%E8%AE%BE%E5%A4%87%EF%BC%88bdi-writeback%EF%BC%89%E7%9A%84%E5%86%99%E5%9B%9E%E5%B8%A6%E5%AE%BD%E7%BB%9F%E8%AE%A1%E4%BF%A1%E6%81%AF"><span class="toc-number">2.4.</span> <span class="toc-text">wb_update_write_bandwidth 更新写回设备（bdi_writeback）的写回带宽统计信息</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-update-dirty-ratelimit-%E5%8A%A8%E6%80%81%E8%B0%83%E6%95%B4%E5%86%99%E5%9B%9E%E8%AE%BE%E5%A4%87%EF%BC%88bdi-writeback%EF%BC%89%E7%9A%84%E8%84%8F%E9%A1%B5%E9%9D%A2%E9%80%9F%E7%8E%87%E9%99%90%E5%88%B6%EF%BC%88dirty-ratelimit%EF%BC%89"><span class="toc-number">2.5.</span> <span class="toc-text">wb_update_dirty_ratelimit 动态调整写回设备（bdi_writeback）的脏页面速率限制（dirty_ratelimit）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-update-bandwidth-%E6%9B%B4%E6%96%B0%E5%86%99%E5%9B%9E%E8%AE%BE%E5%A4%87%EF%BC%88bdi-writeback%EF%BC%89%E7%9A%84%E5%B8%A6%E5%AE%BD%E7%BB%9F%E8%AE%A1%E4%BF%A1%E6%81%AF%E5%92%8C%E7%9B%B8%E5%85%B3%E9%99%90%E5%88%B6"><span class="toc-number">2.6.</span> <span class="toc-text">__wb_update_bandwidth 更新写回设备（bdi_writeback）的带宽统计信息和相关限制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#do-writepages-%E5%B0%86%E9%A1%B5%E9%9D%A2%E7%BC%93%E5%AD%98%EF%BC%88address-space%EF%BC%89%E4%B8%AD%E7%9A%84%E8%84%8F%E9%A1%B5%E9%9D%A2%E5%86%99%E5%85%A5%E7%A3%81%E7%9B%98"><span class="toc-number">2.7.</span> <span class="toc-text">do_writepages 将页面缓存（address_space）中的脏页面写入磁盘</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#folio-wait-writeback-%E7%AD%89%E5%BE%85-folio%EF%BC%88%E9%A1%B5%E9%9D%A2%E7%9A%84%E6%8A%BD%E8%B1%A1%E8%A1%A8%E7%A4%BA%EF%BC%89%E7%9A%84%E5%86%99%E5%9B%9E%E6%93%8D%E4%BD%9C%E5%AE%8C%E6%88%90"><span class="toc-number">2.8.</span> <span class="toc-text">folio_wait_writeback 等待 folio（页面的抽象表示）的写回操作完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-domain-init-%E5%88%9D%E5%A7%8B%E5%8C%96%E5%86%99%E5%9B%9E%E5%9F%9F%EF%BC%88wb-domain%EF%BC%89"><span class="toc-number">2.9.</span> <span class="toc-text">wb_domain_init 初始化写回域（wb_domain）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#page-writeback-init"><span class="toc-number">2.10.</span> <span class="toc-text">page_writeback_init</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/05.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'e1259486241400daf7a86898784af5b3'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

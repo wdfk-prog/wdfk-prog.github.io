@@ -1,0 +1,1276 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>fs-writeback | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC]  fs-writebackfs-writeback.c 是 Linux 内核中负责处理文件系统数据写回（writeback）机制的核心模块。它的主要功能是管理脏页和脏 inode 的写回操作，以确保数据从内存缓冲区最终写入磁盘。以下是对其原理、使用场景、优缺点以及其他方案的详细阐述：  原理 脏页与脏 inode:  当文件系统中的数据被修改时，内核会将这些修改暂时存储在内存中（页">
+<meta property="og:type" content="article">
+<meta property="og:title" content="fs-writeback">
+<meta property="og:url" content="https://wdfk-prog.space/posts/88ab2b13/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC]  fs-writebackfs-writeback.c 是 Linux 内核中负责处理文件系统数据写回（writeback）机制的核心模块。它的主要功能是管理脏页和脏 inode 的写回操作，以确保数据从内存缓冲区最终写入磁盘。以下是对其原理、使用场景、优缺点以及其他方案的详细阐述：  原理 脏页与脏 inode:  当文件系统中的数据被修改时，内核会将这些修改暂时存储在内存中（页">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/08.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2025-10-07T03:08:29.811Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="fs">
+<meta property="article:tag" content="linux">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/08.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "fs-writeback",
+  "url": "https://wdfk-prog.space/posts/88ab2b13/",
+  "image": "https://wdfk-prog.space/images/covers/08.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2025-10-07T03:08:29.811Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/88ab2b13/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'fs-writeback',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/08.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">fs-writeback</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">fs-writeback<a class="post-edit-link" href="null_posts/linux/fs/fs-writeback.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/fs/">fs</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">8.5k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>30分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/88ab2b13/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2025-10-07 11:08:29&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<p>[TOC]</p>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/ee3e9b9b52744e428b407bd82340a367.png" alt="在这里插入图片描述"></p>
+<h1 id="fs-writeback"><a href="#fs-writeback" class="headerlink" title="fs-writeback"></a>fs-writeback</h1><p>fs-writeback.c 是 Linux 内核中负责处理文件系统数据写回（writeback）机制的核心模块。它的主要功能是管理脏页和脏 inode 的写回操作，以确保数据从内存缓冲区最终写入磁盘。以下是对其原理、使用场景、优缺点以及其他方案的详细阐述：</p>
+<hr>
+<h3 id="原理"><a href="#原理" class="headerlink" title="原理"></a><strong>原理</strong></h3><ol>
+<li><p><strong>脏页与脏 inode</strong>:</p>
+<ul>
+<li>当文件系统中的数据被修改时，内核会将这些修改暂时存储在内存中（页缓存或 inode 缓存），并标记为“脏”。</li>
+<li>脏页指的是页缓存中未写入磁盘的修改数据，脏 inode 则是文件元数据（如时间戳、权限等）的未写入部分。</li>
+</ul>
+</li>
+<li><p><strong>写回机制</strong>:</p>
+<ul>
+<li>fs-writeback.c 通过后台线程（flusher threads）定期扫描脏页和脏 inode，并将它们写入磁盘。</li>
+<li>写回操作可以是异步的（WB_SYNC_NONE），也可以是同步的（WB_SYNC_ALL），具体取决于调用场景。</li>
+</ul>
+</li>
+<li><p><strong>核心组件</strong>:</p>
+<ul>
+<li><strong><code>bdi_writeback</code></strong>: 表示一个设备的写回上下文，管理该设备的脏页和脏 inode。</li>
+<li><strong><code>wb_writeback_work</code></strong>: 描述写回任务的结构体，包括写回页数、同步模式等。</li>
+<li><strong><code>wb_workfn</code></strong>: 写回线程的主函数，负责执行写回任务。</li>
+</ul>
+</li>
+<li><p><strong>调度与触发</strong>:</p>
+<ul>
+<li>写回任务可以由以下事件触发：<ul>
+<li>内存压力（如内存不足时触发写回以释放页缓存）。</li>
+<li>定期写回（如 <code>dirty_writeback_interval</code> 配置的时间间隔）。</li>
+<li>显式调用（如 <code>sync</code> 系统调用或 <code>fsync</code> 文件操作）。</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h3 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a><strong>使用场景</strong></h3><ol>
+<li><p><strong>数据完整性</strong>:</p>
+<ul>
+<li>确保文件系统的数据和元数据最终写入磁盘，避免数据丢失。</li>
+<li>在系统崩溃或断电时，脏页和脏 inode 的及时写回可以减少数据丢失的风险。</li>
+</ul>
+</li>
+<li><p><strong>性能优化</strong>:</p>
+<ul>
+<li>写回机制通过延迟写入操作，减少频繁的磁盘 I&#x2F;O，提高系统性能。</li>
+<li>通过批量写回，优化磁盘写入效率。</li>
+</ul>
+</li>
+<li><p><strong>文件系统操作</strong>:</p>
+<ul>
+<li>文件系统的 <code>sync</code> 和 <code>fsync</code> 操作依赖写回机制来确保数据一致性。</li>
+<li>数据库等应用程序通常使用 <code>fsync</code> 来确保事务的持久性。</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h3 id="优缺点"><a href="#优缺点" class="headerlink" title="优缺点"></a><strong>优缺点</strong></h3><h4 id="优点"><a href="#优点" class="headerlink" title="优点"></a><strong>优点</strong></h4><ol>
+<li><p><strong>性能提升</strong>:</p>
+<ul>
+<li>延迟写入减少了磁盘 I&#x2F;O 的频率，提高了系统的整体性能。</li>
+<li>批量写回优化了磁盘的写入效率。</li>
+</ul>
+</li>
+<li><p><strong>灵活性</strong>:</p>
+<ul>
+<li>支持多种写回模式（异步、同步），适应不同场景的需求。</li>
+<li>可配置参数（如 <code>dirty_writeback_interval</code> 和 <code>dirty_ratio</code>）允许用户根据系统负载调整写回行为。</li>
+</ul>
+</li>
+<li><p><strong>数据安全性</strong>:</p>
+<ul>
+<li>通过定期写回和显式触发写回，确保数据最终写入磁盘，减少数据丢失的风险。</li>
+</ul>
+</li>
+</ol>
+<h4 id="缺点"><a href="#缺点" class="headerlink" title="缺点"></a><strong>缺点</strong></h4><ol>
+<li><p><strong>延迟风险</strong>:</p>
+<ul>
+<li>延迟写入可能导致数据丢失，尤其是在系统崩溃或断电时。</li>
+<li>如果写回线程无法及时处理脏页，可能导致内存压力增加。</li>
+</ul>
+</li>
+<li><p><strong>复杂性</strong>:</p>
+<ul>
+<li>写回机制涉及多个线程和复杂的调度逻辑，可能增加代码维护难度。</li>
+<li>在高负载场景下，写回线程可能成为性能瓶颈。</li>
+</ul>
+</li>
+<li><p><strong>I&#x2F;O 干扰</strong>:</p>
+<ul>
+<li>批量写回可能导致突发的磁盘 I&#x2F;O 峰值，影响其他 I&#x2F;O 操作的性能。</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h3 id="其他方案"><a href="#其他方案" class="headerlink" title="其他方案"></a><strong>其他方案</strong></h3><h4 id="1-Direct-I-O"><a href="#1-Direct-I-O" class="headerlink" title="1. Direct I&#x2F;O"></a><strong>1. Direct I&#x2F;O</strong></h4><ul>
+<li><strong>原理</strong>: 直接将数据写入磁盘，绕过页缓存。</li>
+<li><strong>优点</strong>:<ul>
+<li>减少内存使用。</li>
+<li>提供更低的写入延迟。</li>
+</ul>
+</li>
+<li><strong>缺点</strong>:<ul>
+<li>性能可能较低，尤其是小块数据写入。</li>
+<li>不支持缓存优化。</li>
+</ul>
+</li>
+</ul>
+<h4 id="2-Journaling-文件系统"><a href="#2-Journaling-文件系统" class="headerlink" title="2. Journaling 文件系统"></a><strong>2. Journaling 文件系统</strong></h4><ul>
+<li><strong>原理</strong>: 使用日志记录文件系统的元数据和数据操作，确保一致性。</li>
+<li><strong>优点</strong>:<ul>
+<li>提供更高的数据可靠性。</li>
+<li>快速恢复能力。</li>
+</ul>
+</li>
+<li><strong>缺点</strong>:<ul>
+<li>增加了额外的磁盘写入开销。</li>
+</ul>
+</li>
+</ul>
+<h4 id="3-用户空间缓存"><a href="#3-用户空间缓存" class="headerlink" title="3. 用户空间缓存"></a><strong>3. 用户空间缓存</strong></h4><ul>
+<li><strong>原理</strong>: 应用程序在用户空间实现自己的缓存机制。</li>
+<li><strong>优点</strong>:<ul>
+<li>应用程序可以完全控制数据写入时机。</li>
+</ul>
+</li>
+<li><strong>缺点</strong>:<ul>
+<li>增加了开发复杂性。</li>
+<li>需要额外的内存管理。</li>
+</ul>
+</li>
+</ul>
+<h4 id="4-内存映射文件（mmap）"><a href="#4-内存映射文件（mmap）" class="headerlink" title="4. 内存映射文件（mmap）"></a><strong>4. 内存映射文件（mmap）</strong></h4><ul>
+<li><strong>原理</strong>: 将文件映射到内存，直接操作内存中的数据。</li>
+<li><strong>优点</strong>:<ul>
+<li>提供高效的文件访问。</li>
+</ul>
+</li>
+<li><strong>缺点</strong>:<ul>
+<li>需要显式调用 <code>msync</code> 或 <code>munmap</code> 来确保数据写入磁盘。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3 id="总结"><a href="#总结" class="headerlink" title="总结"></a><strong>总结</strong></h3><p>fs-writeback.c 是 Linux 文件系统中不可或缺的模块，负责管理脏页和脏 inode 的写回操作。它通过延迟写入和批量处理优化了系统性能，同时提供了数据完整性保障。然而，它也存在延迟写入的风险和复杂性问题。在实际应用中，可以根据场景选择合适的写回机制或替代方案，以平衡性能与数据安全性。</p>
+<h1 id="include-linux-fs-h"><a href="#include-linux-fs-h" class="headerlink" title="include&#x2F;linux&#x2F;fs.h"></a>include&#x2F;linux&#x2F;fs.h</h1><h2 id="mark-inode-dirty-sync-将-inode-标记为脏同步"><a href="#mark-inode-dirty-sync-将-inode-标记为脏同步" class="headerlink" title="mark_inode_dirty_sync 将 inode 标记为脏同步"></a>mark_inode_dirty_sync 将 inode 标记为脏同步</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">mark_inode_dirty_sync</span><span class="params">(<span class="keyword">struct</span> inode *inode)</span></span><br><span class="line">&#123;</span><br><span class="line">	__mark_inode_dirty(inode, I_DIRTY_SYNC);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="inode-unhashed-inode-无hash"><a href="#inode-unhashed-inode-无hash" class="headerlink" title="inode_unhashed inode 无hash"></a>inode_unhashed inode 无hash</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">int</span> <span class="title function_">inode_unhashed</span><span class="params">(<span class="keyword">struct</span> inode *inode)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> hlist_unhashed(&amp;inode-&gt;i_hash);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="mapping-tagged-用于检查页面缓存（address-space）中的任何页面是否被标记为指定的标签（tag）"><a href="#mapping-tagged-用于检查页面缓存（address-space）中的任何页面是否被标记为指定的标签（tag）" class="headerlink" title="mapping_tagged 用于检查页面缓存（address_space）中的任何页面是否被标记为指定的标签（tag）"></a>mapping_tagged 用于检查页面缓存（address_space）中的任何页面是否被标记为指定的标签（tag）</h2><ul>
+<li>页面缓存是文件系统中用于存储文件数据的内存区域，而标签（tag）是用于标识页面状态的标记，例如页面是否脏、是否正在写回等。</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> *如果映射中的任何页面标有 tag，则返回 true。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">mapping_tagged</span><span class="params">(<span class="keyword">struct</span> address_space *mapping, <span class="type">xa_mark_t</span> tag)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="comment">/* xa_marked 是一个通用的函数，用于检查 XArray 数据结构中的某个标记是否存在 */</span></span><br><span class="line">	<span class="keyword">return</span> xa_marked(&amp;mapping-&gt;i_pages, tag);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="mark-inode-dirty-sync-将-inode-标记为脏同步-1"><a href="#mark-inode-dirty-sync-将-inode-标记为脏同步-1" class="headerlink" title="mark_inode_dirty_sync 将 inode 标记为脏同步"></a>mark_inode_dirty_sync 将 inode 标记为脏同步</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">mark_inode_dirty_sync</span><span class="params">(<span class="keyword">struct</span> inode *inode)</span></span><br><span class="line">&#123;</span><br><span class="line">	__mark_inode_dirty(inode, I_DIRTY_SYNC);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="fs-fs-writeback-c"><a href="#fs-fs-writeback-c" class="headerlink" title="fs&#x2F;fs-writeback.c"></a>fs&#x2F;fs-writeback.c</h1><h2 id="locked-inode-to-wb-and-lock-list-从给定的-inode-中提取关联的-bdi-writeback-结构，并在锁的上下文中进行转换"><a href="#locked-inode-to-wb-and-lock-list-从给定的-inode-中提取关联的-bdi-writeback-结构，并在锁的上下文中进行转换" class="headerlink" title="locked_inode_to_wb_and_lock_list 从给定的 inode 中提取关联的 bdi_writeback 结构，并在锁的上下文中进行转换"></a>locked_inode_to_wb_and_lock_list 从给定的 inode 中提取关联的 bdi_writeback 结构，并在锁的上下文中进行转换</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">struct</span> bdi_writeback *</span><br><span class="line"><span class="title function_">locked_inode_to_wb_and_lock_list</span><span class="params">(<span class="keyword">struct</span> inode *inode)</span></span><br><span class="line">	__<span class="title function_">releases</span><span class="params">(&amp;inode-&gt;i_lock)</span></span><br><span class="line">	__<span class="title function_">acquires</span><span class="params">(&amp;wb-&gt;list_lock)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 从 inode 中提取与其关联的 bdi_writeback 结构。bdi_writeback 是 Linux 内核中用于管理后台写回操作的核心结构 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span> =</span> inode_to_wb(inode);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 首先释放 inode-&gt;i_lock 锁，表示当前线程不再需要保护 inode 的状态 */</span></span><br><span class="line">	spin_unlock(&amp;inode-&gt;i_lock);</span><br><span class="line">	<span class="comment">/* 然后获取 wb-&gt;list_lock 锁，用于保护 bdi_writeback 的列表操作。这种锁转换确保了线程安全，同时避免了死锁 */</span></span><br><span class="line">	spin_lock(&amp;wb-&gt;list_lock);</span><br><span class="line">	<span class="keyword">return</span> wb;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="wb-io-lists-populated-检查-bdi-writeback-是否已经标记为有脏-IO-数据。如果没有脏-IO-数据，它会设置-WB-has-dirty-io-标志，并更新相关的写带宽统计"><a href="#wb-io-lists-populated-检查-bdi-writeback-是否已经标记为有脏-IO-数据。如果没有脏-IO-数据，它会设置-WB-has-dirty-io-标志，并更新相关的写带宽统计" class="headerlink" title="wb_io_lists_populated 检查 bdi_writeback 是否已经标记为有脏 IO 数据。如果没有脏 IO 数据，它会设置 WB_has_dirty_io 标志，并更新相关的写带宽统计"></a>wb_io_lists_populated 检查 bdi_writeback 是否已经标记为有脏 IO 数据。如果没有脏 IO 数据，它会设置 WB_has_dirty_io 标志，并更新相关的写带宽统计</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">bool</span> <span class="title function_">wb_io_lists_populated</span><span class="params">(<span class="keyword">struct</span> bdi_writeback *wb)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="comment">/* 检查 wb 是否已经有脏 IO 数据 */</span></span><br><span class="line">	<span class="keyword">if</span> (wb_has_dirty_io(wb)) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">/* 没有脏 IO 数据 */</span></span><br><span class="line">        <span class="comment">/* 设置 WB_has_dirty_io 标志，表示该写回设备现在有脏 IO 数据 */</span></span><br><span class="line">		set_bit(WB_has_dirty_io, &amp;wb-&gt;state);</span><br><span class="line">        <span class="comment">/*  检查 avg_write_bandwidth 是否为零。如果为零，发出警告，因为写带宽统计不应为零 */</span></span><br><span class="line">		WARN_ON_ONCE(!wb-&gt;avg_write_bandwidth);</span><br><span class="line">		atomic_long_add(wb-&gt;avg_write_bandwidth,</span><br><span class="line">				&amp;wb-&gt;bdi-&gt;tot_write_bandwidth);</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="wb-io-lists-depopulated-清除-WB-has-dirty-io-标志，当-bdi-writeback-的所有-IO-列表都为空时，同时更新写带宽统计"><a href="#wb-io-lists-depopulated-清除-WB-has-dirty-io-标志，当-bdi-writeback-的所有-IO-列表都为空时，同时更新写带宽统计" class="headerlink" title="wb_io_lists_depopulated 清除 WB_has_dirty_io 标志，当 bdi_writeback 的所有 IO 列表都为空时，同时更新写带宽统计"></a>wb_io_lists_depopulated 清除 WB_has_dirty_io 标志，当 bdi_writeback 的所有 IO 列表都为空时，同时更新写带宽统计</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wb_io_lists_depopulated</span><span class="params">(<span class="keyword">struct</span> bdi_writeback *wb)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="comment">/*  否有脏 IO 数据</span></span><br><span class="line"><span class="comment">        检查 b_dirty、b_io 和 b_more_io 列表是否为空。</span></span><br><span class="line"><span class="comment">        如果所有列表都为空，表示没有脏 IO 数据 */</span></span><br><span class="line">	<span class="keyword">if</span> (wb_has_dirty_io(wb) &amp;&amp; list_empty(&amp;wb-&gt;b_dirty) &amp;&amp;</span><br><span class="line">	    list_empty(&amp;wb-&gt;b_io) &amp;&amp; list_empty(&amp;wb-&gt;b_more_io)) &#123;</span><br><span class="line">        <span class="comment">/* 清除 WB_has_dirty_io 标志，表示写回设备不再有脏 IO 数据 */</span></span><br><span class="line">		clear_bit(WB_has_dirty_io, &amp;wb-&gt;state);</span><br><span class="line">        <span class="comment">/* 更新总写带宽统计。</span></span><br><span class="line"><span class="comment">        如果结果小于零，发出警告，因为总写带宽统计不应为负值 */</span></span><br><span class="line">		WARN_ON_ONCE(atomic_long_sub_return(wb-&gt;avg_write_bandwidth,</span><br><span class="line">					&amp;wb-&gt;bdi-&gt;tot_write_bandwidth) &lt; <span class="number">0</span>);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="inode-io-list-move-locked-将-inode-移动到-bdi-writeback-IO-列表中"><a href="#inode-io-list-move-locked-将-inode-移动到-bdi-writeback-IO-列表中" class="headerlink" title="inode_io_list_move_locked 将 inode 移动到 bdi_writeback IO 列表中"></a>inode_io_list_move_locked 将 inode 移动到 bdi_writeback IO 列表中</h2><ul>
+<li>将 inode-&gt;i_io_list 移动到目标 bdi_writeback 的指定列表中（如 b_dirty、b_io、b_more_io 或 b_dirty_time）。</li>
+<li>同时，它会设置 WB_has_dirty_io 标志以表示该写回设备有脏 IO 数据</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * inode_io_list_move_locked - 将 inode 移动到 bdi_writeback IO 列表中</span></span><br><span class="line"><span class="comment"> * @inode：要移动的 inode</span></span><br><span class="line"><span class="comment"> * @wb：目标bdi_writeback</span></span><br><span class="line"><span class="comment"> * @head：@wb-&gt;b_&#123;dirty|io|more_io|dirty_time&#125; 之一</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 将 @inode-&gt;i_io_list 移动到 @wb 的 @list 并设置 %WB_has_dirty_io。</span></span><br><span class="line"><span class="comment"> * 如果 @inode 是 ！dirty_time IO 列表的第一个占用者，则返回 %true;否则，LSE.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">bool</span> <span class="title function_">inode_io_list_move_locked</span><span class="params">(<span class="keyword">struct</span> inode *inode,</span></span><br><span class="line"><span class="params">				      <span class="keyword">struct</span> bdi_writeback *wb,</span></span><br><span class="line"><span class="params">				      <span class="keyword">struct</span> list_head *head)</span></span><br><span class="line">&#123;</span><br><span class="line">	assert_spin_locked(&amp;wb-&gt;list_lock);</span><br><span class="line">	assert_spin_locked(&amp;inode-&gt;i_lock);</span><br><span class="line">    <span class="comment">/* 检查 inode 是否处于释放状态（I_FREEING） */</span></span><br><span class="line">	WARN_ON_ONCE(inode-&gt;i_state &amp; I_FREEING);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 用 list_move 将 inode-&gt;i_io_list 从当前列表移动到目标列表 head。 */</span></span><br><span class="line">	list_move(&amp;inode-&gt;i_io_list, head);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 如果目标列表不是 wb-&gt;b_dirty_time 设置 WB_has_dirty_io 标志*/</span></span><br><span class="line">	<span class="keyword">if</span> (head != &amp;wb-&gt;b_dirty_time)</span><br><span class="line">		<span class="keyword">return</span> wb_io_lists_populated(wb);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/*  当目标列表是 `wb-&gt;b_dirty_time` 时，可以清除 `WB_has_dirty_io` 标志，</span></span><br><span class="line"><span class="comment">        因为 `b_dirty_time` 列表中的 inode 不被视为真正的脏 IO 数据，直到其时间戳过期。*/</span></span><br><span class="line">	wb_io_lists_depopulated(wb);</span><br><span class="line">	<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="1-wb-b-dirty"><a href="#1-wb-b-dirty" class="headerlink" title="1. wb-&gt;b_dirty"></a><strong>1. <code>wb-&gt;b_dirty</code></strong></h3><ul>
+<li><strong>含义</strong>: 存储脏的 inode，这些 inode 的数据需要被写回磁盘。</li>
+<li><strong>用途</strong>: 这是主要的脏 inode 列表，表示需要立即处理的写回任务。</li>
+<li><strong>场景</strong>: 当 inode 的数据被修改后，它会被标记为脏并加入该列表。</li>
+</ul>
+<hr>
+<h3 id="2-wb-b-io"><a href="#2-wb-b-io" class="headerlink" title="2. wb-&gt;b_io"></a><strong>2. <code>wb-&gt;b_io</code></strong></h3><ul>
+<li><strong>含义</strong>: 存储正在进行写回操作的 inode。</li>
+<li><strong>用途</strong>: 这是一个临时列表，用于存储当前正在被写回线程处理的 inode。</li>
+<li><strong>场景</strong>: 当写回线程开始处理某个 inode 时，它会从 <code>b_dirty</code> 移动到 <code>b_io</code>。</li>
+</ul>
+<hr>
+<h3 id="3-wb-b-more-io"><a href="#3-wb-b-more-io" class="headerlink" title="3. wb-&gt;b_more_io"></a><strong>3. <code>wb-&gt;b_more_io</code></strong></h3><ul>
+<li><strong>含义</strong>: 存储需要进一步写回的 inode。</li>
+<li><strong>用途</strong>: 这是一个延迟处理的列表，表示写回操作未完成，需要后续处理。</li>
+<li><strong>场景</strong>: 当写回线程无法一次性完成某个 inode 的写回任务时，该 inode 会被移到 <code>b_more_io</code>。</li>
+</ul>
+<hr>
+<h3 id="4-wb-b-dirty-time"><a href="#4-wb-b-dirty-time" class="headerlink" title="4. wb-&gt;b_dirty_time"></a><strong>4. <code>wb-&gt;b_dirty_time</code></strong></h3><ul>
+<li><strong>含义</strong>: 存储时间戳脏的 inode，这些 inode 的元数据（如时间戳）需要被写回磁盘。</li>
+<li><strong>用途</strong>: 专门用于管理时间戳相关的写回任务，与数据写回任务分开。</li>
+<li><strong>场景</strong>: 当 inode 的时间戳被修改但数据未修改时，它会被加入该列表。</li>
+</ul>
+<h2 id="wb-wakeup-delayed-唤醒相应的-bdi-线程，然后该线程应该负责定期后台写出脏-inode"><a href="#wb-wakeup-delayed-唤醒相应的-bdi-线程，然后该线程应该负责定期后台写出脏-inode" class="headerlink" title="wb_wakeup_delayed 唤醒相应的 bdi 线程，然后该线程应该负责定期后台写出脏 inode"></a>wb_wakeup_delayed 唤醒相应的 bdi 线程，然后该线程应该负责定期后台写出脏 inode</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * “kupdate”样式写回之间的间隔</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">unsigned</span> <span class="type">int</span> dirty_writeback_interval = <span class="number">5</span> * <span class="number">100</span>; <span class="comment">/* 厘秒 */</span></span><br><span class="line"></span><br><span class="line">EXPORT_SYMBOL_GPL(dirty_writeback_interval);</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 当此 wb 的第一个 inode 标记为 dirty 时，将使用此函数。</span></span><br><span class="line"><span class="comment"> * 它唤醒相应的 bdi 线程，然后该线程应该负责定期后台写出脏 inode。</span></span><br><span class="line"><span class="comment"> * 由于写出从现在开始只会开始 “dirty_writeback_interval” centisecs，因此我们只需设置一个计时器，稍后唤醒 bdi 线程。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 请注意，我们不会费心设置计时器，但这个函数在快速路径上（由 &#x27;__mark_inode_dirty（）&#x27; 使用），因此我们通过延迟唤醒来节省很少的上下文切换。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 我们必须小心，如果计划提前进行冲洗工作，请不要推迟。因此我们使用 queue_delayed_work（）。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wb_wakeup_delayed</span><span class="params">(<span class="keyword">struct</span> bdi_writeback *wb)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> timeout;</span><br><span class="line">    <span class="comment">/* 使用 dirty_writeback_interval（以百分秒为单位）计算延迟时间，并将其转换为 jiffies */</span></span><br><span class="line">	timeout = msecs_to_jiffies(dirty_writeback_interval * <span class="number">10</span>);</span><br><span class="line">	spin_lock_irq(&amp;wb-&gt;work_lock);</span><br><span class="line">	<span class="keyword">if</span> (test_bit(WB_registered, &amp;wb-&gt;state))</span><br><span class="line">        <span class="comment">/* 调用 queue_delayed_work 将写回任务添加到延迟工作队列中，并设置唤醒时间点 */</span></span><br><span class="line">		queue_delayed_work(bdi_wq, &amp;wb-&gt;dwork, timeout);</span><br><span class="line">	spin_unlock_irq(&amp;wb-&gt;work_lock);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="mark-inode-dirty-用于将-inode-标记为脏"><a href="#mark-inode-dirty-用于将-inode-标记为脏" class="headerlink" title="__mark_inode_dirty 用于将 inode 标记为脏"></a>__mark_inode_dirty 用于将 inode 标记为脏</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * __mark_inode_dirty - inode 标记为脏</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @inode: 要标记的 inode</span></span><br><span class="line"><span class="comment"> * @flags: 指定脏的类型，可以是多个 I_DIRTY_* 标志的组合，但 I_DIRTY_TIME 不能与 I_DIRTY_PAGES 组合使用</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该函数的主要作用是标记 inode 为脏，并将其添加到适当的脏列表中，以便后续的写回操作。</span></span><br><span class="line"><span class="comment"> * 它会通知文件系统 inode 的状态变化，并根据 flags 更新 inode 的状态。</span></span><br><span class="line"><span class="comment"> * 注意：未哈希的 inode 不会被添加到脏列表中，即使稍后被哈希处理也不会重新处理。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="type">void</span> __mark_inode_dirty(<span class="keyword">struct</span> inode *inode, <span class="type">int</span> flags)</span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">super_block</span> *<span class="title">sb</span> =</span> inode-&gt;i_sb; <span class="comment">// 获取 inode 所属的超级块</span></span><br><span class="line">    <span class="type">int</span> dirtytime = <span class="number">0</span>; <span class="comment">// 标记是否是时间戳相关的脏状态</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span> =</span> <span class="literal">NULL</span>; <span class="comment">// 用于管理写回的上下文</span></span><br><span class="line"></span><br><span class="line">    trace_writeback_mark_inode_dirty(inode, flags); <span class="comment">// 跟踪写回事件</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (flags &amp; I_DIRTY_INODE) &#123; <span class="comment">// 如果标记为 I_DIRTY_INODE，表示 inode 本身需要被标记为脏</span></span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 如果 inode 的状态中包含 I_DIRTY_TIME，表示需要更新时间戳。</span></span><br><span class="line"><span class="comment">         * 通过加锁确保线程安全，并清除 I_DIRTY_TIME 标志，同时将其添加到 flags 中。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        <span class="keyword">if</span> (inode-&gt;i_state &amp; I_DIRTY_TIME) &#123;</span><br><span class="line">            spin_lock(&amp;inode-&gt;i_lock);</span><br><span class="line">            <span class="keyword">if</span> (inode-&gt;i_state &amp; I_DIRTY_TIME) &#123;</span><br><span class="line">                inode-&gt;i_state &amp;= ~I_DIRTY_TIME; <span class="comment">// 清除 I_DIRTY_TIME 标志</span></span><br><span class="line">                flags |= I_DIRTY_TIME; <span class="comment">// 将 I_DIRTY_TIME 添加到 flags 中</span></span><br><span class="line">            &#125;</span><br><span class="line">            spin_unlock(&amp;inode-&gt;i_lock);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 通知文件系统 inode 被标记为脏。</span></span><br><span class="line"><span class="comment">         * 如果文件系统实现了 dirty_inode 回调函数，则调用它以更新磁盘字段或日志。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        trace_writeback_dirty_inode_start(inode, flags);</span><br><span class="line">        <span class="keyword">if</span> (sb-&gt;s_op-&gt;dirty_inode)</span><br><span class="line">            sb-&gt;s_op-&gt;dirty_inode(inode, flags &amp; (I_DIRTY_INODE | I_DIRTY_TIME));</span><br><span class="line">        trace_writeback_dirty_inode(inode, flags);</span><br><span class="line"></span><br><span class="line">        flags &amp;= ~I_DIRTY_TIME; <span class="comment">// I_DIRTY_INODE 优先于 I_DIRTY_TIME</span></span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 如果不是 I_DIRTY_INODE，则可能是 I_DIRTY_PAGES 或 I_DIRTY_TIME。</span></span><br><span class="line"><span class="comment">         * 注意：I_DIRTY_PAGES 和 I_DIRTY_TIME 不能同时设置。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        dirtytime = flags &amp; I_DIRTY_TIME;</span><br><span class="line">        WARN_ON_ONCE(dirtytime &amp;&amp; flags != I_DIRTY_TIME); <span class="comment">// 如果同时设置，发出警告</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/*</span></span><br><span class="line"><span class="comment">     * 内存屏障，确保 i_state 的状态更新对其他线程可见。</span></span><br><span class="line"><span class="comment">     * 与 __writeback_single_inode() 中的 smp_mb() 配对使用。</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    smp_mb();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> ((inode-&gt;i_state &amp; flags) == flags) <span class="comment">// 如果 inode 已经处于目标状态，则直接返回</span></span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">    spin_lock(&amp;inode-&gt;i_lock); <span class="comment">// 加锁保护 inode 的状态更新</span></span><br><span class="line">    <span class="keyword">if</span> ((inode-&gt;i_state &amp; flags) != flags) &#123; <span class="comment">// 如果 inode 的状态需要更新</span></span><br><span class="line">        <span class="type">const</span> <span class="type">int</span> was_dirty = inode-&gt;i_state &amp; I_DIRTY; <span class="comment">// 检查 inode 是否已经是脏状态</span></span><br><span class="line"></span><br><span class="line">        inode_attach_wb(inode, <span class="literal">NULL</span>); <span class="comment">// 将 inode 附加到写回上下文</span></span><br><span class="line"></span><br><span class="line">        inode-&gt;i_state |= flags; <span class="comment">// 更新 inode 的状态</span></span><br><span class="line"></span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 如果 inode 之前不是脏状态，则需要将其添加到脏列表中。</span></span><br><span class="line"><span class="comment">         * 这需要先获取写回上下文的锁。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        <span class="keyword">if</span> (!was_dirty) &#123;</span><br><span class="line">            wb = locked_inode_to_wb_and_lock_list(inode); <span class="comment">// 获取写回上下文并加锁</span></span><br><span class="line">            spin_lock(&amp;inode-&gt;i_lock); <span class="comment">// 重新加锁 inode</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 如果 inode 已经被写回线程处理，则只更新状态，不重新添加到列表。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        <span class="keyword">if</span> (inode-&gt;i_state &amp; I_SYNC_QUEUED)</span><br><span class="line">            <span class="keyword">goto</span> out_unlock;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 只有有效的（已哈希或块设备） inode 才会被添加到超级块的脏列表中。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        <span class="keyword">if</span> (!S_ISBLK(inode-&gt;i_mode)) &#123; <span class="comment">// 如果不是块设备</span></span><br><span class="line">            <span class="keyword">if</span> (inode_unhashed(inode)) <span class="comment">// 如果 inode 未哈希，则跳过</span></span><br><span class="line">                <span class="keyword">goto</span> out_unlock;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (inode-&gt;i_state &amp; I_FREEING) <span class="comment">// 如果 inode 正在释放，则跳过</span></span><br><span class="line">            <span class="keyword">goto</span> out_unlock;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/*</span></span><br><span class="line"><span class="comment">         * 如果 inode 已经在脏列表中，则不重新定位，以保持时间顺序。</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        <span class="keyword">if</span> (!was_dirty) &#123;</span><br><span class="line">            <span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> *<span class="title">dirty_list</span>;</span> <span class="comment">// 指向目标脏列表</span></span><br><span class="line">            <span class="type">bool</span> wakeup_bdi = <span class="literal">false</span>; <span class="comment">// 是否需要唤醒写回线程</span></span><br><span class="line"></span><br><span class="line">            inode-&gt;dirtied_when = jiffies; <span class="comment">// 记录脏时间</span></span><br><span class="line">            <span class="keyword">if</span> (dirtytime)</span><br><span class="line">                inode-&gt;dirtied_time_when = jiffies; <span class="comment">// 如果是时间戳相关的脏状态，记录时间戳</span></span><br><span class="line"></span><br><span class="line">            <span class="keyword">if</span> (inode-&gt;i_state &amp; I_DIRTY)</span><br><span class="line">                dirty_list = &amp;wb-&gt;b_dirty; <span class="comment">// 如果是普通脏状态，添加到 b_dirty 列表</span></span><br><span class="line">            <span class="keyword">else</span></span><br><span class="line">                dirty_list = &amp;wb-&gt;b_dirty_time; <span class="comment">// 如果是时间戳相关的脏状态，添加到 b_dirty_time 列表</span></span><br><span class="line"></span><br><span class="line">            wakeup_bdi = inode_io_list_move_locked(inode, wb, dirty_list); <span class="comment">// 将 inode 移动到目标列表</span></span><br><span class="line"></span><br><span class="line">            spin_unlock(&amp;wb-&gt;list_lock); <span class="comment">// 解锁写回上下文</span></span><br><span class="line">            spin_unlock(&amp;inode-&gt;i_lock); <span class="comment">// 解锁 inode</span></span><br><span class="line">            trace_writeback_dirty_inode_enqueue(inode); <span class="comment">// 跟踪事件</span></span><br><span class="line"></span><br><span class="line">            <span class="comment">/*</span></span><br><span class="line"><span class="comment">             * 如果这是该写回设备的第一个脏 inode，则唤醒写回线程以确保后续写回操作。</span></span><br><span class="line"><span class="comment">             */</span></span><br><span class="line">            <span class="keyword">if</span> (wakeup_bdi &amp;&amp; (wb-&gt;bdi-&gt;capabilities &amp; BDI_CAP_WRITEBACK))</span><br><span class="line">                wb_wakeup_delayed(wb);</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">out_unlock:</span><br><span class="line">    <span class="keyword">if</span> (wb)</span><br><span class="line">        spin_unlock(&amp;wb-&gt;list_lock); <span class="comment">// 解锁写回上下文</span></span><br><span class="line">    spin_unlock(&amp;inode-&gt;i_lock); <span class="comment">// 解锁 inode</span></span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(__mark_inode_dirty); <span class="comment">// 导出符号，允许其他模块调用</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="write-inode-now-立即将一个脏的-inode-写入磁盘"><a href="#write-inode-now-立即将一个脏的-inode-写入磁盘" class="headerlink" title="write_inode_now 立即将一个脏的 inode 写入磁盘"></a>write_inode_now 立即将一个脏的 inode 写入磁盘</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * write_inode_now - 将 inode 写入磁盘</span></span><br><span class="line"><span class="comment"> * @inode：写入磁盘的 inode</span></span><br><span class="line"><span class="comment"> * @sync：写入是否应该是同步的</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 如果 inode 脏了，此函数会立即将 inode 提交到磁盘。这主要是 knfsd 需要的。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 调用方必须在 inode 上具有 ref 或必须已设置 I_WILL_FREE。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">write_inode_now</span><span class="params">(<span class="keyword">struct</span> inode *inode, <span class="type">int</span> sync)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">writeback_control</span> <span class="title">wbc</span> =</span> &#123;</span><br><span class="line">        <span class="comment">/* 设置为 LONG_MAX，表示写回操作的最大数量 */</span></span><br><span class="line">        .nr_to_write = LONG_MAX,</span><br><span class="line">        <span class="comment">/*  WB_SYNC_ALL：同步写回，确保数据立即写入磁盘。</span></span><br><span class="line"><span class="comment">            WB_SYNC_NONE：异步写回，允许数据暂时保留在缓存中。 */</span></span><br><span class="line">        .sync_mode = sync ? WB_SYNC_ALL : WB_SYNC_NONE,</span><br><span class="line">        <span class="comment">/* 示写回整个 inode 的数据 */</span></span><br><span class="line">        .range_start = <span class="number">0</span>,</span><br><span class="line">        .range_end = LLONG_MAX,</span><br><span class="line">    &#125;;</span><br><span class="line">    <span class="comment">/* 检查 inode 的数据映射（i_mapping）是否支持写回操作 */</span></span><br><span class="line">    <span class="keyword">if</span> (!mapping_can_writeback(inode-&gt;i_mapping))</span><br><span class="line">        wbc.nr_to_write = <span class="number">0</span>;</span><br><span class="line">    might_sleep();</span><br><span class="line">    <span class="keyword">return</span> writeback_single_inode(inode, &amp;wbc);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(write_inode_now);</span><br></pre></td></tr></table></figure>
+
+<h2 id="write-inode-标记-inode（文件系统中的索引节点）为脏状态"><a href="#write-inode-标记-inode（文件系统中的索引节点）为脏状态" class="headerlink" title="write_inode 标记 inode（文件系统中的索引节点）为脏状态"></a>write_inode 标记 inode（文件系统中的索引节点）为脏状态</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">write_inode</span><span class="params">(<span class="keyword">struct</span> inode *inode, <span class="keyword">struct</span> writeback_control *wbc)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> ret;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (inode-&gt;i_sb-&gt;s_op-&gt;write_inode &amp;&amp; !is_bad_inode(inode)) &#123;</span><br><span class="line">		trace_writeback_write_inode_start(inode, wbc);</span><br><span class="line">		ret = inode-&gt;i_sb-&gt;s_op-&gt;write_inode(inode, wbc);</span><br><span class="line">		trace_writeback_write_inode(inode, wbc);</span><br><span class="line">		<span class="keyword">return</span> ret;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="inode-wait-for-writeback-等待-inode-的写回操作完成"><a href="#inode-wait-for-writeback-等待-inode-的写回操作完成" class="headerlink" title="inode_wait_for_writeback 等待 inode 的写回操作完成"></a>inode_wait_for_writeback 等待 inode 的写回操作完成</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 等待 inode 上的写回完成。在持有 i_lock 的情况下被调用。</span></span><br><span class="line"><span class="comment"> * 调用方必须确保在我们丢弃 inode 时 inode 不会消失i_lock。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">inode_wait_for_writeback</span><span class="params">(<span class="keyword">struct</span> inode *inode)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_bit_queue_entry</span> <span class="title">wqe</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wait_queue_head</span> *<span class="title">wq_head</span>;</span></span><br><span class="line"></span><br><span class="line">	assert_spin_locked(&amp;inode-&gt;i_lock);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_SYNC))</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">    </span><br><span class="line">    <span class="comment">/* 使用 inode_bit_waitqueue 初始化等待队列头（wq_head）和等待队列条目（wqe */</span></span><br><span class="line">	wq_head = inode_bit_waitqueue(&amp;wqe, inode, __I_SYNC);</span><br><span class="line">    <span class="comment">/* 等待 I_SYNC 标志被清除 */</span></span><br><span class="line">	<span class="keyword">for</span> (;;) &#123;</span><br><span class="line">        <span class="comment">/* 当前线程设置为不可中断的等待状态 */</span></span><br><span class="line">		prepare_to_wait_event(wq_head, &amp;wqe.wq_entry, TASK_UNINTERRUPTIBLE);</span><br><span class="line">		<span class="comment">/* 使用 inode-&gt;i_lock 检查 I_SYNC 可保证内存排序。 */</span></span><br><span class="line">		<span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_SYNC))</span><br><span class="line">			<span class="keyword">break</span>;</span><br><span class="line">		spin_unlock(&amp;inode-&gt;i_lock);</span><br><span class="line">        <span class="comment">/* schedule 让出 CPU，等待其他线程完成写回操作 */</span></span><br><span class="line">		schedule();</span><br><span class="line">		spin_lock(&amp;inode-&gt;i_lock);</span><br><span class="line">	&#125;</span><br><span class="line">    <span class="comment">/* 调用 finish_wait 清理等待队列条目，恢复线程的正常运行状态 */</span></span><br><span class="line">	finish_wait(wq_head, &amp;wqe.wq_entry);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="writeback-single-inode-将-inode-的脏数据（包括页面和元数据）写入磁盘，并清除相关的脏标志（I-DIRTY）以维护文件系统的一致性"><a href="#writeback-single-inode-将-inode-的脏数据（包括页面和元数据）写入磁盘，并清除相关的脏标志（I-DIRTY）以维护文件系统的一致性" class="headerlink" title="__writeback_single_inode 将 inode 的脏数据（包括页面和元数据）写入磁盘，并清除相关的脏标志（I_DIRTY）以维护文件系统的一致性"></a>__writeback_single_inode 将 inode 的脏数据（包括页面和元数据）写入磁盘，并清除相关的脏标志（I_DIRTY）以维护文件系统的一致性</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 写出一个 inode 及其脏页（或它的一些脏页，取决于 @wbc-&gt;nr_to_write），并从 i_state 中清除相关的脏标志。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这不会从它所在的写回列表中删除 inode，除非由于 timestampexpiration 可能会将其从 b_dirty_time 移动到 b_dirty。 否则，调用方负责写回列表处理。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 调用方还负责事先设置 I_SYNC 标志，并在之后调用 inode_sync_complete（） 将其清除。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span></span><br><span class="line">__writeback_single_inode(<span class="keyword">struct</span> inode *inode, <span class="keyword">struct</span> writeback_control *wbc)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">address_space</span> *<span class="title">mapping</span> =</span> inode-&gt;i_mapping;</span><br><span class="line">	<span class="type">long</span> nr_to_write = wbc-&gt;nr_to_write;</span><br><span class="line">	<span class="type">unsigned</span> dirty;</span><br><span class="line">	<span class="type">int</span> ret;</span><br><span class="line"></span><br><span class="line">	WARN_ON(!(inode-&gt;i_state &amp; I_SYNC));</span><br><span class="line"></span><br><span class="line">	trace_writeback_single_inode_start(inode, wbc, nr_to_write);</span><br><span class="line">    <span class="comment">/*  写回 inode 的页面数据，具体写回行为由 writeback_control（wbc）控制 */</span></span><br><span class="line">	ret = do_writepages(mapping, wbc);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 确保在写出元数据之前等待数据。</span></span><br><span class="line"><span class="comment">     * 这对于在数据 I/O 完成时修改元数据的文件系统非常重要。</span></span><br><span class="line"><span class="comment">     * 我们不对 sync（2） writeback 执行此作，</span></span><br><span class="line"><span class="comment">     * 因为它有一个单独的外部 IO 完成路径和 -&gt;sync_fs 来保证 inode 元数据被正确写回。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">    <span class="comment">/* 在同步模式（WB_SYNC_ALL）下，函数确保页面数据写回完成后再写回元数据</span></span><br><span class="line"><span class="comment">    这对于依赖数据写回完成来更新元数据的文件系统非常重要 */</span></span><br><span class="line">	<span class="keyword">if</span> (wbc-&gt;sync_mode == WB_SYNC_ALL &amp;&amp; !wbc-&gt;for_sync) &#123;</span><br><span class="line">		<span class="type">int</span> err = filemap_fdatawait(mapping);</span><br><span class="line">		<span class="keyword">if</span> (ret == <span class="number">0</span>)</span><br><span class="line">			ret = err;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">    * 如果 inode 有脏时间戳，我们需要写入它们，请调用 mark_inode_dirty_sync（） 通知文件系统并将 I_DIRTY_TIME 更改为 I_DIRTY_SYNC。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> ((inode-&gt;i_state &amp; I_DIRTY_TIME) &amp;&amp;</span><br><span class="line">	    (wbc-&gt;sync_mode == WB_SYNC_ALL ||</span><br><span class="line">	     time_after(jiffies, inode-&gt;dirtied_time_when +</span><br><span class="line">			dirtytime_expire_interval * HZ))) &#123;</span><br><span class="line">		trace_writeback_lazytime(inode);</span><br><span class="line">		mark_inode_dirty_sync(inode);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 从 i_state 获取并清除脏标志。 </span></span><br><span class="line"><span class="comment">     * 这需要在调用 writepages 之后完成，因为由于 delalloc，某些文件系统可能会在 writepages 期间弄脏 inode。 </span></span><br><span class="line"><span class="comment">     * 还需要在处理时间戳过期后完成，因为这也可能弄脏 inode。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 函数在持有锁的情况下清除 inode 的脏标志（I_DIRTY），确保状态一致性 */</span></span><br><span class="line">	spin_lock(&amp;inode-&gt;i_lock);</span><br><span class="line">	dirty = inode-&gt;i_state &amp; I_DIRTY;</span><br><span class="line">	inode-&gt;i_state &amp;= ~dirty;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 与 __mark_inode_dirty（） 中的 smp_mb（） 配对。 这允许 __mark_inode_dirty（） 在不抓取 i_lock 的情况下测试 i_state - 要么他们看到 I_DIRTY 位被清除，要么我们看到脏污的 inode。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * I_DIRTY_PAGES 总是一起清除上面的内容@mapping即使它仍然有脏页。 如有必要，该标志将在 smp_mb（） 后恢复。 这保证了 __mark_inode_dirty（） 看到清晰的I_DIRTY_PAGES或者我们看到 PAGECACHE_TAG_DIRTY。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	smp_mb();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 如果页面缓存中仍有脏页面，函数重新设置 I_DIRTY_PAGES 标志，表示页面数据仍需写回。 */</span></span><br><span class="line">	<span class="keyword">if</span> (mapping_tagged(mapping, PAGECACHE_TAG_DIRTY))</span><br><span class="line">		inode-&gt;i_state |= I_DIRTY_PAGES;</span><br><span class="line">	<span class="keyword">else</span> <span class="keyword">if</span> (unlikely(inode-&gt;i_state &amp; I_PINNING_NETFS_WB)) &#123;</span><br><span class="line">		<span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_DIRTY_PAGES)) &#123;</span><br><span class="line">			inode-&gt;i_state &amp;= ~I_PINNING_NETFS_WB;</span><br><span class="line">			wbc-&gt;unpinned_netfs_wb = <span class="literal">true</span>;</span><br><span class="line">			dirty |= I_PINNING_NETFS_WB; <span class="comment">/* Cause write_inode */</span></span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	spin_unlock(&amp;inode-&gt;i_lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 如果 inode 的脏标志不只是页面数据（例如元数据） */</span></span><br><span class="line">	<span class="keyword">if</span> (dirty &amp; ~I_DIRTY_PAGES) &#123;</span><br><span class="line">		<span class="type">int</span> err = write_inode(inode, wbc);</span><br><span class="line">		<span class="keyword">if</span> (ret == <span class="number">0</span>)</span><br><span class="line">			ret = err;</span><br><span class="line">	&#125;</span><br><span class="line">	wbc-&gt;unpinned_netfs_wb = <span class="literal">false</span>;</span><br><span class="line">	trace_writeback_single_inode(inode, wbc, nr_to_write);</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="writeback-single-inode-将单个-inode-写回磁盘"><a href="#writeback-single-inode-将单个-inode-写回磁盘" class="headerlink" title="writeback_single_inode 将单个 inode 写回磁盘"></a>writeback_single_inode 将单个 inode 写回磁盘</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 按需将 inode 的脏数据和元数据写入磁盘。这种写回操作与由刷新线程（flusher threads）执行的批量写回不同，它是单独触发的，并由 writeback_control（wbc）结构控制写回的具体行为，例如是否执行数据完整性同步（WB_SYNC_ALL）或异步写回（WB_SYNC_NONE）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 为防止 inode 消失，调用方必须具有对 inode 的引用，或者 inode 必须设置 I_WILL_FREE 或 I_FREEING。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">writeback_single_inode</span><span class="params">(<span class="keyword">struct</span> inode *inode,</span></span><br><span class="line"><span class="params">				  <span class="keyword">struct</span> writeback_control *wbc)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span>;</span></span><br><span class="line">	<span class="type">int</span> ret = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	spin_lock(&amp;inode-&gt;i_lock);</span><br><span class="line">	<span class="keyword">if</span> (!<span class="type">atomic_read</span>(&amp;inode-&gt;i_count))</span><br><span class="line">        <span class="comment">/* 为零，则 inode 必须处于 I_WILL_FREE 或 I_FREEING 状态 */</span></span><br><span class="line">		WARN_ON(!(inode-&gt;i_state &amp; (I_WILL_FREE|I_FREEING)));</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		WARN_ON(inode-&gt;i_state &amp; I_WILL_FREE);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (inode-&gt;i_state &amp; I_SYNC) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 写回已在 inode 上运行。</span></span><br><span class="line"><span class="comment">         * 对于异步写回（WB_SYNC_NONE），直接返回。</span></span><br><span class="line"><span class="comment">         * 对于同步写回（WB_SYNC_ALL），等待当前写回完成后再继续。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (wbc-&gt;sync_mode != WB_SYNC_ALL)</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		inode_wait_for_writeback(inode);</span><br><span class="line">	&#125;</span><br><span class="line">	WARN_ON(inode-&gt;i_state &amp; I_SYNC);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果 inode 已经完全干净（没有脏数据或元数据），且不需要数据完整性同步</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 对于数据完整性同步，还需要检查页面缓存是否有正在写回的页面</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_DIRTY_ALL) &amp;&amp;</span><br><span class="line">	    (wbc-&gt;sync_mode != WB_SYNC_ALL ||</span><br><span class="line">	     !mapping_tagged(inode-&gt;i_mapping, PAGECACHE_TAG_WRITEBACK)))</span><br><span class="line">		<span class="keyword">goto</span> out;</span><br><span class="line">    <span class="comment">/* 将 inode 状态标记为 I_SYNC，表示写回操作正在进 */</span></span><br><span class="line">	inode-&gt;i_state |= I_SYNC;</span><br><span class="line">    <span class="comment">/* 	spin_unlock(&amp;inode-&gt;i_lock); */</span></span><br><span class="line">	wbc_attach_and_unlock_inode(wbc, inode);</span><br><span class="line">    <span class="comment">/* 进行实际的写回操作，并传递 wbc 控制写回行为 */</span></span><br><span class="line">	ret = __writeback_single_inode(inode, wbc);</span><br><span class="line">    <span class="comment">/* 写回完成后，解除 wbc 与 inode 的关联 */</span></span><br><span class="line">	wbc_detach_inode(wbc);</span><br><span class="line"></span><br><span class="line">	wb = inode_to_wb_and_lock_list(inode);</span><br><span class="line">	spin_lock(&amp;inode-&gt;i_lock);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 如果 inode 已经完全干净，则将其从写回列表中移除</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_FREEING)) &#123;</span><br><span class="line">		<span class="comment">/*</span></span><br><span class="line"><span class="comment">		 * 如果仍有脏数据，根据状态更新写回列表，例如将 inode 移动到适当的队列中。</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_DIRTY_ALL))</span><br><span class="line">			inode_cgwb_move_to_attached(inode, wb);</span><br><span class="line">		<span class="keyword">else</span> <span class="keyword">if</span> (!(inode-&gt;i_state &amp; I_SYNC_QUEUED)) &#123;</span><br><span class="line">			<span class="keyword">if</span> ((inode-&gt;i_state &amp; I_DIRTY))</span><br><span class="line">				redirty_tail_locked(inode, wb);</span><br><span class="line">			<span class="keyword">else</span> <span class="keyword">if</span> (inode-&gt;i_state &amp; I_DIRTY_TIME) &#123;</span><br><span class="line">				inode-&gt;dirtied_when = jiffies;</span><br><span class="line">				inode_io_list_move_locked(inode,</span><br><span class="line">							  wb,</span><br><span class="line">							  &amp;wb-&gt;b_dirty_time);</span><br><span class="line">			&#125;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	spin_unlock(&amp;wb-&gt;list_lock);</span><br><span class="line">    <span class="comment">/* 写回操作完成后，清除 I_SYNC 状态，表示同步结束 */</span></span><br><span class="line">	inode_sync_complete(inode);</span><br><span class="line">out:</span><br><span class="line">	spin_unlock(&amp;inode-&gt;i_lock);</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="sync-inodes-sb-同步并等待单个文件系统的Inode写回"><a href="#sync-inodes-sb-同步并等待单个文件系统的Inode写回" class="headerlink" title="sync_inodes_sb: 同步并等待单个文件系统的Inode写回"></a>sync_inodes_sb: 同步并等待单个文件系统的Inode写回</h2><p>此函数是Linux VFS(虚拟文件系统)层中一个至关重要的I&#x2F;O同步函数。它的核心作用是<strong>为一个指定的文件系统(<code>sb</code>), 强制启动其所有脏Inode(包括其关联的数据页)的写回(writeback)操作, 并且阻塞等待, 直到这些写回操作全部完成</strong>。它提供了从”数据在内存”到”数据已提交到存储设备”的强一致性保证。</p>
+<p>该函数的原理是利用内核中复杂且高效的后台写回(background writeback)机制, 但以一种同步的方式来驱动它:</p>
+<ol>
+<li><p><strong>构建”工作订单”</strong>: 函数首先会创建一个<code>wb_writeback_work</code>结构体。这可以被理解为一个详细的”工作订单”, 它精确地描述了需要执行的写回任务:</p>
+<ul>
+<li><code>sb</code>: 任务目标是哪个文件系统。</li>
+<li><code>sync_mode = WB_SYNC_ALL</code>: 任务模式是”全部同步”, 意味着不考虑任何延迟策略, 必须写回所有脏数据。</li>
+<li><code>nr_pages = LONG_MAX</code>: 任务范围是”无限”, 再次强调要写回所有脏页。</li>
+<li><code>done = &amp;done</code>: 这是关键的同步点。它将这个工作订单与一个<code>wb_completion</code>完成事件关联起来。</li>
+</ul>
+</li>
+<li><p><strong>提交工作并等待</strong>: 函数并不会自己去一个一个地写数据。它调用<code>bdi_split_work_to_wbs</code>将这个”工作订单”提交给与该文件系统底层块设备相关联的写回工作队列(writeback workqueues)。内核的I&#x2F;O工作者线程会接收这个任务并开始在后台执行实际的I&#x2F;O操作。提交任务后, <code>sync_inodes_sb</code>函数立即调用<code>wb_wait_for_completion(&amp;done)</code>, <strong>在此处进入休眠状态, 等待</strong>。当后台的工作者线程完成了”工作订单”中指定的所有I&#x2F;O操作后, 它们会发出<code>done</code>事件的完成信号, 此时<code>wb_wait_for_completion</code>才会返回, <code>sync_inodes_sb</code>函数才能继续执行。</p>
+</li>
+<li><p><strong>最终清理等待</strong>: 在主体的写回完成后, 它还会调用<code>wait_sb_inodes</code>。这是一个额外的、更强的保证步骤, 用于等待那些可能由其他原因(并非本次<code>sync</code>调用)发起但尚未完成的Inode I&#x2F;O。</p>
+</li>
+</ol>
+<p>在STM32H750这样的单核抢占式系统上, 这种机制依然至关重要。虽然不存在多核并行执行, 但<strong>并发</strong>依然存在于任务与中断之间, 或高优先级任务对低优先级任务的抢占。</p>
+<ul>
+<li><code>bdi_down_write_wb_switch_rwsem</code>等锁机制可以防止在提交写回任务时, I&#x2F;O队列的结构被其他任务(例如, 响应系统负载变化的管理任务)修改, 保证了任务提交的原子性。</li>
+<li>将实际I&#x2F;O操作推迟到内核工作者线程, 并通过完成事件进行同步, 是一个标准的内核设计模式, 它将I&#x2F;O发起者(可能是任何任务)与I&#x2F;O执行者(专职的工作者线程)解耦, 使得代码结构更清晰, 更容易管理复杂的I&#x2F;O状态。</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * sync_inodes_sb - 同步一个超级块的所有inode页面</span></span><br><span class="line"><span class="comment"> * @sb: 超级块</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这个函数会写回并等待属于此超级块的任何脏inode.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span> <span class="title function_">sync_inodes_sb</span><span class="params">(<span class="keyword">struct</span> super_block *sb)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取与该超级块关联的 backing_dev_info (BDI) 结构体.</span></span><br><span class="line"><span class="comment">	 * BDI 代表了底层块设备的I/O能力和状态, 是所有写回操作的管理核心.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">backing_dev_info</span> *<span class="title">bdi</span> =</span> sb-&gt;s_bdi;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * DEFINE_WB_COMPLETION 是一个宏, 用于定义并初始化一个名为&#x27;done&#x27;的写回完成事件.</span></span><br><span class="line"><span class="comment">	 * 这个事件将用于阻塞等待, 直到写回操作完成.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	DEFINE_WB_COMPLETION(done, bdi);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 定义并初始化一个 wb_writeback_work 结构体.</span></span><br><span class="line"><span class="comment">	 * 这相当于创建一个详细的 &quot;工作订单&quot;.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">wb_writeback_work</span> <span class="title">work</span> =</span> &#123;</span><br><span class="line">		.sb		= sb,			<span class="comment">// 目标是这个超级块</span></span><br><span class="line">		.sync_mode	= WB_SYNC_ALL,		<span class="comment">// 同步模式: 全部同步, 不留任何脏数据</span></span><br><span class="line">		.nr_pages	= LONG_MAX,		<span class="comment">// 要写的页数: 无限, 即全部</span></span><br><span class="line">		.range_cyclic	= <span class="number">0</span>,			<span class="comment">// 不进行循环扫描</span></span><br><span class="line">		.done		= &amp;done,		<span class="comment">// 操作完成后, 发信号给 &#x27;done&#x27; 这个完成事件</span></span><br><span class="line">		.reason		= WB_REASON_SYNC,	<span class="comment">// 发起原因: sync调用</span></span><br><span class="line">		.for_sync	= <span class="number">1</span>,			<span class="comment">// 这是一个同步操作</span></span><br><span class="line">	&#125;;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 检查BDI是否为 noop_backing_dev_info.</span></span><br><span class="line"><span class="comment">	 * 这是一个特殊的BDI, 用于那些没有持久化存储的文件系统 (如 ramfs).</span></span><br><span class="line"><span class="comment">	 * 如果是, 说明没有地方可以写回, 直接返回.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (bdi == &amp;noop_backing_dev_info)</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 这是一个内核断言. 它警告开发者, 如果在调用此函数时,</span></span><br><span class="line"><span class="comment">	 * 没有持有超级块的 s_umount 读写信号量, 这是一个潜在的bug.</span></span><br><span class="line"><span class="comment">	 * 这个锁可以防止在同步过程中, 文件系统被另一个线程卸载.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	WARN_ON(!rwsem_is_locked(&amp;sb-&gt;s_umount));</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 获取BDI的写回切换写锁.</span></span><br><span class="line"><span class="comment">	 * 这是一个内部锁, 用于保护BDI的写回队列列表, 防止在提交工作时该列表发生变化.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	bdi_down_write_wb_switch_rwsem(bdi);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 将 &quot;工作订单&quot; work 分发给BDI管理的各个写回工作队列.</span></span><br><span class="line"><span class="comment">	 * 这一步会唤醒内核的工作者线程, 它们将开始执行实际的I/O操作.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	bdi_split_work_to_wbs(bdi, &amp;work, <span class="literal">false</span>);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 等待 &#x27;done&#x27; 事件的完成信号.</span></span><br><span class="line"><span class="comment">	 * 函数将在此处休眠, 直到所有由 bdi_split_work_to_wbs 启动的I/O操作都已完成.</span></span><br><span class="line"><span class="comment">	 * 这是将异步的后台写回操作转换为同步等待的关键.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	wb_wait_for_completion(&amp;done);</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 释放写回切换写锁.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	bdi_up_write_wb_switch_rwsem(bdi);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 调用 wait_sb_inodes. 这是一个额外的等待步骤.</span></span><br><span class="line"><span class="comment">	 * 它确保超级块的 s_io 和 s_dirty 列表上所有标记为 I_SYNC 的inode</span></span><br><span class="line"><span class="comment">	 * (可能由其他并发操作发起)都已经完成了它们的I/O.</span></span><br><span class="line"><span class="comment">	 * 这提供了更强的完成保证.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	wait_sb_inodes(sb);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * 将 sync_inodes_sb 函数导出, 使其对其他内核模块可用.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">EXPORT_SYMBOL(sync_inodes_sb);</span><br></pre></td></tr></table></figure>
+
+<h2 id="脏时间-Inode-周期性回写：start-dirtytime-writeback-与-wakeup-dirtytime-writeback"><a href="#脏时间-Inode-周期性回写：start-dirtytime-writeback-与-wakeup-dirtytime-writeback" class="headerlink" title="脏时间 Inode 周期性回写：start_dirtytime_writeback 与 wakeup_dirtytime_writeback"></a>脏时间 Inode 周期性回写：start_dirtytime_writeback 与 wakeup_dirtytime_writeback</h2><p>本代码片段实现了一个内核后台的回写（writeback）安全网机制。其核心功能是<strong>周期性地唤醒系统的回写线程，以确保那些仅因时间戳（如访问时间 atime）更新而被标记为“脏”的 inode 能够被最终写入持久存储</strong>。这个机制通过一个可配置的、自调度（self-scheduling）的延迟工作队列（delayed work）来实现，弥补了常规回写机制主要由脏数据页驱动的不足，从而保证了文件系统元数据的最终一致性。</p>
+<h3 id="实现原理分析"><a href="#实现原理分析" class="headerlink" title="实现原理分析"></a>实现原理分析</h3><p>该机制是内核 I&#x2F;O 子系统中一个精妙的、用于保证数据完整性的设计，它由一个周期性任务和一个用户配置接口组成。</p>
+<ol>
+<li><p><strong>问题的根源</strong>: 当一个文件被读取时，其 inode 的访问时间（atime）会被更新。这使得 inode 在内存中变为“脏”状态。然而，因为没有文件<em>数据</em>被修改，所以不会有脏的数据页（dirty pages）产生。内核的回写机制（flusher threads）主要由脏数据页的阈值来驱动。因此，在一个 I&#x2F;O 不频繁的系统上，一个仅有时间戳更新的 inode 可能会无限期地停留在内存中，如果此时系统崩溃，更新后的时间戳将会丢失。</p>
+</li>
+<li><p><strong>延迟工作队列 (<code>delayed_work</code>) 作为周期性定时器</strong>:</p>
+<ul>
+<li><code>start_dirtytime_writeback</code> 函数在内核启动时被调用，它做的第一件事就是调用 <code>schedule_delayed_work</code> 来安排 <code>dirtytime_work</code> 在 <code>dirtytime_expire_interval</code> 秒之后首次执行。</li>
+<li>当 <code>dirtytime_work</code> 的处理函数 <code>wakeup_dirtytime_writeback</code> 执行到最后时，它会再次调用 <code>schedule_delayed_work</code> 来重新安排下一次的执行。这种“自我调度”的模式，将一个延迟工作队列变成了一个周期性的定时任务。</li>
+</ul>
+</li>
+<li><p><strong>全局扫描与唤醒 (<code>wakeup_dirtytime_writeback</code>)</strong>:</p>
+<ul>
+<li>这个工作队列的处理函数并不亲自执行 I&#x2F;O 操作。它的职责是遍历系统中所有后端存储设备（<code>backing_dev_info</code>）的所有回写队列（<code>bdi_writeback</code>）。</li>
+<li><strong>RCU 安全遍历</strong>: 遍历 <code>bdi_list</code> 和 <code>wb_list</code> 这两个可能被并发修改的全局链表时，使用了 <code>rcu_read_lock</code> 进行保护。这允许在不阻塞设备注册&#x2F;注销的情况下安全地进行只读遍历。</li>
+<li><strong>检查目标</strong>: 对于每一个回写队列 <code>wb</code>，它检查其 <code>b_dirty_time</code> 链表是否为空。这个链表专门用于挂接那些仅因时间戳而变脏的 inode。</li>
+<li><strong>唤醒而非回写</strong>: 如果 <code>b_dirty_time</code> 链表非空，它就调用 <code>wb_wakeup(wb)</code>。这个函数仅仅是唤醒与该队列关联的内核回写线程（flusher thread）。被唤醒的线程接下来会按照标准流程检查其队列，发现 <code>b_dirty_time</code> 链表上有待处理的 inode，然后将它们写回磁盘。这种设计将“发现问题”的策略与“解决问题”的执行完全解耦。</li>
+</ul>
+</li>
+<li><p><strong>用户空间可配置性 (<code>sysctl</code>)</strong>:</p>
+<ul>
+<li><code>start_dirtytime_writeback</code> 还通过 <code>register_sysctl_init</code> 注册了一个 sysctl 接口，即 <code>/proc/sys/vm/dirtytime_expire_seconds</code>。这允许系统管理员在运行时动态调整检查周期。</li>
+<li><code>dirtytime_interval_handler</code> 是这个 sysctl 的处理函数。它有一个重要的附加逻辑：当用户<strong>写入</strong>一个新的时间间隔时，它会调用 <code>mod_delayed_work(..., 0)</code>。这个调用会立即修改定时器（如果正在等待），并以0秒的延迟重新调度它，这意味着工作队列会“几乎立即”执行一次，然后开始按新的时间间隔进行周期调度。这使得配置的更改能够迅速生效。</li>
+</ul>
+</li>
+</ol>
+<h3 id="代码分析"><a href="#代码分析" class="headerlink" title="代码分析"></a>代码分析</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @var dirtytime_expire_interval</span></span><br><span class="line"><span class="comment"> * @brief &quot;脏时间&quot; inode 回写检查的周期，单位为秒。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 默认值为12小时。这是周期性任务 wakeup_dirtytime_writeback 的执行间隔。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">unsigned</span> <span class="type">int</span> dirtytime_expire_interval = <span class="number">12</span> * <span class="number">60</span> * <span class="number">60</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 前向声明 work_struct 的处理函数。</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wakeup_dirtytime_writeback</span><span class="params">(<span class="keyword">struct</span> work_struct *w)</span>;</span><br><span class="line"><span class="comment">// 声明一个名为 dirtytime_work 的延迟工作队列项，其处理函数为 wakeup_dirtytime_writeback。</span></span><br><span class="line"><span class="type">static</span> <span class="title function_">DECLARE_DELAYED_WORK</span><span class="params">(dirtytime_work, wakeup_dirtytime_writeback)</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief wakeup_dirtytime_writeback - 周期性任务，用于唤醒回写线程处理脏时间 inode。</span></span><br><span class="line"><span class="comment"> * @param w: 指向 work_struct 的指针 (未使用)。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">wakeup_dirtytime_writeback</span><span class="params">(<span class="keyword">struct</span> work_struct *w)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">backing_dev_info</span> *<span class="title">bdi</span>;</span> <span class="comment">/// &lt; 用于遍历 bdi 链表的指针。</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 进入 RCU 读侧临界区，以安全地遍历 bdi_list。</span></span><br><span class="line">	rcu_read_lock();</span><br><span class="line">	<span class="comment">// RCU 安全地遍历系统中所有已注册的后端设备信息 (bdi)。</span></span><br><span class="line">	list_for_each_entry_rcu(bdi, &amp;bdi_list, bdi_list) &#123;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">bdi_writeback</span> *<span class="title">wb</span>;</span> <span class="comment">/// &lt; 用于遍历 bdi 内 wb_list 的指针。</span></span><br><span class="line"></span><br><span class="line">		<span class="comment">// RCU 安全地遍历该 bdi 下所有的回写工作器 (wb)。</span></span><br><span class="line">		list_for_each_entry_rcu(wb, &amp;bdi-&gt;wb_list, bdi_node)</span><br><span class="line">			<span class="comment">// 如果该回写工作器的 b_dirty_time 链表非空 (即存在脏时间inode)，</span></span><br><span class="line">			<span class="keyword">if</span> (!list_empty(&amp;wb-&gt;b_dirty_time))</span><br><span class="line">				<span class="comment">// 则唤醒对应的回写内核线程 (flusher thread) 来处理它。</span></span><br><span class="line">				wb_wakeup(wb);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// 退出 RCU 读侧临界区。</span></span><br><span class="line">	rcu_read_unlock();</span><br><span class="line">	<span class="comment">// 重新调度此任务，在下一个 dirtytime_expire_interval 周期后再次执行。</span></span><br><span class="line">	schedule_delayed_work(&amp;dirtytime_work, dirtytime_expire_interval * HZ);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief dirtytime_interval_handler - /proc/sys/vm/dirtytime_expire_seconds 的处理函数。</span></span><br><span class="line"><span class="comment"> * @param table: 指向 ctl_table 结构的指针。</span></span><br><span class="line"><span class="comment"> * @param write: 标志位，非0表示写操作。</span></span><br><span class="line"><span class="comment"> * @param buffer: 指向用户空间数据的缓冲区。</span></span><br><span class="line"><span class="comment"> * @param lenp: 指向数据长度的指针。</span></span><br><span class="line"><span class="comment"> * @param ppos: 指向文件偏移量的指针。</span></span><br><span class="line"><span class="comment"> * @return int: 成功返回0，否则返回错误码。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">dirtytime_interval_handler</span><span class="params">(<span class="type">const</span> <span class="keyword">struct</span> ctl_table *table, <span class="type">int</span> write,</span></span><br><span class="line"><span class="params">			       <span class="type">void</span> *buffer, <span class="type">size_t</span> *lenp, <span class="type">loff_t</span> *ppos)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> ret;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 使用内核提供的标准函数来处理整数类型的 sysctl 读写。</span></span><br><span class="line">	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);</span><br><span class="line">	<span class="comment">// 如果写入操作成功...</span></span><br><span class="line">	<span class="keyword">if</span> (ret == <span class="number">0</span> &amp;&amp; write)</span><br><span class="line">		<span class="comment">// ...则立即以0延迟重新调度 dirtytime_work，使新设置的间隔尽快生效。</span></span><br><span class="line">		mod_delayed_work(system_percpu_wq, &amp;dirtytime_work, <span class="number">0</span>);</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 定义 sysctl 表，用于在 /proc/sys/vm/ 目录下创建文件。</span></span><br><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">ctl_table</span> <span class="title">vm_fs_writeback_table</span>[] =</span> &#123;</span><br><span class="line">	&#123;</span><br><span class="line">		.procname	= <span class="string">&quot;dirtytime_expire_seconds&quot;</span>,       <span class="comment">// 文件名</span></span><br><span class="line">		.data		= &amp;dirtytime_expire_interval,       <span class="comment">// 关联的内核变量</span></span><br><span class="line">		.maxlen		= <span class="keyword">sizeof</span>(dirtytime_expire_interval),<span class="comment">// 最大长度</span></span><br><span class="line">		.mode		= <span class="number">0644</span>,                             <span class="comment">// 文件权限</span></span><br><span class="line">		.proc_handler	= dirtytime_interval_handler,       <span class="comment">// 读写处理函数</span></span><br><span class="line">		.extra1		= SYSCTL_ZERO,                      <span class="comment">// 最小值约束为0</span></span><br><span class="line">	&#125;,</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief start_dirtytime_writeback - 初始化脏时间回写机制的函数。</span></span><br><span class="line"><span class="comment"> * @return int: 始终返回0。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __init <span class="title function_">start_dirtytime_writeback</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 安排第一次的延迟工作队列任务。</span></span><br><span class="line">	schedule_delayed_work(&amp;dirtytime_work, dirtytime_expire_interval * HZ);</span><br><span class="line">	<span class="comment">// 注册上述定义的 sysctl 表。</span></span><br><span class="line">	register_sysctl_init(<span class="string">&quot;vm&quot;</span>, vm_fs_writeback_table);</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 使用 __initcall 宏，确保该初始化函数在内核启动过程的早期被调用。</span></span><br><span class="line">__initcall(start_dirtytime_writeback);</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/88ab2b13/">https://wdfk-prog.space/posts/88ab2b13/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/fs/">fs</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/08.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/56a583b/" title="fs_context"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">fs_context</div></div><div class="info-2"><div class="info-item-1">[toc] fs&#x2F;fs_context.c 文件系统创建上下文(Filesystem Creation Context)历史与背景这项技术是为了解决什么特定问题而诞生的？fs_context 框架的诞生是为了彻底改革和现代化Linux内核中挂载文件系统的方式，以解决传统mount(2)系统调用长期以来存在的诸多根本性问题：  混乱的参数传递：mount(2)系统调用使用一个名为data的参数（void *data），它实际上被用作一个非结构化的、以逗号分隔的字符串来传递文件系统特定的挂载选项（如&quot;rw,noatime,jounal_checksum&quot;）。这种方式有几个巨大的缺点： 解析复杂且容易出错：每个文件系统都必须编写自己的、脆弱的字符串解析器来提取选项。 缺乏类型安全：所有选项都被当作字符串，无法以原生方式传递整数、布尔标志或二进制数据（如安全密钥）。 难以验证：内核很难在文件系统解析之前对选项进行统一的验证。   API不灵活且难以扩展：mount(2)的参数是固定的。当出现新的挂载需求或新型文件系统（特别是那些没有传统块设备源的，如网络文件...</div></div></div></a><a class="pagination-related" href="/posts/2089198e/" title="filesystems"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">filesystems</div></div><div class="info-2"><div class="info-item-1">  [toc]  fs&#x2F; VFS - 虚拟文件系统(Virtual Filesystem) 内核统一的文件系统抽象层历史与背景这项技术是为了解决什么特定问题而诞生的？虚拟文件系统（Virtual Filesystem Switch, VFS）是Linux内核最核心、最强大的子系统之一。它的诞生是为了解决一个根本性的问题：如何让应用程序以一种统一的方式来访问各种不同类型的文件系统。 在VFS出现之前，操作系统如果想支持一种新的文件系统（例如，从Minix文件系统切换到ext文件系统），可能需要重写大量与文件操作相关的代码。应用程序也可能会与特定的文件系统实现产生耦合。VFS通过创建一个通用的抽象层来解决这个问题：  对应用程序的统一接口：无论底层是ext4、XFS、Btrfs、NFS（网络文件系统），还是一个USB U盘上的FAT32，应用程序都使用同样标准的系统调用（open, read, write, close, stat等）来操作文件。应用程序完全不需要知道底层文件系统的具体类型和实现细节。 对文件系统驱动的统一接口：VFS定义了一套标准的“插件”接口。任何想要被...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/1db9a982/" title="ext4"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">ext4</div></div><div class="info-2"><div class="info-item-1">   [toc] fs&#x2F;ext4&#x2F;super.c Ext4文件系统核心(Ext4 Filesystem Core) 文件系统的挂载与生命周期管理历史与背景这项技术是为了解决什么特定问题而诞生的？fs/ext4/super.c 是Ext4文件系统驱动的核心，它的诞生是为了解决一个根本性的问题：如何将一个原始的块设备（如硬盘分区）解释并初始化为一个可供操作系统使用的、有组织的文件系统实例。 这个文件中的代码是内核与一个具体Ext4文件系统进行首次“握手”的地方。它负责的任务包括：  引导（Bootstrap）：当用户执行 mount 命令时，super.c 中的代码负责从块设备的预定位置读取超级块（Superblock）。超级块是文件系统的“元数据之母”，记录了该文件系统的所有宏观信息（如总大小、块大小、inode数量、魔数等）。 验证与初始化：验证读取到的超级块是否合法（例如，通过检查魔数），并根据其中描述的特性（如是否启用日志、扩展属性等）在内存中建立起管理该文件系统所需的所有数据结构。 生命周期管理：它不仅处理挂载（mount），还负责卸载（unmount）...</div></div></div></a><a class="pagination-related" href="/posts/b554c0f0/" title="mbcache"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">mbcache</div></div><div class="info-2"><div class="info-item-1">  [toc] fs&#x2F;mbcache.c 扩展属性块缓存(Extended Attribute Block Cache) 加速文件系统元数据访问历史与背景这项技术是为了解决什么特定问题而诞生的？fs/mbcache.c 实现了一个通用的、基于内存的缓存，其核心目标是加速对存储在独立磁盘块中的文件系统元数据的访问。它专门为**扩展属性（Extended Attributes, xattrs）**的性能优化而设计。 在许多文件系统（如Ext3, Ext4）中，扩展属性（例如，SELinux的安全上下文、POSIX ACLs、用户自定义的元数据）并不总是与文件的inode存储在一起。当一个文件的xattrs过多或过大时，它们会被存储在一个或多个独立的磁盘块中。如果没有缓存，每次需要读取或写入这些xattrs时，文件系统都必须执行一次额外的、独立的磁盘I&#x2F;O操作。对于元数据密集型的操作（例如，在一个包含大量文件的目录上运行 ls -Z），这会导致显著的性能下降。 mbcache 通过在内存中缓存这些扩展属性块，解决了这个问题。当文件系统需要访问一个xattr块时，它首...</div></div></div></a><a class="pagination-related" href="/posts/b4dd5ab6/" title="fcntl"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-07</div><div class="info-item-2">fcntl</div></div><div class="info-2"><div class="info-item-1">  [toc] fs&#x2F;fcntl.c 文件控制(File Control) 管理文件锁和文件描述符属性 历史与背景这项技术是为了解决什么特定问题而诞生的？fs/fcntl.c 实现的 fcntl() 系统调用是为了解决一个基本问题：在文件被打开之后，如何查询和修改其属性及状态。标准的 open(), read(), write(), close() 提供了对文件内容的基本I&#x2F;O操作，但现实世界的应用程序需要更精细的控制能力，主要包括：  并发访问控制：当多个进程同时访问同一个文件时，如何防止数据损坏？这就需要一种机制来协调访问，即文件锁（File Locking）。 修改描述符行为：如何将一个阻塞的文件描述符（File Descriptor, FD）变为非阻塞的？如何防止一个打开的FD被子进程继承？这就需要对FD的属性进行管理。 复制文件描述符：如何创建一个新的FD，使其指向与现有FD相同的打开文件实例（struct file），例如用于重定向标准输入&#x2F;输出。  fcntl() 被设计成一个多功能的“瑞士军刀”，通过一个单一的系统调用入口，提供了对上...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1"> [TOC] init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的 i...</div></div></div></a><a class="pagination-related" href="/posts/52310506/" title="anon_inodes"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">anon_inodes</div></div><div class="info-2"><div class="info-item-1">[toc] fs&#x2F;anon_inodes.c 匿名inode文件系统(Anonymous Inode Filesystem) 提供内核事件驱动的文件描述符历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术是为了给那些纯粹基于内核内部事件、而没有实体文件系统后端的对象提供一个标准的文件描述符（File Descriptor）接口而诞生的。 在Linux“一切皆文件”的设计哲学下，将各种资源抽象为文件描述符，可以使用read(), write(), poll(), epoll()等一套统一的I&#x2F;O接口来进行操作。 在anon_inodes出现之前，如果内核想提供一个事件通知机制（例如inotify），它可能需要实现一个迷你的、私有的伪文件系统，只为了创建一个inode和一个file对象返回给用户空间。 这导致了代码的重复和资源的浪费。 anon_inodes.c解决的核心问题是：如何以一种轻量级、标准化、且节约内存的方式，为内核子系统创建并返回一个功能性的文件描述符，而这个文件描述符背后并不对应任何磁盘上的文件或一个完整的伪文件系统。 它的发展经历了哪些重...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">414</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">49</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">53</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#fs-writeback"><span class="toc-number">1.</span> <span class="toc-text">fs-writeback</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86"><span class="toc-number">1.0.1.</span> <span class="toc-text">原理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.0.2.</span> <span class="toc-text">使用场景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BC%98%E7%BC%BA%E7%82%B9"><span class="toc-number">1.0.3.</span> <span class="toc-text">优缺点</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BC%98%E7%82%B9"><span class="toc-number">1.0.3.1.</span> <span class="toc-text">优点</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%BC%BA%E7%82%B9"><span class="toc-number">1.0.3.2.</span> <span class="toc-text">缺点</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B6%E4%BB%96%E6%96%B9%E6%A1%88"><span class="toc-number">1.0.4.</span> <span class="toc-text">其他方案</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#1-Direct-I-O"><span class="toc-number">1.0.4.1.</span> <span class="toc-text">1. Direct I&#x2F;O</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-Journaling-%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F"><span class="toc-number">1.0.4.2.</span> <span class="toc-text">2. Journaling 文件系统</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-%E7%94%A8%E6%88%B7%E7%A9%BA%E9%97%B4%E7%BC%93%E5%AD%98"><span class="toc-number">1.0.4.3.</span> <span class="toc-text">3. 用户空间缓存</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#4-%E5%86%85%E5%AD%98%E6%98%A0%E5%B0%84%E6%96%87%E4%BB%B6%EF%BC%88mmap%EF%BC%89"><span class="toc-number">1.0.4.4.</span> <span class="toc-text">4. 内存映射文件（mmap）</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.0.5.</span> <span class="toc-text">总结</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#include-linux-fs-h"><span class="toc-number">2.</span> <span class="toc-text">include&#x2F;linux&#x2F;fs.h</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#mark-inode-dirty-sync-%E5%B0%86-inode-%E6%A0%87%E8%AE%B0%E4%B8%BA%E8%84%8F%E5%90%8C%E6%AD%A5"><span class="toc-number">2.1.</span> <span class="toc-text">mark_inode_dirty_sync 将 inode 标记为脏同步</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#inode-unhashed-inode-%E6%97%A0hash"><span class="toc-number">2.2.</span> <span class="toc-text">inode_unhashed inode 无hash</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mapping-tagged-%E7%94%A8%E4%BA%8E%E6%A3%80%E6%9F%A5%E9%A1%B5%E9%9D%A2%E7%BC%93%E5%AD%98%EF%BC%88address-space%EF%BC%89%E4%B8%AD%E7%9A%84%E4%BB%BB%E4%BD%95%E9%A1%B5%E9%9D%A2%E6%98%AF%E5%90%A6%E8%A2%AB%E6%A0%87%E8%AE%B0%E4%B8%BA%E6%8C%87%E5%AE%9A%E7%9A%84%E6%A0%87%E7%AD%BE%EF%BC%88tag%EF%BC%89"><span class="toc-number">2.3.</span> <span class="toc-text">mapping_tagged 用于检查页面缓存（address_space）中的任何页面是否被标记为指定的标签（tag）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mark-inode-dirty-sync-%E5%B0%86-inode-%E6%A0%87%E8%AE%B0%E4%B8%BA%E8%84%8F%E5%90%8C%E6%AD%A5-1"><span class="toc-number">2.4.</span> <span class="toc-text">mark_inode_dirty_sync 将 inode 标记为脏同步</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#fs-fs-writeback-c"><span class="toc-number">3.</span> <span class="toc-text">fs&#x2F;fs-writeback.c</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#locked-inode-to-wb-and-lock-list-%E4%BB%8E%E7%BB%99%E5%AE%9A%E7%9A%84-inode-%E4%B8%AD%E6%8F%90%E5%8F%96%E5%85%B3%E8%81%94%E7%9A%84-bdi-writeback-%E7%BB%93%E6%9E%84%EF%BC%8C%E5%B9%B6%E5%9C%A8%E9%94%81%E7%9A%84%E4%B8%8A%E4%B8%8B%E6%96%87%E4%B8%AD%E8%BF%9B%E8%A1%8C%E8%BD%AC%E6%8D%A2"><span class="toc-number">3.1.</span> <span class="toc-text">locked_inode_to_wb_and_lock_list 从给定的 inode 中提取关联的 bdi_writeback 结构，并在锁的上下文中进行转换</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-io-lists-populated-%E6%A3%80%E6%9F%A5-bdi-writeback-%E6%98%AF%E5%90%A6%E5%B7%B2%E7%BB%8F%E6%A0%87%E8%AE%B0%E4%B8%BA%E6%9C%89%E8%84%8F-IO-%E6%95%B0%E6%8D%AE%E3%80%82%E5%A6%82%E6%9E%9C%E6%B2%A1%E6%9C%89%E8%84%8F-IO-%E6%95%B0%E6%8D%AE%EF%BC%8C%E5%AE%83%E4%BC%9A%E8%AE%BE%E7%BD%AE-WB-has-dirty-io-%E6%A0%87%E5%BF%97%EF%BC%8C%E5%B9%B6%E6%9B%B4%E6%96%B0%E7%9B%B8%E5%85%B3%E7%9A%84%E5%86%99%E5%B8%A6%E5%AE%BD%E7%BB%9F%E8%AE%A1"><span class="toc-number">3.2.</span> <span class="toc-text">wb_io_lists_populated 检查 bdi_writeback 是否已经标记为有脏 IO 数据。如果没有脏 IO 数据，它会设置 WB_has_dirty_io 标志，并更新相关的写带宽统计</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-io-lists-depopulated-%E6%B8%85%E9%99%A4-WB-has-dirty-io-%E6%A0%87%E5%BF%97%EF%BC%8C%E5%BD%93-bdi-writeback-%E7%9A%84%E6%89%80%E6%9C%89-IO-%E5%88%97%E8%A1%A8%E9%83%BD%E4%B8%BA%E7%A9%BA%E6%97%B6%EF%BC%8C%E5%90%8C%E6%97%B6%E6%9B%B4%E6%96%B0%E5%86%99%E5%B8%A6%E5%AE%BD%E7%BB%9F%E8%AE%A1"><span class="toc-number">3.3.</span> <span class="toc-text">wb_io_lists_depopulated 清除 WB_has_dirty_io 标志，当 bdi_writeback 的所有 IO 列表都为空时，同时更新写带宽统计</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#inode-io-list-move-locked-%E5%B0%86-inode-%E7%A7%BB%E5%8A%A8%E5%88%B0-bdi-writeback-IO-%E5%88%97%E8%A1%A8%E4%B8%AD"><span class="toc-number">3.4.</span> <span class="toc-text">inode_io_list_move_locked 将 inode 移动到 bdi_writeback IO 列表中</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-wb-b-dirty"><span class="toc-number">3.4.1.</span> <span class="toc-text">1. wb-&gt;b_dirty</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-wb-b-io"><span class="toc-number">3.4.2.</span> <span class="toc-text">2. wb-&gt;b_io</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-wb-b-more-io"><span class="toc-number">3.4.3.</span> <span class="toc-text">3. wb-&gt;b_more_io</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-wb-b-dirty-time"><span class="toc-number">3.4.4.</span> <span class="toc-text">4. wb-&gt;b_dirty_time</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#wb-wakeup-delayed-%E5%94%A4%E9%86%92%E7%9B%B8%E5%BA%94%E7%9A%84-bdi-%E7%BA%BF%E7%A8%8B%EF%BC%8C%E7%84%B6%E5%90%8E%E8%AF%A5%E7%BA%BF%E7%A8%8B%E5%BA%94%E8%AF%A5%E8%B4%9F%E8%B4%A3%E5%AE%9A%E6%9C%9F%E5%90%8E%E5%8F%B0%E5%86%99%E5%87%BA%E8%84%8F-inode"><span class="toc-number">3.5.</span> <span class="toc-text">wb_wakeup_delayed 唤醒相应的 bdi 线程，然后该线程应该负责定期后台写出脏 inode</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#mark-inode-dirty-%E7%94%A8%E4%BA%8E%E5%B0%86-inode-%E6%A0%87%E8%AE%B0%E4%B8%BA%E8%84%8F"><span class="toc-number">3.6.</span> <span class="toc-text">__mark_inode_dirty 用于将 inode 标记为脏</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#write-inode-now-%E7%AB%8B%E5%8D%B3%E5%B0%86%E4%B8%80%E4%B8%AA%E8%84%8F%E7%9A%84-inode-%E5%86%99%E5%85%A5%E7%A3%81%E7%9B%98"><span class="toc-number">3.7.</span> <span class="toc-text">write_inode_now 立即将一个脏的 inode 写入磁盘</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#write-inode-%E6%A0%87%E8%AE%B0-inode%EF%BC%88%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%AD%E7%9A%84%E7%B4%A2%E5%BC%95%E8%8A%82%E7%82%B9%EF%BC%89%E4%B8%BA%E8%84%8F%E7%8A%B6%E6%80%81"><span class="toc-number">3.8.</span> <span class="toc-text">write_inode 标记 inode（文件系统中的索引节点）为脏状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#inode-wait-for-writeback-%E7%AD%89%E5%BE%85-inode-%E7%9A%84%E5%86%99%E5%9B%9E%E6%93%8D%E4%BD%9C%E5%AE%8C%E6%88%90"><span class="toc-number">3.9.</span> <span class="toc-text">inode_wait_for_writeback 等待 inode 的写回操作完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#writeback-single-inode-%E5%B0%86-inode-%E7%9A%84%E8%84%8F%E6%95%B0%E6%8D%AE%EF%BC%88%E5%8C%85%E6%8B%AC%E9%A1%B5%E9%9D%A2%E5%92%8C%E5%85%83%E6%95%B0%E6%8D%AE%EF%BC%89%E5%86%99%E5%85%A5%E7%A3%81%E7%9B%98%EF%BC%8C%E5%B9%B6%E6%B8%85%E9%99%A4%E7%9B%B8%E5%85%B3%E7%9A%84%E8%84%8F%E6%A0%87%E5%BF%97%EF%BC%88I-DIRTY%EF%BC%89%E4%BB%A5%E7%BB%B4%E6%8A%A4%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E7%9A%84%E4%B8%80%E8%87%B4%E6%80%A7"><span class="toc-number">3.10.</span> <span class="toc-text">__writeback_single_inode 将 inode 的脏数据（包括页面和元数据）写入磁盘，并清除相关的脏标志（I_DIRTY）以维护文件系统的一致性</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#writeback-single-inode-%E5%B0%86%E5%8D%95%E4%B8%AA-inode-%E5%86%99%E5%9B%9E%E7%A3%81%E7%9B%98"><span class="toc-number">3.11.</span> <span class="toc-text">writeback_single_inode 将单个 inode 写回磁盘</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#sync-inodes-sb-%E5%90%8C%E6%AD%A5%E5%B9%B6%E7%AD%89%E5%BE%85%E5%8D%95%E4%B8%AA%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E7%9A%84Inode%E5%86%99%E5%9B%9E"><span class="toc-number">3.12.</span> <span class="toc-text">sync_inodes_sb: 同步并等待单个文件系统的Inode写回</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%84%8F%E6%97%B6%E9%97%B4-Inode-%E5%91%A8%E6%9C%9F%E6%80%A7%E5%9B%9E%E5%86%99%EF%BC%9Astart-dirtytime-writeback-%E4%B8%8E-wakeup-dirtytime-writeback"><span class="toc-number">3.13.</span> <span class="toc-text">脏时间 Inode 周期性回写：start_dirtytime_writeback 与 wakeup_dirtytime_writeback</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">3.13.1.</span> <span class="toc-text">实现原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">3.13.2.</span> <span class="toc-text">代码分析</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/1db9a982/" title="ext4"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ext4"/></a><div class="content"><a class="title" href="/posts/1db9a982/" title="ext4">ext4</a><time datetime="2025-10-07T03:18:15.310Z" title="更新于 2025-10-07 11:18:15">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b554c0f0/" title="mbcache"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mbcache"/></a><div class="content"><a class="title" href="/posts/b554c0f0/" title="mbcache">mbcache</a><time datetime="2025-10-07T03:16:04.099Z" title="更新于 2025-10-07 11:16:04">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/88ab2b13/" title="fs-writeback"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="fs-writeback"/></a><div class="content"><a class="title" href="/posts/88ab2b13/" title="fs-writeback">fs-writeback</a><time datetime="2025-10-07T03:08:29.811Z" title="更新于 2025-10-07 11:08:29">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/2089198e/" title="filesystems"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="filesystems"/></a><div class="content"><a class="title" href="/posts/2089198e/" title="filesystems">filesystems</a><time datetime="2025-10-07T02:52:10.933Z" title="更新于 2025-10-07 10:52:10">2025-10-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/933a291e/" title="hweight"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="hweight"/></a><div class="content"><a class="title" href="/posts/933a291e/" title="hweight">hweight</a><time datetime="2025-10-07T02:49:48.378Z" title="更新于 2025-10-07 10:49:48">2025-10-07</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/08.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '186fde45f54232d3c1b1f46424e49db1'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",392],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [414],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"drivers","value":39},{"name":"fs","value":37},{"name":"other","value":28}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":227},{"name":"uboot","value":68},{"name":"kernel","value":61},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"lib","children":[],"count":19,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"irq","children":[],"count":5,"path":"linux/kernel/irq"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":61,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"block","children":[],"count":5,"path":"linux/block"},{"name":"drivers","children":[{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"base","children":[],"count":14,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":2,"path":"linux/drivers/tty"}],"count":39,"path":"linux/drivers"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":227,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"杂谈","children":[],"count":8,"path":"杂谈"},{"name":"MCU","children":[],"count":23,"path":"MCU"},{"name":"git","children":[],"count":6,"path":"git"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
