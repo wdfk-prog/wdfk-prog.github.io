@@ -1,0 +1,1242 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>percpu-refcount | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC]   lib&#x2F;percpu-refcount.c percpu_ref（percpu 引用计数） 为高并发对象提供按 CPU 本地计数并可切换到原子模式的引用计数机制 介绍percpu_ref 是内核通用引用计数基础设施，主体实现位于 lib&#x2F;percpu-refcount.c，对外 API 与数据结构主要在 include&#x2F;linux&#x2F;percpu-refcount.h。它提">
+<meta property="og:type" content="article">
+<meta property="og:title" content="percpu-refcount">
+<meta property="og:url" content="https://wdfk-prog.space/posts/6bc49c74/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC]   lib&#x2F;percpu-refcount.c percpu_ref（percpu 引用计数） 为高并发对象提供按 CPU 本地计数并可切换到原子模式的引用计数机制 介绍percpu_ref 是内核通用引用计数基础设施，主体实现位于 lib&#x2F;percpu-refcount.c，对外 API 与数据结构主要在 include&#x2F;linux&#x2F;percpu-refcount.h。它提">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/07.jpg">
+<meta property="article:published_time" content="2026-02-01T07:11:57.000Z">
+<meta property="article:modified_time" content="2026-02-01T09:06:22.885Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="lib">
+<meta property="article:tag" content="linux">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/07.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "percpu-refcount",
+  "url": "https://wdfk-prog.space/posts/6bc49c74/",
+  "image": "https://wdfk-prog.space/images/covers/07.jpg",
+  "datePublished": "2026-02-01T07:11:57.000Z",
+  "dateModified": "2026-02-01T09:06:22.885Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/6bc49c74/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'percpu-refcount',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">475</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">56</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">61</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/07.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">percpu-refcount</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">percpu-refcount<a class="post-edit-link" href="null_posts/linux/lib/percpu-refcount.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-02-01T07:11:57.000Z" title="发表于 2026-02-01 15:11:57">2026-02-01</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-02-01T09:06:22.885Z" title="更新于 2026-02-01 17:06:22">2026-02-01</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/lib/">lib</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">5.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>19分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/6bc49c74/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-02-01 17:06:22&quot;}" hidden></div><p>[TOC]</p>
+<meta name="referrer" content="no-referrer" />
+
+<p>lib&#x2F;percpu-refcount.c percpu_ref（percpu 引用计数） 为高并发对象提供按 CPU 本地计数并可切换到原子模式的引用计数机制</p>
+<h2 id="介绍"><a href="#介绍" class="headerlink" title="介绍"></a>介绍</h2><p>percpu_ref 是内核通用引用计数基础设施，主体实现位于 <code>lib/percpu-refcount.c</code>，对外 API 与数据结构主要在 <code>include/linux/percpu-refcount.h</code>。它提供 <code>struct percpu_ref</code> 抽象：热路径用每 CPU 本地计数（<code>this_cpu_add()/this_cpu_sub()</code>）降低争用，进入销毁阶段后切换到全局原子计数并在归零时调用释放回调。内核态的接入点通常是“对象查找&#x2F;获取引用”与“对象释放&#x2F;销毁”两端：运行期用 <code>percpu_ref_get()/percpu_ref_put()</code> 或 <code>percpu_ref_tryget_live()</code>，销毁期用 <code>percpu_ref_kill()</code> &#x2F; <code>percpu_ref_kill_and_confirm()</code>。用户态不会直接调用 percpu_ref，但常通过系统调用触发其生命周期（例如 <code>fs/aio.c</code> 中 <code>io_setup()/io_destroy()</code> 路径驱动 <code>struct kioctx</code> 的创建与销毁）。典型入口函数是对象创建时的 <code>percpu_ref_init()</code>，以及 teardown 时的 <code>percpu_ref_kill()</code>，而热路径则集中在 <code>percpu_ref_get_many()/percpu_ref_put_many()</code>。</p>
+<hr>
+<h3 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="为了解决什么特定问题而诞生？"><a href="#为了解决什么特定问题而诞生？" class="headerlink" title="为了解决什么特定问题而诞生？"></a>为了解决什么特定问题而诞生？</h4><ul>
+<li><p><strong>问题 1：原子引用计数在高并发下争用严重</strong><br>传统 <code>atomic_inc()/atomic_dec_and_test()</code>（或 <code>refcount_t</code>&#x2F;<code>kref</code> 背后的原子操作）会在多核上造成同一 cacheline 抖动；percpu_ref 将热路径拆到每 CPU 本地计数，核心热路径函数是 <code>percpu_ref_get_many()</code>&#x2F;<code>percpu_ref_put_many()</code>，分别走 <code>this_cpu_add()</code>&#x2F;<code>this_cpu_sub()</code> 分支以避开全局原子更新。</p>
+</li>
+<li><p><strong>问题 2：需要统一的“两阶段销毁”抽象，避免销毁窗口发放新引用</strong><br>对象销毁时，必须先阻止新的引用获取，再等待存量引用归零。percpu_ref 用 <code>percpu_ref_kill_and_confirm()</code> 设置 <code>__PERCPU_REF_DEAD</code> 并触发模式切换；对“查找即取引用”的路径提供 <code>percpu_ref_tryget_live()</code>&#x2F;<code>percpu_ref_tryget_live_rcu()</code>，在 <code>__PERCPU_REF_DEAD</code> 后拒绝新引用（并可用 confirm 回调建立“全 CPU 可见”的时序点）。</p>
+</li>
+<li><p><strong>问题 3：并发边界与可维护性：切换&#x2F;释放必须可被严格约束</strong><br>模式切换依赖 RCU：<code>__percpu_ref_switch_to_atomic()</code> 通过 <code>call_rcu_hurry()</code> 触发 <code>percpu_ref_switch_to_atomic_rcu()</code> 汇总 per-cpu 计数；确认回调走 <code>percpu_ref_call_confirm_rcu()</code>，并用 <code>wait_event_lock_irq()</code> + <code>percpu_ref_switch_lock</code>&#x2F;<code>percpu_ref_switch_waitq</code> 序列化切换。由于释放回调可能在 RCU 回调上下文触发，<code>percpu_ref_init()</code> 明确要求 <code>ref-&gt;data-&gt;release</code> 不得睡眠；confirm 回调同样要求不阻塞。</p>
+</li>
+</ul>
+<h4 id="发展经历了哪些重要的里程碑或版本迭代？"><a href="#发展经历了哪些重要的里程碑或版本迭代？" class="headerlink" title="发展经历了哪些重要的里程碑或版本迭代？"></a>发展经历了哪些重要的里程碑或版本迭代？</h4><ul>
+<li><p><strong>里程碑 1：对象模型与两种计数模式确立</strong><br><code>struct percpu_ref</code>（指针低位编码 <code>__PERCPU_REF_ATOMIC/__PERCPU_REF_DEAD</code>）+ <code>percpu_ref_init()</code> 初始化 per-cpu 计数与全局 <code>atomic_long_t count</code>（在 <code>struct percpu_ref_data</code>），“percpu 模式热路径 + atomic 模式可归零释放”成为基本模型。</p>
+</li>
+<li><p><strong>里程碑 2：能力扩展：kill&#x2F;confirm、可重用与显式切换</strong><br><code>percpu_ref_kill_and_confirm()</code> 提供 kill 语义与确认点；<code>percpu_ref_resurrect()</code>&#x2F;<code>percpu_ref_reinit()</code> 支持“死而复生”（受 <code>PERCPU_REF_ALLOW_REINIT</code>&#x2F;<code>allow_reinit</code> 控制）；<code>percpu_ref_switch_to_atomic()</code>&#x2F;<code>percpu_ref_switch_to_percpu()</code> 支持非 kill 场景下的模式管理（由 <code>force_atomic</code> 与 <code>__percpu_ref_switch_mode()</code> 统一裁决）。</p>
+</li>
+<li><p><strong>里程碑 3：可维护性增强：更清晰的切换状态机与诊断</strong><br>切换进行中用 <code>ref-&gt;data-&gt;confirm_switch != NULL</code> 表示，<code>__percpu_ref_switch_mode()</code> 通过 <code>wait_event_lock_irq()</code> 等待上一次切换完成；切换汇总阶段在 <code>percpu_ref_switch_to_atomic_rcu()</code> 中对 underflow 做 <code>WARN_ONCE()</code>、<code>mem_dump_obj()</code>、<code>pr_err()</code> 诊断，减少静默错误。</p>
+</li>
+<li><p><strong>里程碑 4：后续完善：内存占用与 fast path 结构布局优化</strong><br>将非热字段移出 <code>struct percpu_ref</code>，集中到 <code>struct percpu_ref_data</code>（注释明确“仅 fast path 需要 percpu_count_ptr”），以降低嵌入对象的常驻大小；同时在 <code>percpu_ref_exit()</code>&#x2F;<code>__percpu_ref_exit()</code> 中细化退出与允许 reinit 时的资源保留&#x2F;释放策略。</p>
+</li>
+</ul>
+<h4 id="目前该技术的社区活跃度和主流应用情况如何？"><a href="#目前该技术的社区活跃度和主流应用情况如何？" class="headerlink" title="目前该技术的社区活跃度和主流应用情况如何？"></a>目前该技术的社区活跃度和主流应用情况如何？</h4><ul>
+<li><strong>主线长期维护</strong>：代码位于 <code>lib/</code> 与 <code>include/linux/</code>，接口以 <code>EXPORT_SYMBOL_GPL()</code> 形式提供，属于通用基础设施；切换逻辑依赖 RCU、waitqueue、spinlock 等核心原语，维护通常随内核并发模型演进而持续调整。</li>
+<li><strong>主流应用</strong>：典型是“RCU 保护查找 + 高频 get&#x2F;put”的内核对象，例如 <code>fs/aio.c</code> 的 <code>struct kioctx</code>，查找路径用 <code>percpu_ref_tryget_live()</code> 确保对象未进入 kill，系统调用结束时用 <code>percpu_ref_put()</code> 归还引用，销毁路径用 <code>percpu_ref_kill()</code> 进入两阶段 teardown。</li>
+<li><strong>变化趋势</strong>：围绕“切换成本可控、并发语义可证明、嵌入对象占用更低”持续演进；受影响的关键点集中在 <code>__ref_is_percpu()</code>（READ_ONCE + release&#x2F;acquire 配对）、<code>__percpu_ref_switch_mode()</code>（等待与串行化）、<code>percpu_ref_switch_to_atomic_rcu()</code>（汇总与健壮性检查）等路径。</li>
+</ul>
+<hr>
+<h2 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h2><h3 id="它的核心工作原理是什么？"><a href="#它的核心工作原理是什么？" class="headerlink" title="它的核心工作原理是什么？"></a>它的核心工作原理是什么？</h3><ol>
+<li><p>组件&#x2F;层次划分：</p>
+<ul>
+<li><strong>框架层&#x2F;核心层</strong>：<code>lib/percpu-refcount.c</code> 负责模式切换、汇总与 kill&#x2F;reinit；关键入口包括 <code>percpu_ref_init()</code>、<code>percpu_ref_exit()</code>、<code>percpu_ref_kill_and_confirm()</code>、<code>percpu_ref_switch_to_atomic()</code>、<code>percpu_ref_switch_to_percpu()</code>，以及切换回调 <code>percpu_ref_switch_to_atomic_rcu()</code>&#x2F;<code>percpu_ref_call_confirm_rcu()</code>。</li>
+<li><strong>驱动&#x2F;实现层</strong>：嵌入对象在自身结构体中包含 <code>struct percpu_ref</code>，并提供 <code>percpu_ref_func_t release</code>（如 <code>fs/aio.c</code> 的 <code>free_ioctx_users()</code>、<code>free_ioctx_reqs()</code>）；对象 teardown 时由业务逻辑调用 <code>percpu_ref_kill()</code>（或 <code>_and_confirm()</code>）进入销毁阶段。</li>
+<li><strong>用户态接口层（间接）</strong>：用户态通过系统调用驱动对象生命周期；例如 AIO 路径中 <code>io_setup()</code> 创建对象后通过 <code>percpu_ref_get()</code> 持有初始引用，后续 syscall 查找对象时通过 <code>percpu_ref_tryget_live()</code> 成功才可继续，结束时 <code>percpu_ref_put()</code>；销毁由 <code>io_destroy()</code>&#x2F;进程退出路径触发 <code>percpu_ref_kill()</code>。</li>
+</ul>
+</li>
+<li><p>关键数据结构：</p>
+<ul>
+<li><p><strong><code>struct percpu_ref</code></strong>：</p>
+<ul>
+<li><code>unsigned long percpu_count_ptr</code>：指向 per-cpu 计数的指针，低 <code>__PERCPU_REF_FLAG_BITS</code> 位复用为标志（<code>__PERCPU_REF_ATOMIC</code>&#x2F;<code>__PERCPU_REF_DEAD</code>）；<code>__ref_is_percpu()</code> 用 <code>READ_ONCE()</code> 取值并判定是否走 per-cpu 快路径。</li>
+<li><code>struct percpu_ref_data *data</code>：指向慢路径元数据与全局计数（可能在 <code>percpu_ref_exit()</code> 中被置 NULL 并转存 count 到 <code>percpu_count_ptr</code> 高位）。</li>
+</ul>
+</li>
+<li><p><strong><code>struct percpu_ref_data</code></strong>：</p>
+<ul>
+<li><code>atomic_long_t count</code>：atomic 模式下的全局计数；切换到 atomic 时在 <code>percpu_ref_switch_to_atomic_rcu()</code> 汇总 per-cpu 后用 <code>atomic_long_add()</code> 合并，并用 <code>PERCPU_COUNT_BIAS</code> 防止过早归零。</li>
+<li><code>percpu_ref_func_t *release</code>：计数归零时由 <code>percpu_ref_put_many()</code> 触发调用（atomic 分支 <code>atomic_long_sub_and_test()</code> 为真则调用）。</li>
+<li><code>percpu_ref_func_t *confirm_switch</code>：非 NULL 表示“切换进行中”；<code>percpu_ref_call_confirm_rcu()</code> 调用后清空并 <code>wake_up_all(&amp;percpu_ref_switch_waitq)</code>。</li>
+<li><code>bool force_atomic</code>&#x2F;<code>bool allow_reinit</code>：由 <code>percpu_ref_switch_to_atomic()</code>、<code>percpu_ref_switch_to_percpu()</code> 与 <code>percpu_ref_init()</code> flags（<code>PERCPU_REF_INIT_ATOMIC</code>、<code>PERCPU_REF_ALLOW_REINIT</code>）驱动，最终在 <code>__percpu_ref_switch_mode()</code> 决策走向。</li>
+<li><code>struct rcu_head rcu</code>：承载 <code>call_rcu_hurry()</code> 回调。</li>
+<li><code>struct percpu_ref *ref</code>：反向指针，供 RCU 回调中取回对象。</li>
+</ul>
+</li>
+<li><p><strong>per-cpu 计数存储</strong>：</p>
+<ul>
+<li>分配：<code>percpu_ref_init()</code> 中用 <code>__alloc_percpu_gfp(sizeof(unsigned long), align, gfp)</code> 分配。</li>
+<li>访问：<code>percpu_count_ptr(ref)</code>（在 <code>lib/percpu-refcount.c</code> 中使用）+ <code>per_cpu_ptr()</code>&#x2F;<code>this_cpu_*()</code>。</li>
+<li>释放：<code>__percpu_ref_exit()</code> 与 <code>percpu_ref_exit()</code> 负责释放，且在切换确认阶段 <code>percpu_ref_call_confirm_rcu()</code> 可按 <code>allow_reinit</code> 决定是否释放。</li>
+</ul>
+</li>
+<li><p><strong>并发与同步承载体</strong>：</p>
+<ul>
+<li><code>percpu_ref_switch_lock</code>：串行化切换&#x2F;exit&#x2F;部分状态读取（如 <code>percpu_ref_is_zero()</code> 读取 <code>data-&gt;count</code> 也会短暂持锁防并发销毁）。</li>
+<li><code>percpu_ref_switch_waitq</code>：等待 <code>confirm_switch</code> 清空，避免重入切换。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>关键流程：</p>
+<ul>
+<li><p>初始化：<br><code>percpu_ref_init()</code> → <code>__alloc_percpu_gfp()</code> 分配 per-cpu 计数 → <code>kzalloc(sizeof(struct percpu_ref_data))</code> → 设置 <code>data-&gt;force_atomic/data-&gt;allow_reinit</code> 与初始 <code>atomic_long_set(&amp;data-&gt;count, start_count)</code>（percpu 起始会加入 <code>PERCPU_COUNT_BIAS</code> 并再 <code>+1</code> 初始引用）→ <code>ref-&gt;data = data</code>。</p>
+</li>
+<li><p>运行时：</p>
+<ul>
+<li><strong>热路径（percpu 模式）</strong>：<br><code>percpu_ref_get_many()</code> → <code>rcu_read_lock()</code> → <code>__ref_is_percpu()</code> 成功 → <code>this_cpu_add(*percpu_count, nr)</code> → <code>rcu_read_unlock()</code>；<br><code>percpu_ref_put_many()</code> → <code>rcu_read_lock()</code> → <code>__ref_is_percpu()</code> 成功 → <code>this_cpu_sub(*percpu_count, nr)</code>（不检查 0）→ <code>rcu_read_unlock()</code>。</li>
+<li><strong>慢路径（atomic 或 kill 后）</strong>：<br><code>percpu_ref_get_many()</code>&#x2F;<code>percpu_ref_put_many()</code> 在 <code>__ref_is_percpu()</code> 失败时走 atomic：<code>atomic_long_add()</code> 或 <code>atomic_long_sub_and_test()</code>；后者为真则 <code>ref-&gt;data-&gt;release(ref)</code>。<br>获取新引用但需要防止已 kill：<code>percpu_ref_tryget_live()</code> → <code>rcu_read_lock()</code> → <code>percpu_ref_tryget_live_rcu()</code>：若非 percpu 且 <code>ref-&gt;percpu_count_ptr &amp; __PERCPU_REF_DEAD</code> 为真则拒绝，否则 <code>atomic_long_inc_not_zero()</code>。</li>
+</ul>
+</li>
+<li><p>销毁&#x2F;卸载：</p>
+<ul>
+<li>teardown 触发：<code>percpu_ref_kill()</code>（inline）→ <code>percpu_ref_kill_and_confirm(ref, NULL)</code></li>
+<li>kill 主体：<code>percpu_ref_kill_and_confirm()</code> → 持 <code>percpu_ref_switch_lock</code> → 设置 <code>ref-&gt;percpu_count_ptr |= __PERCPU_REF_DEAD</code> → <code>__percpu_ref_switch_mode()</code>（必要时 <code>wait_event_lock_irq()</code> 等待前次切换完成）→ <code>__percpu_ref_switch_to_atomic()</code>：设置 <code>__PERCPU_REF_ATOMIC</code>、设置 <code>data-&gt;confirm_switch</code>、<code>percpu_ref_get()</code>（为回调期间保活）→ <code>call_rcu_hurry(..., percpu_ref_switch_to_atomic_rcu)</code> → <code>percpu_ref_put(ref)</code>（丢弃“初始引用”）</li>
+<li>汇总与确认：RCU 回调 <code>percpu_ref_switch_to_atomic_rcu()</code> → 遍历 <code>for_each_possible_cpu(cpu)</code> 汇总 per-cpu 计数 → <code>atomic_long_add(count - PERCPU_COUNT_BIAS, &amp;data-&gt;count)</code> → <code>percpu_ref_call_confirm_rcu()</code>：调用 confirm（若有）→ 清空 <code>confirm_switch</code> + 唤醒等待者 → 按 <code>allow_reinit</code> 决定是否 <code>__percpu_ref_exit()</code> 释放 per-cpu 区 → <code>percpu_ref_put(ref)</code>（对 <code>__percpu_ref_switch_to_atomic()</code> 里 <code>get</code> 的对称释放）。</li>
+<li>资源释放收尾：对象 release 回调中通常调用 <code>percpu_ref_exit()</code> 释放 percpu_ref 自身资源；<code>percpu_ref_exit()</code> 会 <code>__percpu_ref_exit()</code> 释放 per-cpu 区，并在持 <code>percpu_ref_switch_lock</code> 下将 <code>data-&gt;count</code> 迁移到 <code>percpu_count_ptr</code> 高位并 <code>kfree(data)</code>。</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+<h3 id="它的主要优势体现在哪些方面？"><a href="#它的主要优势体现在哪些方面？" class="headerlink" title="它的主要优势体现在哪些方面？"></a>它的主要优势体现在哪些方面？</h3><ul>
+<li><p><strong>优势 1：一致性与通用抽象</strong><br><code>struct percpu_ref</code> + <code>percpu_ref_init()/percpu_ref_exit()</code> 提供统一的引用计数生命周期接口；<code>percpu_ref_kill()</code> 将“进入销毁阶段”的语义显式化，配合 <code>percpu_ref_tryget_live()</code> 把“是否还能发放新引用”固化为可复用接口。</p>
+</li>
+<li><p><strong>优势 2：性能与可扩展性</strong><br>热路径 <code>percpu_ref_get_many()/percpu_ref_put_many()</code> 在 percpu 模式下仅做 <code>__ref_is_percpu()</code> + <code>this_cpu_add/sub()</code>，避免全局 <code>atomic_long_*</code> 争用；切换仅在 teardown 或显式切换时触发，且通过 <code>call_rcu_hurry()</code> 将“全 CPU 视角一致化”外包给 RCU 回调 <code>percpu_ref_switch_to_atomic_rcu()</code>。</p>
+</li>
+<li><p><strong>优势 3：资源管理&#x2F;安全边界&#x2F;可维护性</strong><br>kill&#x2F;release 分离：<code>percpu_ref_kill_and_confirm()</code> 先把系统带到“不会再发放新引用”的状态，再由 <code>percpu_ref_put_many()</code> 的 atomic 分支在归零时触发 <code>data-&gt;release</code>，减少 use-after-free 窗口；切换状态由 <code>data-&gt;confirm_switch</code> 显式表示并可用 <code>percpu_ref_switch_waitq</code> 等待；underflow 检测集中在 <code>percpu_ref_switch_to_atomic_rcu()</code>，便于定位错误使用。</p>
+</li>
+</ul>
+<h3 id="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"><a href="#它存在哪些已知的劣势、局限性或在特定场景下的不适用性？" class="headerlink" title="它存在哪些已知的劣势、局限性或在特定场景下的不适用性？"></a>它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</h3><ul>
+<li><p><strong>局限 1：切换与汇总开销集中且不可忽略</strong><br><code>percpu_ref_switch_to_atomic_rcu()</code> 需要遍历 <code>for_each_possible_cpu()</code> 汇总 per-cpu 计数，并做一次 <code>atomic_long_add()</code> 合并；在 CPU 数很多或 teardown 频繁的场景，切换成本会显著。</p>
+</li>
+<li><p><strong>局限 2：上下文限制严格</strong><br><code>percpu_ref_init()</code> 要求 <code>release</code> 不得睡眠（可能在 RCU 回调链路触发）；<code>percpu_ref_kill_and_confirm()</code>&#x2F;<code>percpu_ref_switch_to_atomic()</code> 的 confirm 回调也要求不阻塞；<code>__percpu_ref_switch_mode()</code> 可能通过 <code>wait_event_lock_irq()</code> 阻塞等待前次切换完成，因此调用者若无法保证“无并行切换”就需要接受潜在睡眠点。</p>
+</li>
+<li><p><strong>局限 3：语义更复杂，误用风险更高</strong><br>需要遵循“两阶段销毁”：先 <code>percpu_ref_kill()</code> 再依赖存量引用归零触发释放；若仅用 <code>percpu_ref_put()</code> 试图完成 teardown，在 percpu 模式下不会检查 0，无法触发 <code>release</code>。同时 <code>percpu_ref</code> 本身不提供 RCU 宽限期语义，若对象指针通过 RCU 发表，则仍需像 <code>fs/aio.c</code> 那样显式 <code>call_rcu()</code>&#x2F;<code>rcu_work</code> 同步。</p>
+</li>
+<li><p><strong>局限 4：可重用（reinit&#x2F;resurrect）带来额外状态机复杂度</strong><br><code>percpu_ref_resurrect()</code>&#x2F;<code>percpu_ref_reinit()</code> 依赖 <code>__PERCPU_REF_DEAD</code>、<code>allow_reinit</code> 与切换状态组合；若 <code>release</code> 可能释放包含 <code>percpu_ref</code> 的外层对象，调用方必须自行保证 resurrect 期间不会并发触发 <code>release</code>（<code>percpu_ref_resurrect()</code> 文档要求调用者保证这一点）。</p>
+</li>
+</ul>
+<hr>
+<h2 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h2><h3 id="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"><a href="#在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。" class="headerlink" title="在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。"></a>在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</h3><ul>
+<li><p><strong>场景 1：RCU 保护查找表中的高频对象引用获取</strong><br>典型模式是“查找返回对象指针时立刻取引用”；查找路径用 <code>percpu_ref_tryget_live()</code>（或 <code>percpu_ref_tryget_live_rcu()</code>）确保对象未进入 kill，成功后调用方持有引用，结束时 <code>percpu_ref_put()</code>；teardown 端先让查找路径不可再成功（<code>percpu_ref_kill_and_confirm()</code> 设置 <code>__PERCPU_REF_DEAD</code> 并在确认后保证不再发放新引用）。</p>
+</li>
+<li><p><strong>场景 2：AIO 场景下的 <code>struct kioctx</code> 生命周期管理（fs&#x2F;aio.c）</strong></p>
+<ul>
+<li>创建：<code>io_setup()</code> 路径中 <code>percpu_ref_init(&amp;ctx-&gt;users, free_ioctx_users, 0, GFP_KERNEL)</code>、<code>percpu_ref_init(&amp;ctx-&gt;reqs, free_ioctx_reqs, 0, GFP_KERNEL)</code>，并用 <code>percpu_ref_get()</code> 提前持有引用用于跨阶段初始化。</li>
+<li>运行：查找 <code>kioctx</code> 时用 <code>percpu_ref_tryget_live(&amp;ctx-&gt;users)</code> 成功才返回；多个 syscall 结束点（如提交&#x2F;取消&#x2F;获取事件等）统一用 <code>percpu_ref_put(&amp;ctx-&gt;users)</code> 归还引用。</li>
+<li>销毁：<code>kill_ioctx()</code> 中 <code>percpu_ref_kill(&amp;ctx-&gt;users)</code> 进入 teardown；当 <code>ctx-&gt;users</code> 归零后触发 <code>free_ioctx_users()</code>，其内部再对 <code>ctx-&gt;reqs</code> 执行 <code>percpu_ref_kill(&amp;ctx-&gt;reqs)</code> + <code>percpu_ref_put(&amp;ctx-&gt;reqs)</code>，形成级联释放链路。</li>
+</ul>
+</li>
+<li><p><strong>场景 3：需要“保留 per-cpu 热路径但允许显式降级为 atomic”的对象</strong><br>对象在某些阶段需要严格归零检测或更强的全局一致性时，可用 <code>percpu_ref_switch_to_atomic()</code>&#x2F;<code>percpu_ref_switch_to_atomic_sync()</code> 进入 atomic 模式；若允许恢复 per-cpu（<code>PERCPU_REF_ALLOW_REINIT</code>&#x2F;<code>allow_reinit</code>），可在安全点调用 <code>percpu_ref_switch_to_percpu()</code> 重新启用 per-cpu 快路径（内部 <code>__percpu_ref_switch_to_percpu()</code> 会清零各 CPU 计数并用 <code>smp_store_release()</code> 清除 <code>__PERCPU_REF_ATOMIC</code>）。</p>
+</li>
+</ul>
+<h3 id="是否有不推荐使用该技术的场景？为什么？"><a href="#是否有不推荐使用该技术的场景？为什么？" class="headerlink" title="是否有不推荐使用该技术的场景？为什么？"></a>是否有不推荐使用该技术的场景？为什么？</h3><ul>
+<li><p><strong>不推荐场景 1：引用操作不频繁或并发度低</strong><br>若热路径 get&#x2F;put 频率不高，直接用 <code>refcount_t</code>&#x2F;<code>kref</code> 的原子计数更简单；percpu_ref 的 <code>percpu_ref_kill()</code> 两阶段 teardown 与切换链路（<code>call_rcu_hurry()</code> → <code>percpu_ref_switch_to_atomic_rcu()</code>）会引入额外复杂度与切换成本。</p>
+</li>
+<li><p><strong>不推荐场景 2：释放回调必须睡眠或需要复杂阻塞收尾</strong><br><code>percpu_ref_put_many()</code> 在 atomic 归零时直接调用 <code>ref-&gt;data-&gt;release(ref)</code>，而 <code>percpu_ref_init()</code> 明确 <code>release</code> 可能在 RCU 回调上下文触发，不能睡眠；若必须做可睡眠的销毁工作，应改为在 <code>release</code> 中仅做唤醒&#x2F;调度，把重活迁移到 workqueue 等可睡眠上下文。</p>
+</li>
+</ul>
+<hr>
+<h2 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h2><h3 id="请将其-与-其他相似技术-进行详细对比。"><a href="#请将其-与-其他相似技术-进行详细对比。" class="headerlink" title="请将其 与 其他相似技术 进行详细对比。"></a>请将其 与 其他相似技术 进行详细对比。</h3><p>（选择对象：<code>refcount_t/kref</code>、<code>percpu_counter</code>、纯 RCU 生命周期管理）</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>本技术&#x2F;文件</th>
+<th>相似技术 A（refcount_t&#x2F;kref）</th>
+<th>相似技术 B（percpu_counter）</th>
+<th>相似技术 C（纯 RCU 生命周期）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>实现方式</td>
+<td><code>struct percpu_ref</code> + <code>struct percpu_ref_data</code>；热路径 <code>percpu_ref_get_many()/percpu_ref_put_many()</code>；切换 <code>percpu_ref_kill_and_confirm()</code>→<code>call_rcu_hurry()</code>→<code>percpu_ref_switch_to_atomic_rcu()</code></td>
+<td>单一全局原子计数；热路径原子 RMW；释放通常在 <code>refcount_dec_and_test()</code>&#x2F;<code>kref_put()</code> 触发</td>
+<td>每 CPU 计数为主，聚合用 <code>percpu_counter_sum()</code> 等；通常用于统计而非对象生命周期释放</td>
+<td>依赖 <code>kfree_rcu()</code>&#x2F;<code>call_rcu()</code> 等宽限期；不提供“引用计数归零触发释放”语义</td>
+</tr>
+<tr>
+<td>性能开销</td>
+<td>percpu 模式下 <code>this_cpu_add/sub</code>，切换阶段一次性汇总；kill 后退化为 <code>atomic_long_*</code></td>
+<td>始终原子 RMW，争用随并发上升</td>
+<td>热路径 per-cpu 更新，读取&#x2F;汇总开销不小；缺少 kill&#x2F;归零释放语义</td>
+<td>读侧几乎零开销（RCU 读锁），但写侧需要宽限期等待；不适合需要显式引用计数的场景</td>
+</tr>
+<tr>
+<td>资源占用</td>
+<td>每对象一个 per-cpu <code>unsigned long</code> 区 + <code>struct percpu_ref_data</code>；通过拆分 <code>percpu_ref_data</code>降低嵌入对象大小</td>
+<td>每对象一个原子计数（通常 4&#x2F;8 字节）</td>
+<td>每对象 per-cpu 存储，通常比 percpu_ref 更偏“统计容器”</td>
+<td>需要 RCU 发表指针与释放路径；不需要 per-cpu 计数存储</td>
+</tr>
+<tr>
+<td>隔离级别</td>
+<td>明确 kill 边界：<code>__PERCPU_REF_DEAD</code> + <code>percpu_ref_tryget_live()</code>；确认点 <code>confirm_kill</code></td>
+<td>仅靠原子计数归零，难表达“禁止新引用发放”的阶段性语义</td>
+<td>无生命周期隔离语义</td>
+<td>以宽限期隔离“旧读者”，但无法表达“持引用直到完成”的计数语义</td>
+</tr>
+<tr>
+<td>启动速度</td>
+<td><code>percpu_ref_init()</code> 需 <code>__alloc_percpu_gfp()</code> + <code>kzalloc()</code>；比单原子更重</td>
+<td>初始化最轻</td>
+<td>初始化依赖 per-cpu 分配，成本较高</td>
+<td>取决于对象发表方式；通常不需要 per-cpu 分配</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><h3 id="关键特性总结"><a href="#关键特性总结" class="headerlink" title="关键特性总结"></a>关键特性总结</h3><ul>
+<li><strong>percpu 热路径引用计数</strong>：<code>percpu_ref_get_many()/percpu_ref_put_many()</code> 在 <code>__ref_is_percpu()</code> 成功时走 <code>this_cpu_add/sub</code>，把高频引用操作从全局原子争用中剥离到每 CPU。</li>
+<li><strong>两阶段 teardown 与“禁止新引用”语义</strong>：<code>percpu_ref_kill()</code>（→<code>percpu_ref_kill_and_confirm()</code>）设置 <code>__PERCPU_REF_DEAD</code> 并切换到 atomic，配合 <code>percpu_ref_tryget_live()</code> 在 kill 后拒绝新引用发放。</li>
+<li><strong>RCU 驱动的模式切换与确认点</strong>：<code>__percpu_ref_switch_to_atomic()</code> 通过 <code>call_rcu_hurry()</code> 触发 <code>percpu_ref_switch_to_atomic_rcu()</code> 汇总并合并到 <code>atomic_long_t count</code>，再由 <code>percpu_ref_call_confirm_rcu()</code> 执行 confirm 回调并唤醒 <code>percpu_ref_switch_waitq</code> 等待者。</li>
+</ul>
+<h2 id="percpu-ref-kill-ref-is-percpu-percpu-ref-get-many-percpu-ref-get-percpu-ref-tryget-many-percpu-ref-tryget-percpu-ref-tryget-live-rcu-percpu-ref-tryget-live-percpu-ref-put-many-percpu-ref-put-percpu-ref-is-dying-快路径引用获取与死亡态门控"><a href="#percpu-ref-kill-ref-is-percpu-percpu-ref-get-many-percpu-ref-get-percpu-ref-tryget-many-percpu-ref-tryget-percpu-ref-tryget-live-rcu-percpu-ref-tryget-live-percpu-ref-put-many-percpu-ref-put-percpu-ref-is-dying-快路径引用获取与死亡态门控" class="headerlink" title="percpu_ref_kill __ref_is_percpu percpu_ref_get_many percpu_ref_get percpu_ref_tryget_many percpu_ref_tryget percpu_ref_tryget_live_rcu percpu_ref_tryget_live percpu_ref_put_many percpu_ref_put percpu_ref_is_dying 快路径引用获取与死亡态门控"></a>percpu_ref_kill __ref_is_percpu percpu_ref_get_many percpu_ref_get percpu_ref_tryget_many percpu_ref_tryget percpu_ref_tryget_live_rcu percpu_ref_tryget_live percpu_ref_put_many percpu_ref_put percpu_ref_is_dying 快路径引用获取与死亡态门控</h2><h3 id="作用与实现要点"><a href="#作用与实现要点" class="headerlink" title="作用与实现要点"></a>作用与实现要点</h3><ul>
+<li><strong>快路径分流</strong>：通过 <code>percpu_count_ptr</code> 低位标志判断当前是 percpu 模式还是 atomic&#x2F;死亡态模式，快路径尽量只做本地 CPU 计数增减。</li>
+<li><strong>RCU 包裹读侧</strong>：get&#x2F;put&#x2F;tryget 的模式判定与指针使用放在 <code>rcu_read_lock()</code> 内，保证并发切换模式时不会把已变化的值当作稳定指针使用。</li>
+<li><strong>死亡态门控</strong>：<code>DEAD</code> 置位后，<code>tryget_live</code> 在 atomic 路径上拒绝再发放新引用；需要更强边界时依赖 kill 的确认回调。</li>
+<li><strong>释放触发位置</strong>：percpu 模式不在 put 里做归零检测；只有切到 atomic 后才允许 <code>put</code> 在减到 0 时调用 <code>release()</code>。</li>
+</ul>
+<hr>
+<h3 id="percpu-ref-kill-进入死亡态并触发切到atomic"><a href="#percpu-ref-kill-进入死亡态并触发切到atomic" class="headerlink" title="percpu_ref_kill 进入死亡态并触发切到atomic"></a>percpu_ref_kill 进入死亡态并触发切到atomic</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 标记引用计数进入死亡态并触发切到 atomic 汇总</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 需要在 teardown 开始阶段调用，以阻断后续的“活体获取”路径，并让计数回到可归零检测的 atomic 形态。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">percpu_ref_kill</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	percpu_ref_kill_and_confirm(ref, <span class="literal">NULL</span>); <span class="comment">/* 进入死亡态并切到 atomic，后续 put 才可能触发 release */</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="ref-is-percpu-判定是否可走percpu计数路径"><a href="#ref-is-percpu-判定是否可走percpu计数路径" class="headerlink" title="__ref_is_percpu 判定是否可走percpu计数路径"></a>__ref_is_percpu 判定是否可走percpu计数路径</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 判断当前是否处于 percpu 模式，并返回每CPU计数指针</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @param percpu_countp 输出的每CPU计数指针</span></span><br><span class="line"><span class="comment"> * @return true 表示 percpu 模式；false 表示 atomic 或死亡态</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回 true 时，输出指针只能在 RCU 读侧临界区内使用，避免并发切换导致指针语义变化。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> __ref_is_percpu(<span class="keyword">struct</span> percpu_ref *ref,</span><br><span class="line">				  <span class="type">unsigned</span> <span class="type">long</span> __percpu **percpu_countp)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> percpu_ptr;</span><br><span class="line"></span><br><span class="line">	percpu_ptr = READ_ONCE(ref-&gt;percpu_count_ptr); <span class="comment">/* 只读一次，避免并发置位标志后再次取值把“带标志的值”当指针用 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(percpu_ptr &amp; __PERCPU_REF_ATOMIC_DEAD)) <span class="comment">/* 已切到 atomic 或已进入死亡态，此时不能走 percpu 快路径 */</span></span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	*percpu_countp = (<span class="type">unsigned</span> <span class="type">long</span> __percpu *)percpu_ptr; <span class="comment">/* 输出 percpu 计数地址，后续解引用需保持在 RCU 读侧 */</span></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-get-many-增加多个引用"><a href="#percpu-ref-get-many-增加多个引用" class="headerlink" title="percpu_ref_get_many 增加多个引用"></a>percpu_ref_get_many 增加多个引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 增加引用计数（一次增加 nr）</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @param nr 增加的引用数量</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * percpu 模式走本地CPU计数以降低共享写竞争；atomic 模式走全局原子计数以保持归零检测语义。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">percpu_ref_get_many</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref, <span class="type">unsigned</span> <span class="type">long</span> nr)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> __percpu *percpu_count;</span><br><span class="line"></span><br><span class="line">	rcu_read_lock(); <span class="comment">/* 保护模式判定与 percpu 指针使用的时间窗口 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (__ref_is_percpu(ref, &amp;percpu_count))</span><br><span class="line">		this_cpu_add(*percpu_count, nr); <span class="comment">/* 本CPU累计，避免全局原子竞争 */</span></span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		atomic_long_add(nr, &amp;ref-&gt;data-&gt;count); <span class="comment">/* atomic/死亡态下统一走全局计数 */</span></span><br><span class="line"></span><br><span class="line">	rcu_read_unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-get-增加单个引用"><a href="#percpu-ref-get-增加单个引用" class="headerlink" title="percpu_ref_get 增加单个引用"></a>percpu_ref_get 增加单个引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 增加单个引用计数</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">percpu_ref_get</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	percpu_ref_get_many(ref, <span class="number">1</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-tryget-many-在未归零时尝试增加多个引用"><a href="#percpu-ref-tryget-many-在未归零时尝试增加多个引用" class="headerlink" title="percpu_ref_tryget_many 在未归零时尝试增加多个引用"></a>percpu_ref_tryget_many 在未归零时尝试增加多个引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 当引用计数未到 0 时尝试增加 nr 个引用</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @param nr 增加的引用数量</span></span><br><span class="line"><span class="comment"> * @return true 表示成功发放引用；false 表示计数已为 0</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * percpu 模式阶段不做归零判定，直接增加并返回成功；atomic 模式通过 “不在 0 上增加” 避免已释放对象被重新拿到。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">percpu_ref_tryget_many</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref,</span></span><br><span class="line"><span class="params">					 <span class="type">unsigned</span> <span class="type">long</span> nr)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> __percpu *percpu_count;</span><br><span class="line">	<span class="type">bool</span> ret;</span><br><span class="line"></span><br><span class="line">	rcu_read_lock(); <span class="comment">/* 保护模式判定与 percpu 指针使用 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (__ref_is_percpu(ref, &amp;percpu_count)) &#123;</span><br><span class="line">		this_cpu_add(*percpu_count, nr); <span class="comment">/* percpu 阶段直接累加，避免额外同步开销 */</span></span><br><span class="line">		ret = <span class="literal">true</span>;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		ret = atomic_long_add_unless(&amp;ref-&gt;data-&gt;count, nr, <span class="number">0</span>); <span class="comment">/* 计数为 0 时拒绝发放新引用 */</span></span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	rcu_read_unlock();</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-tryget-在未归零时尝试增加单个引用"><a href="#percpu-ref-tryget-在未归零时尝试增加单个引用" class="headerlink" title="percpu_ref_tryget 在未归零时尝试增加单个引用"></a>percpu_ref_tryget 在未归零时尝试增加单个引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 当引用计数未到 0 时尝试增加单个引用</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @return true 成功；false 失败</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">percpu_ref_tryget</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> percpu_ref_tryget_many(ref, <span class="number">1</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-tryget-live-rcu-在已持有RCU时尝试获取未死亡引用"><a href="#percpu-ref-tryget-live-rcu-在已持有RCU时尝试获取未死亡引用" class="headerlink" title="percpu_ref_tryget_live_rcu 在已持有RCU时尝试获取未死亡引用"></a>percpu_ref_tryget_live_rcu 在已持有RCU时尝试获取未死亡引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 在调用者已进入 RCU 读侧临界区时尝试获取“未死亡”的引用</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @return true 成功；false 表示进入死亡态或计数已为 0</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * percpu 模式直接增加本地计数；atomic 模式下只有在未进入死亡态时才允许尝试增加，并且计数为 0 时失败。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">percpu_ref_tryget_live_rcu</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> __percpu *percpu_count;</span><br><span class="line">	<span class="type">bool</span> ret = <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	WARN_ON_ONCE(!rcu_read_lock_held()); <span class="comment">/* 调用者必须已持有 RCU，避免并发切换时出现悬空指针解引用 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (likely(__ref_is_percpu(ref, &amp;percpu_count))) &#123;</span><br><span class="line">		this_cpu_inc(*percpu_count); <span class="comment">/* percpu 快路径增持 */</span></span><br><span class="line">		ret = <span class="literal">true</span>;</span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> (!(ref-&gt;percpu_count_ptr &amp; __PERCPU_REF_DEAD)) <span class="comment">/* 已进入死亡态则不再发放“活体引用”，避免 teardown 边界继续增长 */</span></span><br><span class="line">		ret = atomic_long_inc_not_zero(&amp;ref-&gt;data-&gt;count); <span class="comment">/* 计数为 0 时失败，防止把生命周期已结束的对象重新拿到 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-tryget-live-自动持有RCU后尝试获取未死亡引用"><a href="#percpu-ref-tryget-live-自动持有RCU后尝试获取未死亡引用" class="headerlink" title="percpu_ref_tryget_live 自动持有RCU后尝试获取未死亡引用"></a>percpu_ref_tryget_live 自动持有RCU后尝试获取未死亡引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 尝试获取“未死亡”的引用（内部负责 RCU 读侧保护）</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @return true 成功；false 失败</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">percpu_ref_tryget_live</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">bool</span> ret = <span class="literal">false</span>;</span><br><span class="line"></span><br><span class="line">	rcu_read_lock(); <span class="comment">/* 覆盖 tryget_live_rcu 的读侧要求 */</span></span><br><span class="line">	ret = percpu_ref_tryget_live_rcu(ref);</span><br><span class="line">	rcu_read_unlock();</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-put-many-减少多个引用并在atomic模式下可能触发释放"><a href="#percpu-ref-put-many-减少多个引用并在atomic模式下可能触发释放" class="headerlink" title="percpu_ref_put_many 减少多个引用并在atomic模式下可能触发释放"></a>percpu_ref_put_many 减少多个引用并在atomic模式下可能触发释放</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 减少引用计数（一次减少 nr），必要时触发 release</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @param nr 减少的引用数量</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * percpu 模式只改本地计数，不在此处做归零释放；atomic 模式减到 0 时调用 release，完成对象生命周期结束的动作。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">percpu_ref_put_many</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref, <span class="type">unsigned</span> <span class="type">long</span> nr)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> __percpu *percpu_count;</span><br><span class="line"></span><br><span class="line">	rcu_read_lock(); <span class="comment">/* 保护模式判定与 percpu 指针使用 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (__ref_is_percpu(ref, &amp;percpu_count))</span><br><span class="line">		this_cpu_sub(*percpu_count, nr); <span class="comment">/* percpu 阶段只减本地计数，不做归零检测 */</span></span><br><span class="line">	<span class="keyword">else</span> <span class="keyword">if</span> (unlikely(atomic_long_sub_and_test(nr, &amp;ref-&gt;data-&gt;count))) <span class="comment">/* atomic 阶段减到 0，说明所有引用已释放完毕 */</span></span><br><span class="line">		ref-&gt;data-&gt;release(ref);</span><br><span class="line"></span><br><span class="line">	rcu_read_unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-put-减少单个引用并在atomic模式下可能触发释放"><a href="#percpu-ref-put-减少单个引用并在atomic模式下可能触发释放" class="headerlink" title="percpu_ref_put 减少单个引用并在atomic模式下可能触发释放"></a>percpu_ref_put 减少单个引用并在atomic模式下可能触发释放</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 减少单个引用计数，必要时触发 release</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">percpu_ref_put</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	percpu_ref_put_many(ref, <span class="number">1</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="percpu-ref-is-dying-查询死亡态标志位"><a href="#percpu-ref-is-dying-查询死亡态标志位" class="headerlink" title="percpu_ref_is_dying 查询死亡态标志位"></a>percpu_ref_is_dying 查询死亡态标志位</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 判断是否已进入死亡态或正在销毁</span></span><br><span class="line"><span class="comment"> * @param ref 目标 percpu_ref</span></span><br><span class="line"><span class="comment"> * @return true 表示死亡态已置位</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该返回值是标志位快照；若需要稳定边界，应结合切换锁或 kill 的确认回调使用。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">bool</span> <span class="title function_">percpu_ref_is_dying</span><span class="params">(<span class="keyword">struct</span> percpu_ref *ref)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">return</span> ref-&gt;percpu_count_ptr &amp; __PERCPU_REF_DEAD; <span class="comment">/* DEAD 置位后 tryget_live 将拒绝在 atomic 路径发放新引用 */</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/6bc49c74/">https://wdfk-prog.space/posts/6bc49c74/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/lib/">lib</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/07.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/c1a906f6/" title="解决 `git cherry-pick` 引入大量新文件的问题"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">解决 `git cherry-pick` 引入大量新文件的问题</div></div><div class="info-2"><div class="info-item-1">   @[toc]  解决 git cherry-pick 引入大量新文件的问题1234567flowchart TD  A[处于 cherry-pick 进行中?] --&gt;|是| B[git cherry-pick --abort]  A --&gt;|否| C[评估目标]  B --&gt; C  C --&gt; D[仅需部分路径内容?]  D --&gt;|是| E[按路径取文件并单独提交]  D --&gt;|否| F[继续 cherry-pick 并清理不需要的新增/冲突]  问题域定义git cherry-pick 会把目标提交的变更整体应用到当前分支，当目标提交覆盖范围过大或包含不需要的目录时，常见结果是一次性引入大量新增文件、目录重排与删除。可观测症状包括：暂存区出现大量 new file，并伴随大量未合并冲突（例如 deleted by us 一类冲突）。影响范围通常覆盖整个 Git 工作树与索引状态，导致后续 --continue、路径恢复与清理操作相互阻塞。 机制分析 cherry-pick 以提交为单位应用补丁目标提交中包含的新增&#x2F;删除&...</div></div></div></a><a class="pagination-related" href="/posts/6cf8ce53/" title="Git文件状态显示异常的解决方案"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Git文件状态显示异常的解决方案</div></div><div class="info-2"><div class="info-item-1">Git索引一致性深度分析：基于Stat Dirty机制的“假脏”现象研究1. 问题背景与现象表征在分布式版本控制系统Git的日常操作中，工作区（Working Tree）与暂存区（Index&#x2F;Stage）的一致性维护是确保版本历史准确性的基础。本研究针对一类特殊的索引状态异常进行深度分析：即git status报告文件处于修改状态（Modified），但git diff无法检索到任何实质性内容变更。 1.1 初始状态检测在项目维护过程中，系统处于main分支。通过执行状态检测指令，Git报告大量文件被标记为modified，同时存在少量的删除与未跟踪文件。 123456flowchart TD    A[系统初始状态] --&gt; B[执行 git status];    B --&gt; C&#123;检测索引与工作区&#125;;    C --&gt;|发现元数据差异| D[标记文件为 Modified];    D --&gt; E[输出状态报告];    E --&gt; F[用户观测到大量变更];  引用终端日志如下（路径已脱敏处理）： 123456789...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/d1b862b8/" title="hash"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">hash</div></div><div class="info-2"><div class="info-item-1">[TOC] lib&#x2F;hashtable.h &amp; include&#x2F;linux&#x2F;hash.h 哈希表与哈希函数(Hash Table &amp; Hash Functions) 内核中快速数据查找的基础设施历史与背景这项技术是为了解决什么特定问题而诞生的？哈希表（Hash Table）和哈希函数（Hash Functions）是为了解决一个计算机科学中的基础问题而诞生的：如何实现高效的数据查找、插入和删除。在操作系统内核中，需要管理大量的对象，例如进程、打开的文件、内存页面、缓存的数据块（inodes, dentries）等。对这些对象进行快速访问是保证系统整体性能的关键。 具体来说，这项技术解决了以下问题：  性能瓶OT颈：如果使用简单的链表来管理这些对象，那么每次查找都需要遍历整个列表，其时间复杂度为O(n)，当对象数量n巨大时，性能会急剧下降。 代码重复：在哈希表通用框架出现之前，内核中有数十个甚至更多的子系统都各自实现了自己的哈希表逻辑。 这导致了大量的代码重复、不一致的实现和潜在的bug分散在各处。 可扩展性：随着硬件的发展，内存容量不...</div></div></div></a><a class="pagination-related" href="/posts/be154ebb/" title="GCC"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">GCC</div></div><div class="info-2"><div class="info-item-1">[TOC] 属性__cleanup__attribute_malloc__ 用于标记函数返回一个新分配的内存块 这有助于编译器进行优化，例如避免不必要的内存检查。  __attribute_alloc_size__ 用于指定分配的内存大小 attribute_alloc_size__ ((1)) 是另一个 GCC 特定的扩展，用于指定分配的内存大小。参数 (1) 表示第一个参数 __size 是分配的内存大小。这有助于编译器进行优化和静态分析  attribute((const)) 标记为纯函数(pure function)纯函数具有以下特性：  无副作用：纯函数不依赖于任何可变的全局状态，也不会修改任何全局状态。这意味着函数的输出仅依赖于其输入参数，不会对程序的其他部分产生影响。 可优化：由于纯函数的输出仅依赖于输入参数，编译器可以进行更激进的优化。例如，编译器可以将纯函数的多次调用合并为一次调用，或者在调用纯函数时进行常量传播和代码移动等优化。  attribute((externally_visible)) 使其在编译器优化过程中保持对外部模块的可见性 用于标记函数或变量，...</div></div></div></a><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1">  [TOC]  init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的...</div></div></div></a><a class="pagination-related" href="/posts/1d3fd482/" title="dma-buf"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">dma-buf</div></div><div class="info-2"><div class="info-item-1">[TOC] drivers&#x2F;dma-buf DMA-BUF (DMA Buffer Sharing) Framework 高效的零拷贝缓冲区共享框架历史与背景这项技术是为了解决什么特定问题而诞生的？这项技术以及其所在的dma-buf子系统，是为了解决现代异构计算系统中一个核心的性能和效率问题：如何在不同的硬件设备（驱动）之间高效地共享内存缓冲区，而无需进行昂贵的数据拷贝。  消除数据拷贝（Zero-Copy）：在典型的多媒体处理流程中，一个数据流（如视频帧）可能需要经过多个硬件单元处理：例如，从摄像头控制器捕获，由视频编解码器（CODEC）进行编码&#x2F;解码，交由GPU进行渲染或后期处理，最后发送到显示控制器进行显示。在没有dma-buf的时代，每一步之间的数据传递通常都需要CPU介入，将数据从一个设备的内存区域拷贝到另一个设备的内存区域，这会消耗大量的CPU周期和内存带宽，是系统性能的主要瓶颈。 统一的共享接口：在dma-buf出现之前，不同的子系统有各自私有的缓冲区共享方式（例如V4L2的USERPTR）。 这导致了接口不统一，无法实现任意设备间的缓冲区共享，...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">[TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上层时间子...</div></div></div></a><a class="pagination-related" href="/posts/6ce74947/" title="regmap"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">regmap</div></div><div class="info-2"><div class="info-item-1">[TOC] regmapRegmap 简介Regmap 是 Linux 内核中的一个子系统，用于抽象和管理设备寄存器的访问。它为驱动程序提供了统一的接口，支持多种总线（如 I2C、SPI、MMIO 等）上的寄存器操作，同时提供了缓存、锁机制和调试功能。Regmap 的设计目标是简化驱动开发，减少重复代码，并提高寄存器访问的效率和安全性。  工作原理1. 核心概念 寄存器映射 (Register Map):Regmap 将设备的寄存器抽象为一个统一的映射，屏蔽了底层总线的差异。  寄存器缓存:Regmap 提供了可选的寄存器缓存机制，用于减少总线访问次数，提高性能。  寄存器访问控制:通过配置文件（struct regmap_config），可以定义哪些寄存器是可读、可写或易失的。  总线适配器:Regmap 支持多种总线（如 I2C、SPI、MMIO 等），通过总线适配器实现具体的读写操作。   2. 数据结构 struct regmap:表示寄存器映射的核心数据结构，包含寄存器的地址、值、缓存等信息。  struct regmap_config:配置寄存器映射的结构体，用于定义...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">475</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">56</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">61</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8B%E7%BB%8D"><span class="toc-number">1.</span> <span class="toc-text">介绍</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">1.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%EF%BC%9F"><span class="toc-number">1.1.1.</span> <span class="toc-text">为了解决什么特定问题而诞生？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8F%91%E5%B1%95%E7%BB%8F%E5%8E%86%E4%BA%86%E5%93%AA%E4%BA%9B%E9%87%8D%E8%A6%81%E7%9A%84%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.1.2.</span> <span class="toc-text">发展经历了哪些重要的里程碑或版本迭代？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9B%AE%E5%89%8D%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%92%8C%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5%E5%A6%82%E4%BD%95%EF%BC%9F"><span class="toc-number">1.1.3.</span> <span class="toc-text">目前该技术的社区活跃度和主流应用情况如何？</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">2.1.</span> <span class="toc-text">它的核心工作原理是什么？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%83%E7%9A%84%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">2.2.</span> <span class="toc-text">它的主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%83%E5%AD%98%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%B7%B2%E7%9F%A5%E7%9A%84%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E5%9C%A8%E7%89%B9%E5%AE%9A%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">2.3.</span> <span class="toc-text">它存在哪些已知的劣势、局限性或在特定场景下的不适用性？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9C%A8%E5%93%AA%E4%BA%9B%E5%85%B7%E4%BD%93%E7%9A%84%E4%B8%9A%E5%8A%A1%E6%88%96%E6%8A%80%E6%9C%AF%E5%9C%BA%E6%99%AF%E4%B8%8B%EF%BC%8C%E5%AE%83%E6%98%AF%E9%A6%96%E9%80%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9F%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E3%80%82"><span class="toc-number">3.1.</span> <span class="toc-text">在哪些具体的业务或技术场景下，它是首选解决方案？请举例说明。</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%98%AF%E5%90%A6%E6%9C%89%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E8%AF%A5%E6%8A%80%E6%9C%AF%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">3.2.</span> <span class="toc-text">是否有不推荐使用该技术的场景？为什么？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">4.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%B7%E5%B0%86%E5%85%B6-%E4%B8%8E-%E5%85%B6%E4%BB%96%E7%9B%B8%E4%BC%BC%E6%8A%80%E6%9C%AF-%E8%BF%9B%E8%A1%8C%E8%AF%A6%E7%BB%86%E5%AF%B9%E6%AF%94%E3%80%82"><span class="toc-number">4.1.</span> <span class="toc-text">请将其 与 其他相似技术 进行详细对比。</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">5.</span> <span class="toc-text">总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E7%89%B9%E6%80%A7%E6%80%BB%E7%BB%93"><span class="toc-number">5.1.</span> <span class="toc-text">关键特性总结</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#percpu-ref-kill-ref-is-percpu-percpu-ref-get-many-percpu-ref-get-percpu-ref-tryget-many-percpu-ref-tryget-percpu-ref-tryget-live-rcu-percpu-ref-tryget-live-percpu-ref-put-many-percpu-ref-put-percpu-ref-is-dying-%E5%BF%AB%E8%B7%AF%E5%BE%84%E5%BC%95%E7%94%A8%E8%8E%B7%E5%8F%96%E4%B8%8E%E6%AD%BB%E4%BA%A1%E6%80%81%E9%97%A8%E6%8E%A7"><span class="toc-number">6.</span> <span class="toc-text">percpu_ref_kill __ref_is_percpu percpu_ref_get_many percpu_ref_get percpu_ref_tryget_many percpu_ref_tryget percpu_ref_tryget_live_rcu percpu_ref_tryget_live percpu_ref_put_many percpu_ref_put percpu_ref_is_dying 快路径引用获取与死亡态门控</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%9C%E7%94%A8%E4%B8%8E%E5%AE%9E%E7%8E%B0%E8%A6%81%E7%82%B9"><span class="toc-number">6.1.</span> <span class="toc-text">作用与实现要点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-kill-%E8%BF%9B%E5%85%A5%E6%AD%BB%E4%BA%A1%E6%80%81%E5%B9%B6%E8%A7%A6%E5%8F%91%E5%88%87%E5%88%B0atomic"><span class="toc-number">6.2.</span> <span class="toc-text">percpu_ref_kill 进入死亡态并触发切到atomic</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#ref-is-percpu-%E5%88%A4%E5%AE%9A%E6%98%AF%E5%90%A6%E5%8F%AF%E8%B5%B0percpu%E8%AE%A1%E6%95%B0%E8%B7%AF%E5%BE%84"><span class="toc-number">6.3.</span> <span class="toc-text">__ref_is_percpu 判定是否可走percpu计数路径</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-get-many-%E5%A2%9E%E5%8A%A0%E5%A4%9A%E4%B8%AA%E5%BC%95%E7%94%A8"><span class="toc-number">6.4.</span> <span class="toc-text">percpu_ref_get_many 增加多个引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-get-%E5%A2%9E%E5%8A%A0%E5%8D%95%E4%B8%AA%E5%BC%95%E7%94%A8"><span class="toc-number">6.5.</span> <span class="toc-text">percpu_ref_get 增加单个引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-tryget-many-%E5%9C%A8%E6%9C%AA%E5%BD%92%E9%9B%B6%E6%97%B6%E5%B0%9D%E8%AF%95%E5%A2%9E%E5%8A%A0%E5%A4%9A%E4%B8%AA%E5%BC%95%E7%94%A8"><span class="toc-number">6.6.</span> <span class="toc-text">percpu_ref_tryget_many 在未归零时尝试增加多个引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-tryget-%E5%9C%A8%E6%9C%AA%E5%BD%92%E9%9B%B6%E6%97%B6%E5%B0%9D%E8%AF%95%E5%A2%9E%E5%8A%A0%E5%8D%95%E4%B8%AA%E5%BC%95%E7%94%A8"><span class="toc-number">6.7.</span> <span class="toc-text">percpu_ref_tryget 在未归零时尝试增加单个引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-tryget-live-rcu-%E5%9C%A8%E5%B7%B2%E6%8C%81%E6%9C%89RCU%E6%97%B6%E5%B0%9D%E8%AF%95%E8%8E%B7%E5%8F%96%E6%9C%AA%E6%AD%BB%E4%BA%A1%E5%BC%95%E7%94%A8"><span class="toc-number">6.8.</span> <span class="toc-text">percpu_ref_tryget_live_rcu 在已持有RCU时尝试获取未死亡引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-tryget-live-%E8%87%AA%E5%8A%A8%E6%8C%81%E6%9C%89RCU%E5%90%8E%E5%B0%9D%E8%AF%95%E8%8E%B7%E5%8F%96%E6%9C%AA%E6%AD%BB%E4%BA%A1%E5%BC%95%E7%94%A8"><span class="toc-number">6.9.</span> <span class="toc-text">percpu_ref_tryget_live 自动持有RCU后尝试获取未死亡引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-put-many-%E5%87%8F%E5%B0%91%E5%A4%9A%E4%B8%AA%E5%BC%95%E7%94%A8%E5%B9%B6%E5%9C%A8atomic%E6%A8%A1%E5%BC%8F%E4%B8%8B%E5%8F%AF%E8%83%BD%E8%A7%A6%E5%8F%91%E9%87%8A%E6%94%BE"><span class="toc-number">6.10.</span> <span class="toc-text">percpu_ref_put_many 减少多个引用并在atomic模式下可能触发释放</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-put-%E5%87%8F%E5%B0%91%E5%8D%95%E4%B8%AA%E5%BC%95%E7%94%A8%E5%B9%B6%E5%9C%A8atomic%E6%A8%A1%E5%BC%8F%E4%B8%8B%E5%8F%AF%E8%83%BD%E8%A7%A6%E5%8F%91%E9%87%8A%E6%94%BE"><span class="toc-number">6.11.</span> <span class="toc-text">percpu_ref_put 减少单个引用并在atomic模式下可能触发释放</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#percpu-ref-is-dying-%E6%9F%A5%E8%AF%A2%E6%AD%BB%E4%BA%A1%E6%80%81%E6%A0%87%E5%BF%97%E4%BD%8D"><span class="toc-number">6.12.</span> <span class="toc-text">percpu_ref_is_dying 查询死亡态标志位</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/c1a906f6/" title="解决 `git cherry-pick` 引入大量新文件的问题"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="解决 `git cherry-pick` 引入大量新文件的问题"/></a><div class="content"><a class="title" href="/posts/c1a906f6/" title="解决 `git cherry-pick` 引入大量新文件的问题">解决 `git cherry-pick` 引入大量新文件的问题</a><time datetime="2026-02-01T09:14:52.589Z" title="更新于 2026-02-01 17:14:52">2026-02-01</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/6bc49c74/" title="percpu-refcount"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="percpu-refcount"/></a><div class="content"><a class="title" href="/posts/6bc49c74/" title="percpu-refcount">percpu-refcount</a><time datetime="2026-02-01T09:06:22.885Z" title="更新于 2026-02-01 17:06:22">2026-02-01</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/be154ebb/" title="GCC"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="GCC"/></a><div class="content"><a class="title" href="/posts/be154ebb/" title="GCC">GCC</a><time datetime="2026-02-01T09:02:10.673Z" title="更新于 2026-02-01 17:02:10">2026-02-01</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/bba6a469/" title="mmc"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="mmc"/></a><div class="content"><a class="title" href="/posts/bba6a469/" title="mmc">mmc</a><time datetime="2026-02-01T07:45:31.691Z" title="更新于 2026-02-01 15:45:31">2026-02-01</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/aa511041/" title="blk-core"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="blk-core"/></a><div class="content"><a class="title" href="/posts/aa511041/" title="blk-core">blk-core</a><time datetime="2026-02-01T07:10:00.941Z" title="更新于 2026-02-01 15:10:00">2026-02-01</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/07.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '5d900ffade47e140813a9cf1937cb231'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,2],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":262},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":57},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"fs","value":37},{"name":"MCU","value":30}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":262},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":57},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"fs","value":37},{"name":"MCU","value":30}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":262},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":58},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":262},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":58},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"MCU","children":[],"count":30,"path":"MCU"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"git","children":[],"count":11,"path":"git"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"linux","children":[{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"drivers","children":[{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"mmc","children":[],"count":3,"path":"linux/drivers/mmc"}],"count":58,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"}],"count":63,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":262,"path":"linux"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"hpatch","children":[{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"},{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"}],"count":10,"path":"hpatch"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"},{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"杂谈","children":[],"count":19,"path":"杂谈"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
