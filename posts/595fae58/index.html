@@ -1,0 +1,1273 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界先看核心结论FNV-1a 64-bit 的重点，不是“32 位 MCU 能不能跑 64 位整数”，而是下面三件事：  这个散列为什么能工作。 代码实现里每一步到底在做什么。 哪些场景适合用，哪些场景不适合用。  把这三件事讲清楚后，再讨论 32-bit 和 64-bit 的工程取舍，结构会更稳，也更接">
+<meta property="og:type" content="article">
+<meta property="og:title" content="FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界">
+<meta property="og:url" content="https://wdfk-prog.space/posts/595fae58/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界先看核心结论FNV-1a 64-bit 的重点，不是“32 位 MCU 能不能跑 64 位整数”，而是下面三件事：  这个散列为什么能工作。 代码实现里每一步到底在做什么。 哪些场景适合用，哪些场景不适合用。  把这三件事讲清楚后，再讨论 32-bit 和 64-bit 的工程取舍，结构会更稳，也更接">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/05.jpg">
+<meta property="article:published_time" content="2026-03-30T01:31:31.000Z">
+<meta property="article:modified_time" content="2026-03-30T01:42:24.777Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="MCU">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/05.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界",
+  "url": "https://wdfk-prog.space/posts/595fae58/",
+  "image": "https://wdfk-prog.space/images/covers/05.jpg",
+  "datePublished": "2026-03-30T01:31:31.000Z",
+  "dateModified": "2026-03-30T01:42:24.777Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/595fae58/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">491</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">58</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">63</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/05.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界<a class="post-edit-link" href="null_posts/MCU/FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-03-30T01:31:31.000Z" title="发表于 2026-03-30 09:31:31">2026-03-30</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-03-30T01:42:24.777Z" title="更新于 2026-03-30 09:42:24">2026-03-30</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/MCU/">MCU</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">4k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>13分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/595fae58/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-03-30 09:42:24&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/0e0e9ec6daa9414e94aa1ad608cafd02.png" alt="在这里插入图片描述"></p>
+<h1 id="FNV-1a-64-bit-在-MCU-32bit-上的实现与取舍：从原理、代码到适用边界"><a href="#FNV-1a-64-bit-在-MCU-32bit-上的实现与取舍：从原理、代码到适用边界" class="headerlink" title="FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界"></a>FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界</h1><h2 id="先看核心结论"><a href="#先看核心结论" class="headerlink" title="先看核心结论"></a>先看核心结论</h2><p>FNV-1a 64-bit 的重点，不是“32 位 MCU 能不能跑 64 位整数”，而是下面三件事：</p>
+<ol>
+<li>这个散列为什么能工作。</li>
+<li>代码实现里每一步到底在做什么。</li>
+<li>哪些场景适合用，哪些场景不适合用。</li>
+</ol>
+<p>把这三件事讲清楚后，再讨论 32-bit 和 64-bit 的工程取舍，结构会更稳，也更接近实际选型过程。</p>
+<p>FNV-1a 的标准更新过程可以概括成一条固定循环：</p>
+<ul>
+<li>状态从 <code>offset_basis</code> 开始</li>
+<li>每读取一个字节，先异或进状态</li>
+<li>再乘上固定的 <code>FNV_Prime</code></li>
+<li>运算结果保留在固定比特宽度内</li>
+</ul>
+<p>对 64-bit 版本，标准常量是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> FNV1A64_OFFSET_BASIS 0xCBF29CE484222325ULL</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV1A64_PRIME        0x00000100000001B3ULL</span></span><br></pre></td></tr></table></figure>
+
+<p>这两个常量不是任意挑选出来的。<code>offset_basis</code> 决定初始状态，<code>FNV_Prime</code> 决定每次吸收新字节后如何扩散已有状态。</p>
+<hr>
+<h2 id="先把原理讲清楚"><a href="#先把原理讲清楚" class="headerlink" title="先把原理讲清楚"></a>先把原理讲清楚</h2><h3 id="FNV-1a-只做两件事：吸收输入、扩散状态"><a href="#FNV-1a-只做两件事：吸收输入、扩散状态" class="headerlink" title="FNV-1a 只做两件事：吸收输入、扩散状态"></a>FNV-1a 只做两件事：吸收输入、扩散状态</h3><p>FNV-1a 的每轮更新只有两步：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">state = state XOR byte</span><br><span class="line">state = state * FNV_Prime   (mod 2^N)</span><br></pre></td></tr></table></figure>
+
+<p>第一步的作用是把当前字节注入状态。<br>第二步的作用是把状态重新打散，让刚进入的低位变化尽快传播到更大的位范围中。</p>
+<p>这两步合在一起，形成了 FNV-1a 的基本散列行为：</p>
+<ul>
+<li>输入顺序会影响结果</li>
+<li>每个新字节都会改变后续所有状态</li>
+<li>不需要缓存完整输入，天然支持流式更新</li>
+</ul>
+<p>这也是 FNV-1a 很适合嵌入式系统的原因之一。串口、网络包、Flash 分块读取、日志流解析，本来就是“边到达边处理”的模式。</p>
+<h3 id="为什么是“先-XOR，再乘-prime”"><a href="#为什么是“先-XOR，再乘-prime”" class="headerlink" title="为什么是“先 XOR，再乘 prime”"></a>为什么是“先 XOR，再乘 prime”</h3><p>FNV 家族里最容易混淆的是 FNV-1 和 FNV-1a。</p>
+<ul>
+<li>FNV-1：先乘，再异或</li>
+<li>FNV-1a：先异或，再乘</li>
+</ul>
+<p>工程上更常用的是 FNV-1a。原因很直接：对短数据、小消息、短字符串，FNV-1a 的分布表现通常更好。因此，在大多数普通场景里，默认选 FNV-1a 更合理。</p>
+<p>这件事在 MCU 场景尤其重要，因为很多实际输入本来就不长，例如：</p>
+<ul>
+<li>命令字</li>
+<li>配置项键名</li>
+<li>协议字段名</li>
+<li>文件路径片段</li>
+<li>资源标签</li>
+<li>小型二进制头部</li>
+</ul>
+<p>如果输入大多只有几字节到几十字节，那么“小输入上的分布效果”通常比理论上的大块吞吐更关键。</p>
+<h3 id="FNV-Prime-为什么是这个值"><a href="#FNV-Prime-为什么是这个值" class="headerlink" title="FNV_Prime 为什么是这个值"></a><code>FNV_Prime</code> 为什么是这个值</h3><p>32-bit 版本的 prime 是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0x01000193 = 2^24 + 2^8 + 0x93</span><br></pre></td></tr></table></figure>
+
+<p>64-bit 版本的 prime 是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0x00000100000001B3 = 2^40 + 2^8 + 0xB3</span><br></pre></td></tr></table></figure>
+
+<p>这类 prime 的结构有两个工程价值：</p>
+<ol>
+<li>位分布经过专门选择，不是为了“好算”，而是为了散列质量。</li>
+<li>由于高位项和低位项结构明确，乘法可以在某些平台上拆成“移位 + 小常数乘法 + 进位传播”。</li>
+</ol>
+<p>因此，FNV-1a 的实现并不一定非要依赖一条完整的原生乘法指令。对资源有限的平台，prime 的结构本身就提供了可拆解空间。</p>
+<h3 id="offset-basis-的作用不是装饰，而是初始扰动"><a href="#offset-basis-的作用不是装饰，而是初始扰动" class="headerlink" title="offset_basis 的作用不是装饰，而是初始扰动"></a><code>offset_basis</code> 的作用不是装饰，而是初始扰动</h3><p>如果状态一开始就是 <code>0</code>，那么算法会更容易出现可预测的退化行为。FNV-1a 使用固定的非零 <code>offset_basis</code> 作为起点，目的就是让空状态带着初始扰动进入第一个字节的处理过程。</p>
+<p>对 32-bit 版本，常量是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="number">0x811C9DC5</span></span><br></pre></td></tr></table></figure>
+
+<p>对 64-bit 版本，常量是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="number">0xCBF29CE484222325</span></span><br></pre></td></tr></table></figure>
+
+<p>这保证了相同输入在标准实现里有统一结果，也让跨平台实现保持互操作。</p>
+<hr>
+<h2 id="用-hash-32a-c-看清楚代码实现"><a href="#用-hash-32a-c-看清楚代码实现" class="headerlink" title="用 hash_32a.c 看清楚代码实现"></a>用 <code>hash_32a.c</code> 看清楚代码实现</h2><h3 id="为什么用-32-bit-源码讲-64-bit-算法"><a href="#为什么用-32-bit-源码讲-64-bit-算法" class="headerlink" title="为什么用 32-bit 源码讲 64-bit 算法"></a>为什么用 32-bit 源码讲 64-bit 算法</h3><p><code>hash_32a.c</code> 不是 64-bit 文件，但非常适合作为讲解入口。原因很简单：</p>
+<ul>
+<li>更新路径足够短</li>
+<li>关键动作没有被封装得太深</li>
+<li>“直接乘法”和“移位加法展开”两种实现同时出现</li>
+<li>很适合拿来解释 FNV-1a 的单字节更新机制</li>
+</ul>
+<p>换句话说，这份代码最有价值的地方不是“它是 32-bit”，而是“它把算法步骤写得很透明”。</p>
+<h3 id="先看一个等价化后的核心循环"><a href="#先看一个等价化后的核心循环" class="headerlink" title="先看一个等价化后的核心循环"></a>先看一个等价化后的核心循环</h3><p>下面这段示例代码不是原文件逐字复制，而是按 <code>hash_32a.c</code> 的结构整理后的等价写法，用来突出真正重要的部分：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stdint.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stddef.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV1A32_OFFSET_BASIS 0x811C9DC5u</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV1A32_PRIME        0x01000193u</span></span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">uint32_t</span> <span class="title function_">fnv1a32_step</span><span class="params">(<span class="type">uint32_t</span> state, <span class="type">uint8_t</span> byte)</span></span><br><span class="line">&#123;</span><br><span class="line">    state ^= (<span class="type">uint32_t</span>)byte;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* 等价于 state *= 0x01000193u */</span></span><br><span class="line">    state += (state &lt;&lt; <span class="number">1</span>)</span><br><span class="line">          +  (state &lt;&lt; <span class="number">4</span>)</span><br><span class="line">          +  (state &lt;&lt; <span class="number">7</span>)</span><br><span class="line">          +  (state &lt;&lt; <span class="number">8</span>)</span><br><span class="line">          +  (state &lt;&lt; <span class="number">24</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> state;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">uint32_t</span> <span class="title function_">fnv1a32_buf</span><span class="params">(<span class="type">const</span> <span class="type">void</span> *data, <span class="type">size_t</span> len)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">const</span> <span class="type">uint8_t</span> *p = (<span class="type">const</span> <span class="type">uint8_t</span> *)data;</span><br><span class="line">    <span class="type">uint32_t</span> state = FNV1A32_OFFSET_BASIS;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">while</span> (len--) &#123;</span><br><span class="line">        state = fnv1a32_step(state, *p++);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> state;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这段代码已经把 FNV-1a 的本质全部暴露出来了。</p>
+<h3 id="第一行真正做的事：把当前字节吸收进状态"><a href="#第一行真正做的事：把当前字节吸收进状态" class="headerlink" title="第一行真正做的事：把当前字节吸收进状态"></a>第一行真正做的事：把当前字节吸收进状态</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">state ^= (<span class="type">uint32_t</span>)byte;</span><br></pre></td></tr></table></figure>
+
+<p>这一行只做注入，不做扩散。<br>当前字节进入状态后，还只是局部影响。如果这时直接返回，低位变化主要还停留在较低位。</p>
+<p>所以 FNV-1a 的关键不在 XOR 本身，而在 XOR 后必须紧接着做一次固定乘法。</p>
+<h3 id="第二步真正做的事：把状态扩散开"><a href="#第二步真正做的事：把状态扩散开" class="headerlink" title="第二步真正做的事：把状态扩散开"></a>第二步真正做的事：把状态扩散开</h3><p>32-bit prime 为 <code>0x01000193</code>。把它拆开：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0x01000193 = 2^24 + 2^8 + 2^7 + 2^4 + 2^1 + 1</span><br></pre></td></tr></table></figure>
+
+<p>于是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">state * 0x01000193</span><br><span class="line">= state</span><br><span class="line">+ (state &lt;&lt; 1)</span><br><span class="line">+ (state &lt;&lt; 4)</span><br><span class="line">+ (state &lt;&lt; 7)</span><br><span class="line">+ (state &lt;&lt; 8)</span><br><span class="line">+ (state &lt;&lt; 24)</span><br></pre></td></tr></table></figure>
+
+<p>这就是源码里移位加法分支的数学来源。<br>也就是说，那串看起来像“位运算优化技巧”的表达式，本质上就是在实现固定常量乘法。</p>
+<p>这个细节非常重要，因为它说明 FNV-1a 的实现从来不是“只能写成一条乘法”。只要乘数是固定常量，就可以按常量结构展开。</p>
+<h3 id="为什么源码同时保留直接乘法分支"><a href="#为什么源码同时保留直接乘法分支" class="headerlink" title="为什么源码同时保留直接乘法分支"></a>为什么源码同时保留直接乘法分支</h3><p><code>hash_32a.c</code> 里既有直接乘 <code>FNV_32_PRIME</code> 的分支，也有移位加法展开的分支。这种设计并不是重复，而是明确承认一个事实：</p>
+<ul>
+<li>算法逻辑固定</li>
+<li>最优实现路径取决于编译器和硬件</li>
+</ul>
+<p>有的平台上，直接乘法更好。<br>有的平台上，移位加法更容易被优化，或者更容易审查执行代价。</p>
+<p>这类写法很适合 MCU 工程，因为嵌入式实现往往不止关心“能不能跑”，还关心：</p>
+<ul>
+<li>指令序列是否稳定</li>
+<li>编译器是否会生成额外库调用</li>
+<li>是否引入不可控的长延迟</li>
+<li>是否方便做静态分析和性能估算</li>
+</ul>
+<hr>
+<h2 id="从-32-bit-代码平滑过渡到-64-bit-实现"><a href="#从-32-bit-代码平滑过渡到-64-bit-实现" class="headerlink" title="从 32-bit 代码平滑过渡到 64-bit 实现"></a>从 32-bit 代码平滑过渡到 64-bit 实现</h2><h3 id="64-bit-版本并没有改变算法"><a href="#64-bit-版本并没有改变算法" class="headerlink" title="64-bit 版本并没有改变算法"></a>64-bit 版本并没有改变算法</h3><p>把 32-bit 换成 64-bit，更新步骤其实一模一样：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">uint64_t</span> <span class="title function_">fnv1a64_step</span><span class="params">(<span class="type">uint64_t</span> state, <span class="type">uint8_t</span> byte)</span></span><br><span class="line">&#123;</span><br><span class="line">    state ^= (<span class="type">uint64_t</span>)byte;</span><br><span class="line">    state *= <span class="number">0x00000100000001B3U</span>LL;</span><br><span class="line">    <span class="keyword">return</span> state;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>变化只有两个：</p>
+<ol>
+<li>状态宽度从 32 位扩展到 64 位。</li>
+<li>常量从 32-bit <code>offset_basis / prime</code> 换成 64-bit <code>offset_basis / prime</code>。</li>
+</ol>
+<p>因此，64-bit 的核心收益不是“算法更复杂”，而是状态空间更大，普通工程场景下的偶然碰撞概率更低。</p>
+<h3 id="最直接的-64-bit-参考实现"><a href="#最直接的-64-bit-参考实现" class="headerlink" title="最直接的 64-bit 参考实现"></a>最直接的 64-bit 参考实现</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stdint.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stddef.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV1A64_OFFSET_BASIS 0xCBF29CE484222325ULL</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV1A64_PRIME        0x00000100000001B3ULL</span></span><br><span class="line"></span><br><span class="line"><span class="type">uint64_t</span> <span class="title function_">fnv1a64_buf</span><span class="params">(<span class="type">const</span> <span class="type">void</span> *data, <span class="type">size_t</span> len)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">const</span> <span class="type">uint8_t</span> *p = (<span class="type">const</span> <span class="type">uint8_t</span> *)data;</span><br><span class="line">    <span class="type">uint64_t</span> state = FNV1A64_OFFSET_BASIS;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">while</span> (len--) &#123;</span><br><span class="line">        state ^= (<span class="type">uint64_t</span>)(*p++);</span><br><span class="line">        state *= FNV1A64_PRIME;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> state;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果目标平台的 <code>uint64_t</code> 加法和乘法成本可以接受，这已经是最清晰、最容易验证、最容易跨平台保持一致的写法。</p>
+<h3 id="更适合实际工程的形式：增量上下文接口"><a href="#更适合实际工程的形式：增量上下文接口" class="headerlink" title="更适合实际工程的形式：增量上下文接口"></a>更适合实际工程的形式：增量上下文接口</h3><p>FNV-1a 天然适合写成“初始化、喂入分块、取结果”的接口，而不是只提供“一次性处理完整缓冲区”的函数。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span> &#123;</span></span><br><span class="line">    <span class="type">uint64_t</span> state;</span><br><span class="line">&#125; <span class="type">fnv1a64_ctx_t</span>;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">fnv1a64_init</span><span class="params">(<span class="type">fnv1a64_ctx_t</span> *ctx)</span></span><br><span class="line">&#123;</span><br><span class="line">    ctx-&gt;state = FNV1A64_OFFSET_BASIS;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">void</span> <span class="title function_">fnv1a64_update</span><span class="params">(<span class="type">fnv1a64_ctx_t</span> *ctx, <span class="type">const</span> <span class="type">void</span> *data, <span class="type">size_t</span> len)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">const</span> <span class="type">uint8_t</span> *p = (<span class="type">const</span> <span class="type">uint8_t</span> *)data;</span><br><span class="line">    <span class="keyword">while</span> (len--) &#123;</span><br><span class="line">        ctx-&gt;state ^= (<span class="type">uint64_t</span>)(*p++);</span><br><span class="line">        ctx-&gt;state *= FNV1A64_PRIME;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">uint64_t</span> <span class="title function_">fnv1a64_final</span><span class="params">(<span class="type">const</span> <span class="type">fnv1a64_ctx_t</span> *ctx)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> ctx-&gt;state;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这种接口适合直接嵌进：</p>
+<ul>
+<li>UART 接收状态机</li>
+<li>网络分片拼包流程</li>
+<li>文件系统分块读取</li>
+<li>Flash 页扫描</li>
+<li>协议解析器</li>
+<li>日志聚合器</li>
+</ul>
+<p>RFC 9923 也提供了上下文式的增量接口，说明这种写法本身就是 FNV 的标准使用方式之一。</p>
+<hr>
+<h2 id="使用场景应该怎么判断"><a href="#使用场景应该怎么判断" class="headerlink" title="使用场景应该怎么判断"></a>使用场景应该怎么判断</h2><h3 id="适合的场景：快速查找、索引、映射"><a href="#适合的场景：快速查找、索引、映射" class="headerlink" title="适合的场景：快速查找、索引、映射"></a>适合的场景：快速查找、索引、映射</h3><p>FNV 长期被用于多种非加密散列场景，包括数据库索引、DNS 服务器、文件指纹、缓存、符号表、哈希表、搜索&#x2F;索引系统等。</p>
+<p>映射到 MCU 和嵌入式软件里，最常见的落地方向是：</p>
+<ul>
+<li>命令字散列</li>
+<li>配置项键名散列</li>
+<li>资源路径与资源名映射</li>
+<li>协议字段名匹配</li>
+<li>哈希桶索引</li>
+<li>内部对象标识</li>
+<li>非安全用途的轻量文件或块标识</li>
+</ul>
+<p>这类场景的共同特征是：</p>
+<ul>
+<li>追求速度和实现简单</li>
+<li>输入长度通常不大</li>
+<li>目标是快速区分与查找</li>
+<li>不要求抵抗主动攻击</li>
+</ul>
+<h3 id="适合流式处理场景"><a href="#适合流式处理场景" class="headerlink" title="适合流式处理场景"></a>适合流式处理场景</h3><p>FNV-1a 对流式数据天然友好。只要保留当前状态，就可以持续吸收后续输入。RFC 9923 还明确说明，一个前缀的 FNV 结果可以直接作为后续拼接内容的 <code>offset_basis</code>，最终结果等价于一次性对完整拼接串做 FNV。</p>
+<p>这意味着：</p>
+<ul>
+<li>前缀可复用</li>
+<li>共享头部可预计算</li>
+<li>分层协议可分段累计</li>
+<li>常量部分可以提前算好</li>
+</ul>
+<p>对 MCU 来说，这种特性很有价值，因为它能减少重复计算，节省 CPU 时间。</p>
+<h3 id="不适合的场景：任何带安全对抗的用途"><a href="#不适合的场景：任何带安全对抗的用途" class="headerlink" title="不适合的场景：任何带安全对抗的用途"></a>不适合的场景：任何带安全对抗的用途</h3><p>RFC 9923 讲得很明确：FNV 是非加密散列，不适合要求碰撞、原像或第二原像在计算上难以构造的场景。</p>
+<p>因此，下面这些用途应该直接排除：</p>
+<ul>
+<li>安全认证</li>
+<li>防篡改摘要</li>
+<li>对抗性输入环境下的公开哈希表</li>
+<li>需要抗碰撞攻击的协议设计</li>
+<li>用散列值作为安全令牌</li>
+</ul>
+<p>如果输入来自不可信外部实体，并且攻击者能主动构造输入，那么 FNV-1a 不该承担安全角色。</p>
+<h3 id="也不应该把它当作-CRC-的替代品"><a href="#也不应该把它当作-CRC-的替代品" class="headerlink" title="也不应该把它当作 CRC 的替代品"></a>也不应该把它当作 CRC 的替代品</h3><p>CRC 的目标是链路误码检测。<br>FNV-1a 的目标是散列分布和快速映射。</p>
+<p>两者关注的问题不同，不能互相替代。<br>如果目标是检错，优先看 CRC。<br>如果目标是索引和散列分桶，再考虑 FNV。</p>
+<hr>
+<h2 id="优点和缺点需要分开看"><a href="#优点和缺点需要分开看" class="headerlink" title="优点和缺点需要分开看"></a>优点和缺点需要分开看</h2><h3 id="优点"><a href="#优点" class="headerlink" title="优点"></a>优点</h3><h4 id="1-实现极小"><a href="#1-实现极小" class="headerlink" title="1. 实现极小"></a>1. 实现极小</h4><p>FNV-1a 的核心循环短，依赖少，移植成本低。<br>在 MCU 工程里，这意味着更容易放进启动阶段、Bootloader、小型库、协议栈底层，或者代码体积敏感的模块。</p>
+<h4 id="2-易于审查和验证"><a href="#2-易于审查和验证" class="headerlink" title="2. 易于审查和验证"></a>2. 易于审查和验证</h4><p>算法步骤固定，状态更新非常直接。<br>相比结构更复杂的散列，FNV-1a 的实现更容易人工核查，也更容易写测试向量。</p>
+<h4 id="3-天然支持流式输入"><a href="#3-天然支持流式输入" class="headerlink" title="3. 天然支持流式输入"></a>3. 天然支持流式输入</h4><p>不需要一次性收齐完整数据。<br>这对串流、分块读取、协议解析非常友好。</p>
+<h4 id="4-很适合短字符串和短键"><a href="#4-很适合短字符串和短键" class="headerlink" title="4. 很适合短字符串和短键"></a>4. 很适合短字符串和短键</h4><p>对配置项、命令字、标识名、路径片段这类输入，FNV-1a 往往已经足够实用。</p>
+<h4 id="5-64-bit-版本能明显扩大状态空间"><a href="#5-64-bit-版本能明显扩大状态空间" class="headerlink" title="5. 64-bit 版本能明显扩大状态空间"></a>5. 64-bit 版本能明显扩大状态空间</h4><p>当对象数量上升、哈希表变大、生命周期变长时，64-bit 版本比 32-bit 更不容易在普通工程场景下发生偶然碰撞。</p>
+<h3 id="缺点"><a href="#缺点" class="headerlink" title="缺点"></a>缺点</h3><h4 id="1-不是加密哈希"><a href="#1-不是加密哈希" class="headerlink" title="1. 不是加密哈希"></a>1. 不是加密哈希</h4><p>这是最重要的限制。<br>一旦需求涉及安全性，FNV-1a 就不该继续承担核心职责。</p>
+<h4 id="2-碰撞抗性有限"><a href="#2-碰撞抗性有限" class="headerlink" title="2. 碰撞抗性有限"></a>2. 碰撞抗性有限</h4><p>对普通工程映射足够，不代表适合对抗性输入。<br>开放接口上的恶意构造输入，可能让哈希桶退化、查找性能恶化，甚至形成拒绝服务风险。</p>
+<h4 id="3-64-bit-版本在-32-位-MCU-上未必总是划算"><a href="#3-64-bit-版本在-32-位-MCU-上未必总是划算" class="headerlink" title="3. 64-bit 版本在 32 位 MCU 上未必总是划算"></a>3. 64-bit 版本在 32 位 MCU 上未必总是划算</h4><p>状态空间更大，不代表实现代价一定更低。<br>是否值得上 64-bit，要看对象规模、碰撞风险、工具链生成代码质量，以及对吞吐和代码尺寸的要求。</p>
+<hr>
+<h2 id="最后再看-32-bit-和-64-bit-的运用"><a href="#最后再看-32-bit-和-64-bit-的运用" class="headerlink" title="最后再看 32-bit 和 64-bit 的运用"></a>最后再看 32-bit 和 64-bit 的运用</h2><h3 id="先判断需求，再判断位宽"><a href="#先判断需求，再判断位宽" class="headerlink" title="先判断需求，再判断位宽"></a>先判断需求，再判断位宽</h3><p>位宽选择不应该先看“平台是 32 位还是 64 位”，而应该先看：</p>
+<ul>
+<li>输入规模有多大</li>
+<li>哈希值要保存多久</li>
+<li>冲突代价有多高</li>
+<li>是否需要跨模块、跨文件、跨版本复用</li>
+<li>是否允许偶然碰撞导致退化</li>
+</ul>
+<p>如果对象数量不大、哈希只做内部临时索引、生命周期很短，那么 32-bit 往往已经够用。<br>如果对象很多、哈希表更大、结果要长期保存，或者希望进一步降低碰撞风险，64-bit 更稳妥。</p>
+<h3 id="32-bit-MCU-上并不等于不能用-64-bit-FNV-1a"><a href="#32-bit-MCU-上并不等于不能用-64-bit-FNV-1a" class="headerlink" title="32-bit MCU 上并不等于不能用 64-bit FNV-1a"></a>32-bit MCU 上并不等于不能用 64-bit FNV-1a</h3><p>RFC 9923 在源码部分明确给出两套 64-bit 实现路径：</p>
+<ul>
+<li>一套面向具备 64-bit 算术支持的目标</li>
+<li>一套面向只有 32-bit 算术的目标</li>
+</ul>
+<p>也就是说，“MCU-32bit 上能否使用 64-bit FNV-1a”并不是算法问题，而是实现代价问题。</p>
+<h3 id="当工具链支持较好时，直接使用-uint64-t"><a href="#当工具链支持较好时，直接使用-uint64-t" class="headerlink" title="当工具链支持较好时，直接使用 uint64_t"></a>当工具链支持较好时，直接使用 <code>uint64_t</code></h3><p>如果编译器能够稳定生成高质量 64-bit 运算代码，直接使用 <code>uint64_t</code> 版通常最值得优先考虑：</p>
+<ul>
+<li>代码短</li>
+<li>可读性最好</li>
+<li>最容易验证</li>
+<li>最容易与标准常量对齐</li>
+</ul>
+<h3 id="当-64-bit-乘法代价偏高时，按-prime-结构拆解"><a href="#当-64-bit-乘法代价偏高时，按-prime-结构拆解" class="headerlink" title="当 64-bit 乘法代价偏高时，按 prime 结构拆解"></a>当 64-bit 乘法代价偏高时，按 prime 结构拆解</h3><p>RFC 9923 在 64-bit FNV 的“仅有 32-bit 算术”版本中，把 64-bit prime 写成了可拆解形式：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* 64-bit FNV_prime = 2^40 + 2^8 + 0xb3 */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV64primeX 0x01B3</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> FNV64shift  8</span></span><br></pre></td></tr></table></figure>
+
+<p>这背后的思路非常清晰：</p>
+<ul>
+<li>保留 64-bit 状态</li>
+<li>但不把实现强行写成一条完整的 64-bit 乘法</li>
+<li>而是利用 <code>2^40 + 2^8 + 0xB3</code> 的结构，把更新变成局部乘法、移位和进位传播</li>
+</ul>
+<p>这与 <code>hash_32a.c</code> 的移位加法展开是同一类思路，只是状态从单个 32-bit 字扩展成多个更小分段。</p>
+<h3 id="更合理的工程建议"><a href="#更合理的工程建议" class="headerlink" title="更合理的工程建议"></a>更合理的工程建议</h3><h4 id="32-bit-版本优先的情况"><a href="#32-bit-版本优先的情况" class="headerlink" title="32-bit 版本优先的情况"></a>32-bit 版本优先的情况</h4><ul>
+<li>哈希仅做局部查找</li>
+<li>输入集合有限</li>
+<li>更在意速度和代码尺寸</li>
+<li>32-bit 的碰撞风险可接受</li>
+</ul>
+<h4 id="64-bit-版本优先的情况"><a href="#64-bit-版本优先的情况" class="headerlink" title="64-bit 版本优先的情况"></a>64-bit 版本优先的情况</h4><ul>
+<li>哈希值要长期保存或复用</li>
+<li>对象数量较多</li>
+<li>冲突代价较高</li>
+<li>希望在不引入复杂算法的前提下扩大状态空间</li>
+</ul>
+<h4 id="先做基准再定的情况"><a href="#先做基准再定的情况" class="headerlink" title="先做基准再定的情况"></a>先做基准再定的情况</h4><ul>
+<li>平台没有原生高效 64-bit 乘法</li>
+<li>编译器版本不稳定</li>
+<li>代码尺寸和吞吐都很敏感</li>
+<li>同时在比较 32-bit FNV、64-bit FNV、CRC、或其他非加密散列</li>
+</ul>
+<p>在这种情况下，最有效的办法不是争论，而是直接做三项测试：</p>
+<ol>
+<li>每字节周期数</li>
+<li>代码尺寸</li>
+<li>目标输入集合上的冲突表现</li>
+</ol>
+<hr>
+<h2 id="小结"><a href="#小结" class="headerlink" title="小结"></a>小结</h2><p>把 FNV-1a 64-bit 放到 MCU-32bit 场景里，最合理的理解顺序应该是：</p>
+<ol>
+<li>先看原理：每个字节先 XOR，再乘固定 prime。</li>
+<li>再看代码：<code>hash_32a.c</code> 已经把这个核心更新路径写得很透明。</li>
+<li>再看用途：FNV-1a 适合快速索引、映射、流式散列，不适合安全用途。</li>
+<li>最后再看位宽：32-bit 和 64-bit 的区别主要在状态空间与实现代价，而不是算法步骤。</li>
+</ol>
+<p>这样梳理之后，讨论重点就不会跑偏到“32 位 MCU 能不能做 64 位乘法”这种局部问题上，而会回到真正影响选型的三个维度：<strong>散列原理、实现方式、适用边界</strong>。</p>
+<hr>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><ul>
+<li><p><code>hash_32a.c</code><br><code>https://github.com/lcn2/fnv/blob/master/hash_32a.c</code></p>
+</li>
+<li><p><code>RFC 9923 - The FNV Non-Cryptographic Hash Algorithm</code><br><code>https://www.rfc-editor.org/rfc/rfc9923.html</code></p>
+</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/595fae58/">https://wdfk-prog.space/posts/595fae58/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/MCU/">MCU</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/05.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/posts/8228fd40/" title="一次由 C 位域非原子写入引发的状态上报异常"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">一次由 C 位域非原子写入引发的状态上报异常</div></div><div class="info-2"><div class="info-item-1">  @[toc]  一次由 C 位域非原子写入引发的状态上报异常在一套嵌入式控制固件中，出现过一类很典型、但又很容易被忽略的异常：传感器物理状态已经持续触发，心跳报文却长时间仍然上报为 0；重新手动触发一次后，状态又恢复正常。 表面上看，这类问题很像采样抖动、消息队列满、或者 CAN 发送延迟。但沿着发送链路继续深挖后，真正的问题并不在总线，也不在消息队列，而是在 C 语言位域写入不是原子操作 这一点上。  先看现象，不要先怪 CAN异常表现有几个很强的特征：  传感器已经进入触发状态，并且维持了很长时间。 心跳报文仍然持续发送，但目标状态位始终是 0。 再次手动触发一次传感器后，状态恢复正常。 不是“完全没报文”，而是“报文一直有，但某一位一直不对”。  这类现象说明一件事：发送通道本身大概率是通的。如果 CAN 队列、发送线程、或总线仲裁是主因，更常见的表现会是丢帧、延迟、或整帧不发，而不是“整帧一直发，但某一位长期错误”。 因此，排查重点不该先放在“是否发出去”，而应该放在“发出去的那 8 个字节是谁构造的，以及构造时有没有被并发写坏”。  位域写入通常是读改写，不是原子更...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/f4ab3284/" title="ISO 14229 (Unified Diagnostic Services, UDS) 诊断工具实现(can_uds)"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">ISO 14229 (Unified Diagnostic Services, UDS) 诊断工具实现(can_uds)</div></div><div class="info-2"><div class="info-item-1">  @[toc] 介绍 本软件包在 RT-Thread 上实现 ISO 14229（UDS）协议栈及典型服务端示例，并配套 SocketCAN 客户端，覆盖会话控制、安全访问、参数读写、通信控制、IO 控制、远程控制台、文件传输等核心诊断能力，面向汽车电子与工业控制场景的远程诊断、运维和固件分发需求。  链接: iso14229 rtt software  历史与背景 诞生动机：典型整机通常只有一个 CAN 接口对外，而内部往往存在多个 MCU 子节点。惯用的串口 Debug 控制台在售后排查阶段接线和调试成本高。通过在 CAN 上提供标准 UDS 诊断与控制台能力，可复用现有 CAN 口完成日志、调试与控制权接管，降低现场维护难度。 重要里程碑：覆盖 ISO 14229 主流服务（0x10&#x2F;0x11&#x2F;0x22&#x2F;0x27&#x2F;0x28&#x2F;0x2E&#x2F;0x2F&#x2F;0x31&#x2F;0x34&#x2F;0x36&#x2F;0x37&#x2F;0x38&#x2F;0x3E），提供 RT-Thread 服务端示例、服务注册框架...</div></div></div></a><a class="pagination-related" href="/posts/8228fd40/" title="一次由 C 位域非原子写入引发的状态上报异常"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-03-21</div><div class="info-item-2">一次由 C 位域非原子写入引发的状态上报异常</div></div><div class="info-2"><div class="info-item-1">  @[toc]  一次由 C 位域非原子写入引发的状态上报异常在一套嵌入式控制固件中，出现过一类很典型、但又很容易被忽略的异常：传感器物理状态已经持续触发，心跳报文却长时间仍然上报为 0；重新手动触发一次后，状态又恢复正常。 表面上看，这类问题很像采样抖动、消息队列满、或者 CAN 发送延迟。但沿着发送链路继续深挖后，真正的问题并不在总线，也不在消息队列，而是在 C 语言位域写入不是原子操作 这一点上。  先看现象，不要先怪 CAN异常表现有几个很强的特征：  传感器已经进入触发状态，并且维持了很长时间。 心跳报文仍然持续发送，但目标状态位始终是 0。 再次手动触发一次传感器后，状态恢复正常。 不是“完全没报文”，而是“报文一直有，但某一位一直不对”。  这类现象说明一件事：发送通道本身大概率是通的。如果 CAN 队列、发送线程、或总线仲裁是主因，更常见的表现会是丢帧、延迟、或整帧不发，而不是“整帧一直发，但某一位长期错误”。 因此，排查重点不该先放在“是否发出去”，而应该放在“发出去的那 8 个字节是谁构造的，以及构造时有没有被并发写坏”。  位域写入通常是读改写，不是原子更...</div></div></div></a><a class="pagination-related" href="/posts/eaea975b/" title="MAX14830 可移植 C 驱动实现分析：一个适合多串口扩展场景的开源基础版本"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-03-19</div><div class="info-item-2">MAX14830 可移植 C 驱动实现分析：一个适合多串口扩展场景的开源基础版本</div></div><div class="info-2"><div class="info-item-1">  @[toc]  MAX14830 可移植 C 驱动实现分析：一个适合多串口扩展场景的开源基础版本在嵌入式系统中，串口资源不足是一个非常常见的问题。当主控需要同时连接调试接口、通信模组、下位机设备或多路传感器时，片上 UART 数量往往很快成为限制条件。此类场景下，外扩串口芯片通常是更现实的方案，而 MAX14830 就是其中较典型的一种：通过 SPI 或 I2C 总线，可以扩展出 4 路独立 UART，同时提供 FIFO 和 GPIO 能力，适合承担多串口桥接角色。 GitHub 上的 wdfk-prog&#x2F;max14830，就是一个面向这颗芯片的开源 C 驱动实现。这个项目的重点不在“做了多少高级功能”，而在于它明确采用了 可移植、平台无关、基于 HAL 抽象 的实现思路。对于正在做 MAX14830 接入、板级驱动开发，或者准备搭建多串口扩展方案的人来说，这类代码通常比单平台 Demo 更有参考价值。  仓库地址: https://github.com/wdfk-prog/max14830  项目定位很明确：不是平台示例，而是通用驱动骨架从仓库主页给出的描述来看，...</div></div></div></a><a class="pagination-related" href="/posts/de03686c/" title="M104BPCSX-5024 RFID 驱动与应用层开源实现分析"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-03-19</div><div class="info-item-2">M104BPCSX-5024 RFID 驱动与应用层开源实现分析</div></div><div class="info-2"><div class="info-item-1">  @[toc]  M104BPCSX-5024 RFID 驱动与应用层开源实现分析wdfk-prog/m104bpcsx_5024 是一个面向 M104BPCSX-5024 RFID 模块的开源实现，项目以 C 语言编写，围绕 RFID 模块接入的典型嵌入式应用场景，构建了较完整的驱动层与应用层一体化方案。从仓库公开信息来看，该项目不仅提供了底层协议封装与通信接口实现，还进一步覆盖了多通道轮询、RTOS 线程调度、CAN 总线结果上报以及功耗控制等业务逻辑，具备较强的工程参考意义。 与常见仅停留在寄存器读写或单一通信接口封装的示例工程不同，该项目更接近真实产品环境中的 RFID 子系统实现方式，尤其适合作为以下方向的参考样例：  嵌入式驱动分层设计 SPI &#x2F; UART 双通信路径抽象 基于 RTOS 的设备轮询任务组织 多通道 RFID 读卡器管理 CAN 总线状态上报集成   一、项目定位与功能概述该项目面向 M104BPCSX-5024 RFID 模块，目标是构建一套可移植、可扩展、适用于多硬件接入方案的驱动与应用实现框架。项目核心功能包括：  对多个 RFID...</div></div></div></a><a class="pagination-related" href="/posts/8b2ddca6/" title="Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-03-17</div><div class="info-item-2">Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”</div></div><div class="info-2"><div class="info-item-1">  @[toc]  Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”固件升级这件事，早已不只是“把新程序写进去”这么简单。 在不少 MCU 项目中，最初的目标通常很明确：先把 Bootloader 做出来，先把固件升级跑通，先让设备具备基本的远程维护能力。这样的阶段里，结构简单、接入直接、功能够用，往往比“架构漂亮”更重要。 Qboot V1 正是在这样的背景下体现出价值。它最初的定位就是一个用于快速制作 bootloader 的组件，目标非常务实：把启动、分区、校验、解密、解压、恢复和升级这些关键环节尽快组织起来，让升级链路尽早落地。现有公开版本中，已经包含 AES、GZIP、QuickLZ、FastLZ、HPatchLite、OTA downloader 等能力，本身并不是一个“只有基础功能”的轻量壳子，而是一套已经能够解决实际问题的升级组件。 但项目一旦继续往前推进，问题就会开始变化。 最开始关心的是“能不能升级”，很快就会变成&#96;“升级能不能稳定跑”&#96;&#96;“能不能适配更多存储方式”“能不能支持更多算法”“能不能减少包体积”“能...</div></div></div></a><a class="pagination-related" href="/posts/39c3100c/" title="结合QBoot与HPatchLite实现高效差分升级（FOTA）"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-01</div><div class="info-item-2">结合QBoot与HPatchLite实现高效差分升级（FOTA）</div></div><div class="info-2"><div class="info-item-1">  @[toc] 一、引言：为何需要差分升级？在物联网（IoT）设备的生命周期中，固件空中升级（FOTA）是不可或缺的一环。然而，传统的全量包升级方式意味着每次都需要传输完整的固件，这不仅消耗了大量的网络带宽，延长了升级时间，还对设备的Flash存储空间提出了更高的要求。 **差分升级（Differential Update）**通过只传输新旧固件之间的“差异”部分（即补丁包），极大地减小了升级包的体积，完美地解决了上述痛点。本文将详细介绍如何在RT-Thread操作系统中，利用QBoot引导加载程序和轻量级差分库HPatchLite，构建一套完整、高效且资源可控的差分升级方案。 核心组件架构： 1234567891011121314151617181920212223graph TD    subgraph &quot;设备端 (RT-Thread)&quot;        A[&quot;QBoot (Bootloader)&quot;]        B[&quot;FAL (Flash抽象层)&quot;]        C[&quot;hpatchlite-wrapp...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">491</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">58</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">63</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#FNV-1a-64-bit-%E5%9C%A8-MCU-32bit-%E4%B8%8A%E7%9A%84%E5%AE%9E%E7%8E%B0%E4%B8%8E%E5%8F%96%E8%88%8D%EF%BC%9A%E4%BB%8E%E5%8E%9F%E7%90%86%E3%80%81%E4%BB%A3%E7%A0%81%E5%88%B0%E9%80%82%E7%94%A8%E8%BE%B9%E7%95%8C"><span class="toc-number">1.</span> <span class="toc-text">FNV-1a 64-bit 在 MCU-32bit 上的实现与取舍：从原理、代码到适用边界</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%88%E7%9C%8B%E6%A0%B8%E5%BF%83%E7%BB%93%E8%AE%BA"><span class="toc-number">1.1.</span> <span class="toc-text">先看核心结论</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%88%E6%8A%8A%E5%8E%9F%E7%90%86%E8%AE%B2%E6%B8%85%E6%A5%9A"><span class="toc-number">1.2.</span> <span class="toc-text">先把原理讲清楚</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#FNV-1a-%E5%8F%AA%E5%81%9A%E4%B8%A4%E4%BB%B6%E4%BA%8B%EF%BC%9A%E5%90%B8%E6%94%B6%E8%BE%93%E5%85%A5%E3%80%81%E6%89%A9%E6%95%A3%E7%8A%B6%E6%80%81"><span class="toc-number">1.2.1.</span> <span class="toc-text">FNV-1a 只做两件事：吸收输入、扩散状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF%E2%80%9C%E5%85%88-XOR%EF%BC%8C%E5%86%8D%E4%B9%98-prime%E2%80%9D"><span class="toc-number">1.2.2.</span> <span class="toc-text">为什么是“先 XOR，再乘 prime”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#FNV-Prime-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF%E8%BF%99%E4%B8%AA%E5%80%BC"><span class="toc-number">1.2.3.</span> <span class="toc-text">FNV_Prime 为什么是这个值</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#offset-basis-%E7%9A%84%E4%BD%9C%E7%94%A8%E4%B8%8D%E6%98%AF%E8%A3%85%E9%A5%B0%EF%BC%8C%E8%80%8C%E6%98%AF%E5%88%9D%E5%A7%8B%E6%89%B0%E5%8A%A8"><span class="toc-number">1.2.4.</span> <span class="toc-text">offset_basis 的作用不是装饰，而是初始扰动</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%94%A8-hash-32a-c-%E7%9C%8B%E6%B8%85%E6%A5%9A%E4%BB%A3%E7%A0%81%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.3.</span> <span class="toc-text">用 hash_32a.c 看清楚代码实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E7%94%A8-32-bit-%E6%BA%90%E7%A0%81%E8%AE%B2-64-bit-%E7%AE%97%E6%B3%95"><span class="toc-number">1.3.1.</span> <span class="toc-text">为什么用 32-bit 源码讲 64-bit 算法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%88%E7%9C%8B%E4%B8%80%E4%B8%AA%E7%AD%89%E4%BB%B7%E5%8C%96%E5%90%8E%E7%9A%84%E6%A0%B8%E5%BF%83%E5%BE%AA%E7%8E%AF"><span class="toc-number">1.3.2.</span> <span class="toc-text">先看一个等价化后的核心循环</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E8%A1%8C%E7%9C%9F%E6%AD%A3%E5%81%9A%E7%9A%84%E4%BA%8B%EF%BC%9A%E6%8A%8A%E5%BD%93%E5%89%8D%E5%AD%97%E8%8A%82%E5%90%B8%E6%94%B6%E8%BF%9B%E7%8A%B6%E6%80%81"><span class="toc-number">1.3.3.</span> <span class="toc-text">第一行真正做的事：把当前字节吸收进状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AC%AC%E4%BA%8C%E6%AD%A5%E7%9C%9F%E6%AD%A3%E5%81%9A%E7%9A%84%E4%BA%8B%EF%BC%9A%E6%8A%8A%E7%8A%B6%E6%80%81%E6%89%A9%E6%95%A3%E5%BC%80"><span class="toc-number">1.3.4.</span> <span class="toc-text">第二步真正做的事：把状态扩散开</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E6%BA%90%E7%A0%81%E5%90%8C%E6%97%B6%E4%BF%9D%E7%95%99%E7%9B%B4%E6%8E%A5%E4%B9%98%E6%B3%95%E5%88%86%E6%94%AF"><span class="toc-number">1.3.5.</span> <span class="toc-text">为什么源码同时保留直接乘法分支</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8E-32-bit-%E4%BB%A3%E7%A0%81%E5%B9%B3%E6%BB%91%E8%BF%87%E6%B8%A1%E5%88%B0-64-bit-%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.</span> <span class="toc-text">从 32-bit 代码平滑过渡到 64-bit 实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#64-bit-%E7%89%88%E6%9C%AC%E5%B9%B6%E6%B2%A1%E6%9C%89%E6%94%B9%E5%8F%98%E7%AE%97%E6%B3%95"><span class="toc-number">1.4.1.</span> <span class="toc-text">64-bit 版本并没有改变算法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%80%E7%9B%B4%E6%8E%A5%E7%9A%84-64-bit-%E5%8F%82%E8%80%83%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.2.</span> <span class="toc-text">最直接的 64-bit 参考实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9B%B4%E9%80%82%E5%90%88%E5%AE%9E%E9%99%85%E5%B7%A5%E7%A8%8B%E7%9A%84%E5%BD%A2%E5%BC%8F%EF%BC%9A%E5%A2%9E%E9%87%8F%E4%B8%8A%E4%B8%8B%E6%96%87%E6%8E%A5%E5%8F%A3"><span class="toc-number">1.4.3.</span> <span class="toc-text">更适合实际工程的形式：增量上下文接口</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF%E5%BA%94%E8%AF%A5%E6%80%8E%E4%B9%88%E5%88%A4%E6%96%AD"><span class="toc-number">1.5.</span> <span class="toc-text">使用场景应该怎么判断</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%80%82%E5%90%88%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9A%E5%BF%AB%E9%80%9F%E6%9F%A5%E6%89%BE%E3%80%81%E7%B4%A2%E5%BC%95%E3%80%81%E6%98%A0%E5%B0%84"><span class="toc-number">1.5.1.</span> <span class="toc-text">适合的场景：快速查找、索引、映射</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%80%82%E5%90%88%E6%B5%81%E5%BC%8F%E5%A4%84%E7%90%86%E5%9C%BA%E6%99%AF"><span class="toc-number">1.5.2.</span> <span class="toc-text">适合流式处理场景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%8D%E9%80%82%E5%90%88%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%9A%E4%BB%BB%E4%BD%95%E5%B8%A6%E5%AE%89%E5%85%A8%E5%AF%B9%E6%8A%97%E7%9A%84%E7%94%A8%E9%80%94"><span class="toc-number">1.5.3.</span> <span class="toc-text">不适合的场景：任何带安全对抗的用途</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B9%9F%E4%B8%8D%E5%BA%94%E8%AF%A5%E6%8A%8A%E5%AE%83%E5%BD%93%E4%BD%9C-CRC-%E7%9A%84%E6%9B%BF%E4%BB%A3%E5%93%81"><span class="toc-number">1.5.4.</span> <span class="toc-text">也不应该把它当作 CRC 的替代品</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E7%82%B9%E5%92%8C%E7%BC%BA%E7%82%B9%E9%9C%80%E8%A6%81%E5%88%86%E5%BC%80%E7%9C%8B"><span class="toc-number">1.6.</span> <span class="toc-text">优点和缺点需要分开看</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BC%98%E7%82%B9"><span class="toc-number">1.6.1.</span> <span class="toc-text">优点</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#1-%E5%AE%9E%E7%8E%B0%E6%9E%81%E5%B0%8F"><span class="toc-number">1.6.1.1.</span> <span class="toc-text">1. 实现极小</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-%E6%98%93%E4%BA%8E%E5%AE%A1%E6%9F%A5%E5%92%8C%E9%AA%8C%E8%AF%81"><span class="toc-number">1.6.1.2.</span> <span class="toc-text">2. 易于审查和验证</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-%E5%A4%A9%E7%84%B6%E6%94%AF%E6%8C%81%E6%B5%81%E5%BC%8F%E8%BE%93%E5%85%A5"><span class="toc-number">1.6.1.3.</span> <span class="toc-text">3. 天然支持流式输入</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#4-%E5%BE%88%E9%80%82%E5%90%88%E7%9F%AD%E5%AD%97%E7%AC%A6%E4%B8%B2%E5%92%8C%E7%9F%AD%E9%94%AE"><span class="toc-number">1.6.1.4.</span> <span class="toc-text">4. 很适合短字符串和短键</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#5-64-bit-%E7%89%88%E6%9C%AC%E8%83%BD%E6%98%8E%E6%98%BE%E6%89%A9%E5%A4%A7%E7%8A%B6%E6%80%81%E7%A9%BA%E9%97%B4"><span class="toc-number">1.6.1.5.</span> <span class="toc-text">5. 64-bit 版本能明显扩大状态空间</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BC%BA%E7%82%B9"><span class="toc-number">1.6.2.</span> <span class="toc-text">缺点</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#1-%E4%B8%8D%E6%98%AF%E5%8A%A0%E5%AF%86%E5%93%88%E5%B8%8C"><span class="toc-number">1.6.2.1.</span> <span class="toc-text">1. 不是加密哈希</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-%E7%A2%B0%E6%92%9E%E6%8A%97%E6%80%A7%E6%9C%89%E9%99%90"><span class="toc-number">1.6.2.2.</span> <span class="toc-text">2. 碰撞抗性有限</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-64-bit-%E7%89%88%E6%9C%AC%E5%9C%A8-32-%E4%BD%8D-MCU-%E4%B8%8A%E6%9C%AA%E5%BF%85%E6%80%BB%E6%98%AF%E5%88%92%E7%AE%97"><span class="toc-number">1.6.2.3.</span> <span class="toc-text">3. 64-bit 版本在 32 位 MCU 上未必总是划算</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E5%90%8E%E5%86%8D%E7%9C%8B-32-bit-%E5%92%8C-64-bit-%E7%9A%84%E8%BF%90%E7%94%A8"><span class="toc-number">1.7.</span> <span class="toc-text">最后再看 32-bit 和 64-bit 的运用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%88%E5%88%A4%E6%96%AD%E9%9C%80%E6%B1%82%EF%BC%8C%E5%86%8D%E5%88%A4%E6%96%AD%E4%BD%8D%E5%AE%BD"><span class="toc-number">1.7.1.</span> <span class="toc-text">先判断需求，再判断位宽</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#32-bit-MCU-%E4%B8%8A%E5%B9%B6%E4%B8%8D%E7%AD%89%E4%BA%8E%E4%B8%8D%E8%83%BD%E7%94%A8-64-bit-FNV-1a"><span class="toc-number">1.7.2.</span> <span class="toc-text">32-bit MCU 上并不等于不能用 64-bit FNV-1a</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BD%93%E5%B7%A5%E5%85%B7%E9%93%BE%E6%94%AF%E6%8C%81%E8%BE%83%E5%A5%BD%E6%97%B6%EF%BC%8C%E7%9B%B4%E6%8E%A5%E4%BD%BF%E7%94%A8-uint64-t"><span class="toc-number">1.7.3.</span> <span class="toc-text">当工具链支持较好时，直接使用 uint64_t</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BD%93-64-bit-%E4%B9%98%E6%B3%95%E4%BB%A3%E4%BB%B7%E5%81%8F%E9%AB%98%E6%97%B6%EF%BC%8C%E6%8C%89-prime-%E7%BB%93%E6%9E%84%E6%8B%86%E8%A7%A3"><span class="toc-number">1.7.4.</span> <span class="toc-text">当 64-bit 乘法代价偏高时，按 prime 结构拆解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9B%B4%E5%90%88%E7%90%86%E7%9A%84%E5%B7%A5%E7%A8%8B%E5%BB%BA%E8%AE%AE"><span class="toc-number">1.7.5.</span> <span class="toc-text">更合理的工程建议</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#32-bit-%E7%89%88%E6%9C%AC%E4%BC%98%E5%85%88%E7%9A%84%E6%83%85%E5%86%B5"><span class="toc-number">1.7.5.1.</span> <span class="toc-text">32-bit 版本优先的情况</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#64-bit-%E7%89%88%E6%9C%AC%E4%BC%98%E5%85%88%E7%9A%84%E6%83%85%E5%86%B5"><span class="toc-number">1.7.5.2.</span> <span class="toc-text">64-bit 版本优先的情况</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%85%88%E5%81%9A%E5%9F%BA%E5%87%86%E5%86%8D%E5%AE%9A%E7%9A%84%E6%83%85%E5%86%B5"><span class="toc-number">1.7.5.3.</span> <span class="toc-text">先做基准再定的情况</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B0%8F%E7%BB%93"><span class="toc-number">1.8.</span> <span class="toc-text">小结</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.9.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/cfb57bb8/" title="stop2模式低功耗无法进入的问题分析"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="stop2模式低功耗无法进入的问题分析"/></a><div class="content"><a class="title" href="/posts/cfb57bb8/" title="stop2模式低功耗无法进入的问题分析">stop2模式低功耗无法进入的问题分析</a><time datetime="2026-03-30T01:43:13.166Z" title="更新于 2026-03-30 09:43:13">2026-03-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/cad78727/" title="STM32H7系列微控制器SPI FIFO阈值配置对高速数据传输稳定性的影响"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="STM32H7系列微控制器SPI FIFO阈值配置对高速数据传输稳定性的影响"/></a><div class="content"><a class="title" href="/posts/cad78727/" title="STM32H7系列微控制器SPI FIFO阈值配置对高速数据传输稳定性的影响">STM32H7系列微控制器SPI FIFO阈值配置对高速数据传输稳定性的影响</a><time datetime="2026-03-30T01:43:10.075Z" title="更新于 2026-03-30 09:43:10">2026-03-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/8b2ddca6/" title="Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”"/></a><div class="content"><a class="title" href="/posts/8b2ddca6/" title="Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”">Qboot V2：让 Bootloader 从“能升级”走向“可持续演进”</a><time datetime="2026-03-30T01:42:57.834Z" title="更新于 2026-03-30 09:42:57">2026-03-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/73e25ebc/" title="ADC+DMA 目标数组无更新 解决办法"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ADC+DMA 目标数组无更新 解决办法"/></a><div class="content"><a class="title" href="/posts/73e25ebc/" title="ADC+DMA 目标数组无更新 解决办法">ADC+DMA 目标数组无更新 解决办法</a><time datetime="2026-03-30T01:42:37.741Z" title="更新于 2026-03-30 09:42:37">2026-03-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/39c3100c/" title="结合QBoot与HPatchLite实现高效差分升级（FOTA）"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="结合QBoot与HPatchLite实现高效差分升级（FOTA）"/></a><div class="content"><a class="title" href="/posts/39c3100c/" title="结合QBoot与HPatchLite实现高效差分升级（FOTA）">结合QBoot与HPatchLite实现高效差分升级（FOTA）</a><time datetime="2026-03-30T01:42:33.094Z" title="更新于 2026-03-30 09:42:33">2026-03-30</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/05.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '8b662988dcf501b1c969bcea943c2007'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":264},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"fs","value":37},{"name":"MCU","value":35}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":264},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"fs","value":37},{"name":"MCU","value":35}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":264},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":264},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"MCU","children":[],"count":35,"path":"MCU"},{"name":"linux","children":[{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":264,"path":"linux"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"git","children":[],"count":11,"path":"git"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
