@@ -1,0 +1,1379 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践  本文面向已经掌握 C 语言、线程和文件描述符基础，但对 POSIX Signal 与事件轮询协作机制还不熟悉的开发者。 核心结论：这里的 signal 不是业务数据，也不是 I&#x2F;O 事件本身，而是一个“唤醒通知”。它用于中断阻塞中的 epoll_pwait()，让轮询线程及时重新检查停止标志、任务队列">
+<meta property="og:type" content="article">
+<meta property="og:title" content="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践">
+<meta property="og:url" content="https://wdfk-prog.space/posts/dd28a911/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践  本文面向已经掌握 C 语言、线程和文件描述符基础，但对 POSIX Signal 与事件轮询协作机制还不熟悉的开发者。 核心结论：这里的 signal 不是业务数据，也不是 I&#x2F;O 事件本身，而是一个“唤醒通知”。它用于中断阻塞中的 epoll_pwait()，让轮询线程及时重新检查停止标志、任务队列">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/04.jpg">
+<meta property="article:published_time" content="2026-07-16T07:13:44.000Z">
+<meta property="article:modified_time" content="2026-07-16T07:17:48.425Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="linux">
+<meta property="article:tag" content="user">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/04.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践",
+  "url": "https://wdfk-prog.space/posts/dd28a911/",
+  "image": "https://wdfk-prog.space/images/covers/04.jpg",
+  "datePublished": "2026-07-16T07:13:44.000Z",
+  "dateModified": "2026-07-16T07:17:48.425Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/dd28a911/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">534</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/04.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践<a class="post-edit-link" href="null_posts/linux/user/用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-16T07:13:44.000Z" title="发表于 2026-07-16 15:13:44">2026-07-16</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-16T07:17:48.425Z" title="更新于 2026-07-16 15:17:48">2026-07-16</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/user/">user</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">5.1k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>17分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/dd28a911/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-16 15:17:48&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+
+<h1 id="用-POSIX-Signal-唤醒-epoll-事件循环：原理、逐行解析与实践"><a href="#用-POSIX-Signal-唤醒-epoll-事件循环：原理、逐行解析与实践" class="headerlink" title="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践"></a>用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/b008f75d9e2e4980bb49b68905f717b8.png" alt="在这里插入图片描述"></p>
+<blockquote>
+<p>本文面向已经掌握 C 语言、线程和文件描述符基础，但对 POSIX Signal 与事件轮询协作机制还不熟悉的开发者。</p>
+<p>核心结论：这里的 <code>signal</code> 不是业务数据，也不是 I&#x2F;O 事件本身，而是一个“唤醒通知”。它用于中断阻塞中的 <code>epoll_pwait()</code>，让轮询线程及时重新检查停止标志、任务队列或监听集合。</p>
+</blockquote>
+<p>@[toc]</p>
+<h2 id="1-先建立整体认识"><a href="#1-先建立整体认识" class="headerlink" title="1. 先建立整体认识"></a>1. 先建立整体认识</h2><p>一个事件轮询线程通常会长时间阻塞：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">n = epoll_wait(epfd, events, maxevents, <span class="number">-1</span>);</span><br></pre></td></tr></table></figure>
+
+<p>最后一个参数为 <code>-1</code> 时，线程会一直等待，直到某个文件描述符就绪。问题是，另一个线程可能需要它立即醒来，例如：</p>
+<ol>
+<li>请求事件循环停止；</li>
+<li>投递了新的异步任务；</li>
+<li>修改了共享状态；</li>
+<li>要求重新计算下一次超时时间；</li>
+<li>调整了监听集合，但当前没有就绪事件。</li>
+</ol>
+<p>因此，事件循环需要一条独立于普通 I&#x2F;O 的“敲门通道”。这段实现选择 POSIX Signal 作为敲门机制。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">控制线程                                 轮询线程</span><br><span class="line">   │                                        │</span><br><span class="line">   │ 更新共享状态或任务队列                 │</span><br><span class="line">   │ pthread_kill(target, wake_signo)        │</span><br><span class="line">   ├────────────── Signal ─────────────────&gt;│</span><br><span class="line">   │                                        │ 空处理函数返回</span><br><span class="line">   │                                        │ epoll_pwait() 返回 -1</span><br><span class="line">   │                                        │ errno == EINTR</span><br><span class="line">   │                                        │ 重新检查状态并继续处理</span><br></pre></td></tr></table></figure>
+
+<p>Signal 只表示“有事情需要重新检查”，真正的数据应放在共享状态、受保护的任务队列或无锁队列中。</p>
+<h2 id="2-Signal-到底是什么"><a href="#2-Signal-到底是什么" class="headerlink" title="2. Signal 到底是什么"></a>2. Signal 到底是什么</h2><p>POSIX Signal 是操作系统向进程或线程投递的异步通知。一个信号包含的核心信息是信号编号，例如 <code>SIGUSR1</code>。收到信号后，程序可以：</p>
+<ul>
+<li>执行默认动作；</li>
+<li>忽略该信号；</li>
+<li>调用应用安装的处理函数。</li>
+</ul>
+<p>需要区分两个概念：</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>作用域</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>信号处置方式（disposition）</td>
+<td>进程级</td>
+<td>决定信号到达后是默认处理、忽略，还是调用处理函数</td>
+</tr>
+<tr>
+<td>信号屏蔽字（signal mask）</td>
+<td>线程级</td>
+<td>决定当前线程暂时阻塞哪些信号</td>
+</tr>
+</tbody></table>
+<p>因此，多线程程序中所有线程共享同一个 <code>sigaction()</code> 配置，但每个线程拥有独立的信号屏蔽字。</p>
+<h3 id="2-1-阻塞不等于丢弃"><a href="#2-1-阻塞不等于丢弃" class="headerlink" title="2.1 阻塞不等于丢弃"></a>2.1 阻塞不等于丢弃</h3><p>信号被阻塞时不会立即执行处理函数，而是进入 pending 状态。以后解除阻塞时，pending 信号才会被递送。</p>
+<p>标准信号通常不排队。同一种标准信号在阻塞期间连续到达多次，通常只保留一个 pending 标记。因此，Signal 适合表达“需要唤醒”，不适合表达“累计发生了 N 次任务”。</p>
+<h3 id="2-2-为什么默认选择-SIGUSR1"><a href="#2-2-为什么默认选择-SIGUSR1" class="headerlink" title="2.2 为什么默认选择 SIGUSR1"></a>2.2 为什么默认选择 <code>SIGUSR1</code></h3><p><code>SIGUSR1</code> 和 <code>SIGUSR2</code> 是留给应用自定义用途的标准信号。调用者传入 <code>0</code> 时选择 <code>SIGUSR1</code>，只是提供一个默认值。</p>
+<p>但 <code>SIGUSR1</code> 的默认动作是终止进程，所以必须先安装处理函数，再允许其他线程发送该信号。如果应用的其他模块已经占用 <code>SIGUSR1</code>，应传入一个没有冲突的信号编号。</p>
+<h2 id="3-这套唤醒机制如何工作"><a href="#3-这套唤醒机制如何工作" class="headerlink" title="3. 这套唤醒机制如何工作"></a>3. 这套唤醒机制如何工作</h2><p>完整机制分成五步：</p>
+<ol>
+<li>使用 <code>sigaction()</code> 安装一个空处理函数；</li>
+<li>在线程正常执行期间阻塞唤醒信号；</li>
+<li>调用 <code>epoll_pwait()</code> 时，在保留其他屏蔽状态的前提下临时解除唤醒信号；</li>
+<li>其他线程使用 <code>pthread_kill()</code> 定向发送信号；</li>
+<li><code>epoll_pwait()</code> 被信号处理函数中断，以 <code>EINTR</code> 返回。</li>
+</ol>
+<p>可以把它类比为软件中断：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">signo              软件中断号</span><br><span class="line">sigaction()        安装中断入口</span><br><span class="line">pthread_sigmask()  正常阶段关闭该中断</span><br><span class="line">epoll_pwait()      等待阶段原子地仅开放该中断</span><br><span class="line">pthread_kill()     向指定线程触发中断</span><br><span class="line">EINTR              阻塞等待被唤醒后的返回状态</span><br></pre></td></tr></table></figure>
+
+<h2 id="4-为什么安装“空处理函数”，而不是直接忽略"><a href="#4-为什么安装“空处理函数”，而不是直接忽略" class="headerlink" title="4. 为什么安装“空处理函数”，而不是直接忽略"></a>4. 为什么安装“空处理函数”，而不是直接忽略</h2><p>典型处理函数如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">wake_signal_handler</span><span class="params">(<span class="type">int</span> signo)</span></span><br><span class="line">&#123;</span><br><span class="line">    (<span class="type">void</span>)signo;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这个函数不处理业务，只负责让信号完成一次实际递送。</p>
+<p>它与下面的写法不是同一回事：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">act.sa_handler = SIG_IGN;</span><br></pre></td></tr></table></figure>
+
+<p><code>SIG_IGN</code> 表示让内核忽略信号，而空处理函数表示捕获信号、进入处理函数，然后立即返回。这里需要后者，因为唤醒依赖“等待调用被信号处理函数中断”这一行为。</p>
+<p>空处理函数还符合信号处理函数的安全原则：不加锁、不分配内存、不执行格式化输出，也不访问复杂共享对象。</p>
+<h2 id="5-为什么要先阻塞，再在等待期间解除阻塞"><a href="#5-为什么要先阻塞，再在等待期间解除阻塞" class="headerlink" title="5. 为什么要先阻塞，再在等待期间解除阻塞"></a>5. 为什么要先阻塞，再在等待期间解除阻塞</h2><p>初看可能会觉得：既然希望 Signal 唤醒线程，直接保持信号不阻塞即可。这样做会引入时序问题。</p>
+<h3 id="5-1-不阻塞时的问题"><a href="#5-1-不阻塞时的问题" class="headerlink" title="5.1 不阻塞时的问题"></a>5.1 不阻塞时的问题</h3><p>Signal 可能在轮询线程执行普通代码时到达：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">检查任务队列为空</span><br><span class="line">收到 Signal，处理函数执行并返回</span><br><span class="line">进入 epoll_wait() 无限等待</span><br></pre></td></tr></table></figure>
+
+<p>通知已经消费，但线程随后才进入休眠，结果可能一直睡下去。这就是典型的“丢失唤醒”竞态。</p>
+<h3 id="5-2-epoll-pwait-的原子屏蔽字切换"><a href="#5-2-epoll-pwait-的原子屏蔽字切换" class="headerlink" title="5.2 epoll_pwait() 的原子屏蔽字切换"></a>5.2 <code>epoll_pwait()</code> 的原子屏蔽字切换</h3><p><code>epoll_pwait()</code> 可以在进入等待的同时，原子地把线程信号屏蔽字替换为指定集合；函数返回后，再恢复原屏蔽字。</p>
+<p>下面的调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">n = epoll_pwait(epfd, events, maxevents, timeout, &amp;wait_mask);</span><br></pre></td></tr></table></figure>
+
+<p>在语义上近似于：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">pthread_sigmask(SIG_SETMASK, &amp;wait_mask, &amp;old_mask);</span><br><span class="line">n = epoll_wait(epfd, events, maxevents, timeout);</span><br><span class="line">pthread_sigmask(SIG_SETMASK, &amp;old_mask, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p>这里有一个容易忽略的关键点：<code>wait_mask</code> 是等待期间的<strong>完整信号屏蔽字</strong>，不是“需要额外解除的信号集合”。如果直接执行：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sigemptyset(&amp;wait_mask);</span><br></pre></td></tr></table></figure>
+
+<p>那么 <code>epoll_pwait()</code> 等待期间会临时解除所有可屏蔽信号，而不只是专用唤醒信号。只有在程序明确希望等待期间开放全部信号时，才应传入空集合。</p>
+<p>更稳妥的通用写法是复制当前线程屏蔽字，再只删除专用唤醒信号：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">sigset_t</span> wait_mask;</span><br><span class="line"><span class="type">int</span> err = pthread_sigmask(SIG_SETMASK, <span class="literal">NULL</span>, &amp;wait_mask);</span><br><span class="line"><span class="keyword">if</span> (err != <span class="number">0</span>)</span><br><span class="line">    <span class="keyword">return</span> err;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (sigdelset(&amp;wait_mask, wake_signo) == <span class="number">-1</span>)</span><br><span class="line">    <span class="keyword">return</span> errno;</span><br><span class="line"></span><br><span class="line">n = epoll_pwait(epfd, events, maxevents, timeout, &amp;wait_mask);</span><br></pre></td></tr></table></figure>
+
+<p>这样，轮询线程原本阻塞的其他信号在等待期间仍保持阻塞，只有 <code>wake_signo</code> 被临时开放。</p>
+<p>关键区别是 <code>epoll_pwait()</code> 将“替换屏蔽字”和“开始等待”作为一个原子操作完成，中间没有可被另一个线程插入的竞态窗口。</p>
+<p>如果唤醒信号在进入等待前已经到达，由于它当时被阻塞，会保持 pending。<code>epoll_pwait()</code> 原子开放该信号后，pending 信号会立即递送，等待调用随即返回。</p>
+<h2 id="6-io-poll-init-逐段解析"><a href="#6-io-poll-init-逐段解析" class="headerlink" title="6. io_poll_init() 逐段解析"></a>6. <code>io_poll_init()</code> 逐段解析</h2><p>下面按照初始化顺序解释代码。为保持内容独立，条件编译宏和辅助接口仅按其通用职责描述。</p>
+<h3 id="6-1-检查必需参数"><a href="#6-1-检查必需参数" class="headerlink" title="6.1 检查必需参数"></a>6.1 检查必需参数</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">assert(poll);</span><br><span class="line">assert(ctx);</span><br></pre></td></tr></table></figure>
+
+<p><code>assert()</code> 用于捕获程序设计错误：调用者必须提供有效的轮询对象和上下文。</p>
+<p>它通常只适合调试期契约检查。定义 <code>NDEBUG</code> 后，断言可能被编译器移除，因此它不能替代面向外部输入的运行时校验。</p>
+<h3 id="6-2-选择默认唤醒信号"><a href="#6-2-选择默认唤醒信号" class="headerlink" title="6.2 选择默认唤醒信号"></a>6.2 选择默认唤醒信号</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!signo)</span><br><span class="line">    signo = SIGUSR1;</span><br></pre></td></tr></table></figure>
+
+<p>含义是：</p>
+<ul>
+<li>调用者传入非零值：使用调用者指定的信号；</li>
+<li>调用者传入 <code>0</code>：使用默认的 <code>SIGUSR1</code>。</li>
+</ul>
+<p>随后保存到对象中：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">poll-&gt;signo = signo;</span><br></pre></td></tr></table></figure>
+
+<p>以后执行唤醒操作时，需要读取这个编号并发送给目标线程。</p>
+<h3 id="6-3-保存首个失败原因"><a href="#6-3-保存首个失败原因" class="headerlink" title="6.3 保存首个失败原因"></a>6.3 保存首个失败原因</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> errsv = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>初始化过程包含多个系统调用和线程库调用。失败后还要执行资源回滚，而回滚函数可能改变 <code>errno</code> 或返回新的错误。</p>
+<p>因此代码先保存真正的失败原因，完成清理后再恢复：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">errno = errsv;</span><br><span class="line"><span class="keyword">return</span> <span class="literal">NULL</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-4-绑定服务接口、上下文和轮询接口"><a href="#6-4-绑定服务接口、上下文和轮询接口" class="headerlink" title="6.4 绑定服务接口、上下文和轮询接口"></a>6.4 绑定服务接口、上下文和轮询接口</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">poll-&gt;svc = (<span class="keyword">struct</span> io_svc)IO_SVC_INIT(&amp;io_poll_svc_vtbl);</span><br><span class="line">poll-&gt;ctx = ctx;</span><br><span class="line">poll-&gt;poll_vptr = &amp;io_poll_poll_vtbl;</span><br></pre></td></tr></table></figure>
+
+<p>从命名和常见对象模型推断，这三行分别用于：</p>
+<ul>
+<li>初始化服务基类，并绑定服务操作表；</li>
+<li>记录对象所属的运行上下文；</li>
+<li>绑定轮询接口的虚函数表。</li>
+</ul>
+<p>这部分属于代码结构层面的推断。精确职责需要结合 <code>IO_SVC_INIT</code>、两个 <code>vtbl</code> 定义以及上下文接口确认。</p>
+<h3 id="6-5-构造-sigaction-配置"><a href="#6-5-构造-sigaction-配置" class="headerlink" title="6.5 构造 sigaction 配置"></a>6.5 构造 <code>sigaction</code> 配置</h3><p>原始逻辑等价于：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">sigaction</span> <span class="title">act</span>;</span></span><br><span class="line">act.sa_handler = &amp;wake_signal_handler;</span><br><span class="line">sigemptyset(&amp;act.sa_mask);</span><br><span class="line">act.sa_flags = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>更稳妥的通用写法是先清零：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">sigaction</span> <span class="title">act</span> =</span> &#123; <span class="number">0</span> &#125;;</span><br><span class="line">act.sa_handler = &amp;wake_signal_handler;</span><br><span class="line">sigemptyset(&amp;act.sa_mask);</span><br><span class="line">act.sa_flags = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>各成员作用如下。</p>
+<h4 id="act-sa-handler"><a href="#act-sa-handler" class="headerlink" title="act.sa_handler"></a><code>act.sa_handler</code></h4><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">act.sa_handler = &amp;wake_signal_handler;</span><br></pre></td></tr></table></figure>
+
+<p>指定单参数信号处理函数。Signal 到达目标线程时，内核安排该线程进入这个函数。</p>
+<p>建议避免使用 <code>sig_ign</code> 之类容易与 <code>SIG_IGN</code> 混淆的名称。<code>wake_signal_handler</code> 更准确地表达“捕获但不执行工作”。</p>
+<h4 id="sigemptyset-act-sa-mask"><a href="#sigemptyset-act-sa-mask" class="headerlink" title="sigemptyset(&amp;act.sa_mask)"></a><code>sigemptyset(&amp;act.sa_mask)</code></h4><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sigemptyset(&amp;act.sa_mask);</span><br></pre></td></tr></table></figure>
+
+<p>清空“处理函数执行期间需要额外阻塞的信号集合”。</p>
+<p>即使该集合为空，当前正在处理的信号通常仍会在处理函数执行期间自动阻塞，除非启用 <code>SA_NODEFER</code>。</p>
+<h4 id="act-sa-flags-0"><a href="#act-sa-flags-0" class="headerlink" title="act.sa_flags = 0"></a><code>act.sa_flags = 0</code></h4><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">act.sa_flags = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>不启用额外选项，例如 <code>SA_SIGINFO</code>、<code>SA_NODEFER</code> 或 <code>SA_RESTART</code>。</p>
+<p>在 Linux 上，<code>epoll_wait()</code> 和 <code>epoll_pwait()</code> 被信号处理函数中断后不会因为 <code>SA_RESTART</code> 自动重启，而是以 <code>EINTR</code> 返回。因此，这条唤醒路径应显式处理 <code>errno == EINTR</code>。</p>
+<h3 id="6-6-安装处理函数并保存旧配置"><a href="#6-6-安装处理函数并保存旧配置" class="headerlink" title="6.6 安装处理函数并保存旧配置"></a>6.6 安装处理函数并保存旧配置</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (sigaction(poll-&gt;signo, &amp;act, &amp;poll-&gt;oact) == <span class="number">-1</span>) &#123;</span><br><span class="line">    errsv = errno;</span><br><span class="line">    <span class="keyword">goto</span> error_sigaction;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>参数含义：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">sigaction(</span><br><span class="line">    poll-&gt;signo,  <span class="comment">/* 要配置的信号 */</span></span><br><span class="line">    &amp;act,         <span class="comment">/* 新的处置方式 */</span></span><br><span class="line">    &amp;poll-&gt;oact   <span class="comment">/* 保存旧的处置方式 */</span></span><br><span class="line">);</span><br></pre></td></tr></table></figure>
+
+<p>成功后，<code>poll-&gt;oact</code> 保存初始化之前的信号配置，销毁对象或后续初始化失败时可以恢复。</p>
+<p>必须注意：信号处置方式是进程级资源。一个线程安装处理函数，会影响整个进程对该信号的处理方式。</p>
+<h3 id="6-7-构造只包含唤醒信号的集合"><a href="#6-7-构造只包含唤醒信号的集合" class="headerlink" title="6.7 构造只包含唤醒信号的集合"></a>6.7 构造只包含唤醒信号的集合</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">sigset_t</span> <span class="built_in">set</span>;</span><br><span class="line">sigemptyset(&amp;<span class="built_in">set</span>);</span><br><span class="line">sigaddset(&amp;<span class="built_in">set</span>, poll-&gt;signo);</span><br></pre></td></tr></table></figure>
+
+<p>执行完成后：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">set = &#123; poll-&gt;signo &#125;</span><br></pre></td></tr></table></figure>
+
+<p>各调用作用：</p>
+<table>
+<thead>
+<tr>
+<th>调用</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sigset_t set</code></td>
+<td>定义一个信号集合对象</td>
+</tr>
+<tr>
+<td><code>sigemptyset(&amp;set)</code></td>
+<td>清空集合</td>
+</tr>
+<tr>
+<td><code>sigaddset(&amp;set, signo)</code></td>
+<td>将指定信号加入集合</td>
+</tr>
+</tbody></table>
+<h3 id="6-8-在线程正常运行期间阻塞唤醒信号"><a href="#6-8-在线程正常运行期间阻塞唤醒信号" class="headerlink" title="6.8 在线程正常运行期间阻塞唤醒信号"></a>6.8 在线程正常运行期间阻塞唤醒信号</h3><p>多线程程序使用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">errsv = pthread_sigmask(SIG_BLOCK, &amp;<span class="built_in">set</span>, &amp;poll-&gt;oset);</span><br></pre></td></tr></table></figure>
+
+<p>单线程程序可以使用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (sigprocmask(SIG_BLOCK, &amp;<span class="built_in">set</span>, &amp;poll-&gt;oset) == <span class="number">-1</span>)</span><br><span class="line">    errsv = errno;</span><br></pre></td></tr></table></figure>
+
+<p><code>SIG_BLOCK</code> 表示把 <code>set</code> 中的信号加入当前线程的屏蔽字。<code>poll-&gt;oset</code> 保存修改前的完整屏蔽字，便于以后恢复。</p>
+<p>两组接口的错误模型不同：</p>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th align="right">成功</th>
+<th>失败</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sigprocmask()</code></td>
+<td align="right">返回 <code>0</code></td>
+<td>返回 <code>-1</code>，错误写入 <code>errno</code></td>
+</tr>
+<tr>
+<td><code>pthread_sigmask()</code></td>
+<td align="right">返回 <code>0</code></td>
+<td>直接返回错误码</td>
+</tr>
+</tbody></table>
+<p>因此不能统一写成读取 <code>errno</code>。</p>
+<p>新线程会继承创建者当时的信号屏蔽字。实际工程中应明确：哪个线程执行初始化、哪个线程进入轮询、轮询线程何时被创建。否则可能出现“处理函数已经安装，但目标线程并未阻塞该信号”的配置偏差。</p>
+<h3 id="6-9-将-epoll-文件描述符初始化为无效值"><a href="#6-9-将-epoll-文件描述符初始化为无效值" class="headerlink" title="6.9 将 epoll 文件描述符初始化为无效值"></a>6.9 将 epoll 文件描述符初始化为无效值</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">poll-&gt;epfd = <span class="number">-1</span>;</span><br></pre></td></tr></table></figure>
+
+<p><code>-1</code> 表示当前没有有效 epoll 实例。这样，关闭函数可以安全判断资源是否已经创建：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (poll-&gt;epfd == <span class="number">-1</span>)</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-10-初始化互斥锁"><a href="#6-10-初始化互斥锁" class="headerlink" title="6.10 初始化互斥锁"></a>6.10 初始化互斥锁</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">errsv = pthread_mutex_init(&amp;poll-&gt;mtx, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p><code>NULL</code> 表示使用默认互斥锁属性。</p>
+<p>结合结构成员推断，该锁通常用于保护监听树、监听计数以及轮询和控制路径之间的共享状态。精确保护范围仍应以所有加锁点为准，而不能只根据成员位置判断。</p>
+<p>与其他线程函数一样，<code>pthread_mutex_init()</code> 失败时直接返回错误码。</p>
+<h3 id="6-11-初始化监听项索引和计数"><a href="#6-11-初始化监听项索引和计数" class="headerlink" title="6.11 初始化监听项索引和计数"></a>6.11 初始化监听项索引和计数</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rbtree_init(&amp;poll-&gt;tree, &amp;io_fd_cmp);</span><br><span class="line">poll-&gt;nwatch = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>从命名推断：</p>
+<ul>
+<li><code>tree</code> 是按文件描述符或监听对象排序的红黑树；</li>
+<li><code>io_fd_cmp</code> 是键比较函数；</li>
+<li><code>nwatch</code> 记录当前监听项数量。</li>
+</ul>
+<p>红黑树提供对数复杂度的插入、删除和查找，适合管理动态变化的监听对象。</p>
+<h3 id="6-12-创建-epoll-实例"><a href="#6-12-创建-epoll-实例" class="headerlink" title="6.12 创建 epoll 实例"></a>6.12 创建 epoll 实例</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (io_poll_open(poll) == <span class="number">-1</span>) &#123;</span><br><span class="line">    errsv = errno;</span><br><span class="line">    <span class="keyword">goto</span> error_open;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>典型实现为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span></span><br><span class="line"><span class="title function_">io_poll_open</span><span class="params">(<span class="type">io_poll_t</span> *poll)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">if</span> (io_poll_close(poll) == <span class="number">-1</span>)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">    poll-&gt;epfd = epoll_create1(EPOLL_CLOEXEC);</span><br><span class="line">    <span class="keyword">return</span> poll-&gt;epfd == <span class="number">-1</span> ? <span class="number">-1</span> : <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里完成三件事：</p>
+<ol>
+<li>关闭可能残留的旧实例；</li>
+<li>创建新的 epoll 内核对象；</li>
+<li>把返回的文件描述符保存到 <code>poll-&gt;epfd</code>。</li>
+</ol>
+<p><code>EPOLL_CLOEXEC</code> 会为新文件描述符设置 close-on-exec 标志，防止执行新程序映像时意外继承该描述符。</p>
+<h3 id="6-13-注册到运行上下文"><a href="#6-13-注册到运行上下文" class="headerlink" title="6.13 注册到运行上下文"></a>6.13 注册到运行上下文</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_ctx_insert(poll-&gt;ctx, &amp;poll-&gt;svc);</span><br></pre></td></tr></table></figure>
+
+<p>从接口命名推断，这一步把轮询服务注册到上下文的服务集合中，以便上下文统一管理生命周期、停止流程或进程派生后的资源恢复。</p>
+<p>精确行为需要查看 <code>io_ctx_insert()</code> 和服务操作表定义。</p>
+<h3 id="6-14-成功返回"><a href="#6-14-成功返回" class="headerlink" title="6.14 成功返回"></a>6.14 成功返回</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> poll;</span><br></pre></td></tr></table></figure>
+
+<p>返回初始化完成的对象。此时至少已经完成：</p>
+<ul>
+<li>信号处理函数安装；</li>
+<li>当前线程信号屏蔽字调整；</li>
+<li>互斥锁初始化；</li>
+<li>监听索引初始化；</li>
+<li>epoll 实例创建；</li>
+<li>上下文注册。</li>
+</ul>
+<h2 id="7-错误回滚为什么使用-goto"><a href="#7-错误回滚为什么使用-goto" class="headerlink" title="7. 错误回滚为什么使用 goto"></a>7. 错误回滚为什么使用 <code>goto</code></h2><p>初始化函数按顺序获得多个资源，失败后必须按相反顺序释放：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">初始化：处理函数 → 屏蔽字 → 互斥锁 → epoll → 上下文注册</span><br><span class="line">回滚：            互斥锁 ← 屏蔽字 ← 处理函数</span><br></pre></td></tr></table></figure>
+
+<p>对应代码：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">error_open:</span><br><span class="line">    pthread_mutex_destroy(&amp;poll-&gt;mtx);</span><br><span class="line">error_init_mtx:</span><br><span class="line">    pthread_sigmask(SIG_SETMASK, &amp;poll-&gt;oset, <span class="literal">NULL</span>);</span><br><span class="line">error_sigmask:</span><br><span class="line">    sigaction(poll-&gt;signo, &amp;poll-&gt;oact, <span class="literal">NULL</span>);</span><br><span class="line">error_sigaction:</span><br><span class="line">    errno = errsv;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">NULL</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这种 <code>goto</code> 不是任意跳转，而是 C 语言中常见的单出口资源回滚模式。每个标签只释放此前已经成功获得的资源，避免重复清理和多层嵌套。</p>
+<h3 id="7-1-恢复原信号屏蔽字"><a href="#7-1-恢复原信号屏蔽字" class="headerlink" title="7.1 恢复原信号屏蔽字"></a>7.1 恢复原信号屏蔽字</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">pthread_sigmask(SIG_SETMASK, &amp;poll-&gt;oset, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p><code>SIG_SETMASK</code> 不是只解除一个信号，而是把当前线程的整个屏蔽字恢复为初始化前保存的值。</p>
+<h3 id="7-2-恢复原信号处置方式"><a href="#7-2-恢复原信号处置方式" class="headerlink" title="7.2 恢复原信号处置方式"></a>7.2 恢复原信号处置方式</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sigaction(poll-&gt;signo, &amp;poll-&gt;oact, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p>把进程对该信号的处理方式恢复为初始化之前的状态。</p>
+<h3 id="7-3-恢复真正的错误码"><a href="#7-3-恢复真正的错误码" class="headerlink" title="7.3 恢复真正的错误码"></a>7.3 恢复真正的错误码</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">errno = errsv;</span><br></pre></td></tr></table></figure>
+
+<p>确保调用者观察到初始化失败原因，而不是某个清理操作产生的次级状态。</p>
+<h2 id="8-唤醒函数应如何设计"><a href="#8-唤醒函数应如何设计" class="headerlink" title="8. 唤醒函数应如何设计"></a>8. 唤醒函数应如何设计</h2><p>初始化只建立信号机制，真正唤醒通常还需要一个类似函数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span></span><br><span class="line"><span class="title function_">io_poll_wake</span><span class="params">(<span class="type">pthread_t</span> thread, <span class="type">int</span> signo)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">int</span> err = pthread_kill(thread, signo);</span><br><span class="line">    <span class="keyword">if</span> (err != <span class="number">0</span>)</span><br><span class="line">        <span class="keyword">return</span> err;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>更完整的控制路径应先更新共享状态，再发送信号：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">pthread_mutex_lock(&amp;poll-&gt;mtx);</span><br><span class="line">poll-&gt;stop_requested = <span class="number">1</span>;</span><br><span class="line">pthread_mutex_unlock(&amp;poll-&gt;mtx);</span><br><span class="line"></span><br><span class="line">err = pthread_kill(poll_thread, poll-&gt;signo);</span><br></pre></td></tr></table></figure>
+
+<p>顺序很重要：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">先发布状态，再发送唤醒通知</span><br></pre></td></tr></table></figure>
+
+<p>如果先发送 Signal，轮询线程可能先醒来、检查到旧状态，然后再次进入等待。</p>
+<p>若共享状态使用 C11 原子变量，则应根据数据依赖选择适当的 release&#x2F;acquire 内存序；Signal 本身不应被当作完整的跨线程内存同步协议。</p>
+<h2 id="9-轮询函数应如何处理-EINTR"><a href="#9-轮询函数应如何处理-EINTR" class="headerlink" title="9. 轮询函数应如何处理 EINTR"></a>9. 轮询函数应如何处理 <code>EINTR</code></h2><p>事件等待代码不应把所有 <code>-1</code> 都视为致命错误：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> n = epoll_pwait(epfd, events, maxevents, timeout, &amp;wait_mask);</span><br><span class="line"><span class="keyword">if</span> (n == <span class="number">-1</span>) &#123;</span><br><span class="line">    <span class="keyword">if</span> (errno == EINTR) &#123;</span><br><span class="line">        <span class="comment">/* 被 Signal 唤醒，重新检查停止标志、任务队列和超时。 */</span></span><br><span class="line">        <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>一个常见循环如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">sigset_t</span> wait_mask;</span><br><span class="line"><span class="type">int</span> err = pthread_sigmask(SIG_SETMASK, <span class="literal">NULL</span>, &amp;wait_mask);</span><br><span class="line"><span class="keyword">if</span> (err != <span class="number">0</span>)</span><br><span class="line">    <span class="keyword">return</span> err;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (sigdelset(&amp;wait_mask, wake_signo) == <span class="number">-1</span>)</span><br><span class="line">    <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> (;;) &#123;</span><br><span class="line">    <span class="keyword">if</span> (stop_requested())</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">    drain_pending_tasks();</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> n = epoll_pwait(epfd, events, maxevents, next_timeout(), &amp;wait_mask);</span><br><span class="line">    <span class="keyword">if</span> (n == <span class="number">-1</span>) &#123;</span><br><span class="line">        <span class="keyword">if</span> (errno == EINTR)</span><br><span class="line">            <span class="keyword">continue</span>;</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    dispatch_ready_events(events, n);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>EINTR</code> 在这里是正常控制流，不是异常故障。</p>
+<h2 id="11-常见误区与风险"><a href="#11-常见误区与风险" class="headerlink" title="11. 常见误区与风险"></a>11. 常见误区与风险</h2><h3 id="12-1-把-Signal-当作任务队列"><a href="#12-1-把-Signal-当作任务队列" class="headerlink" title="12.1 把 Signal 当作任务队列"></a>12.1 把 Signal 当作任务队列</h3><p>标准信号不会为每次投递保留一个独立计数。连续发送多次同类信号可能合并成一次 pending 状态。</p>
+<p>正确设计是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">任务队列保存任务</span><br><span class="line">Signal 只负责叫醒消费者</span><br></pre></td></tr></table></figure>
+
+<h3 id="11-2-在处理函数中加锁或打印"><a href="#11-2-在处理函数中加锁或打印" class="headerlink" title="11.2 在处理函数中加锁或打印"></a>11.2 在处理函数中加锁或打印</h3><p>异步 Signal 可能打断线程正在执行的任意代码。如果处理函数再次获取同一把锁，可能死锁；调用非异步信号安全函数，也可能破坏库内部状态。</p>
+<p>本场景的处理函数保持为空，是刻意的安全设计。</p>
+<h3 id="11-3-忽略处理函数的进程级影响"><a href="#11-3-忽略处理函数的进程级影响" class="headerlink" title="11.3 忽略处理函数的进程级影响"></a>11.3 忽略处理函数的进程级影响</h3><p><code>sigaction()</code> 改变整个进程的信号处置方式。如果多个模块独立占用同一个信号，后初始化者会覆盖前一个配置。</p>
+<p>多个轮询对象还可能产生恢复顺序问题：对象 A、B 依次保存旧配置，若销毁顺序不是严格逆序，恢复结果可能不符合预期。</p>
+<p>应由进程级信号管理模块统一分配和维护专用信号，或改用文件描述符型唤醒机制。</p>
+<h3 id="11-4-在错误线程上修改屏蔽字"><a href="#11-4-在错误线程上修改屏蔽字" class="headerlink" title="11.4 在错误线程上修改屏蔽字"></a>11.4 在错误线程上修改屏蔽字</h3><p><code>pthread_sigmask()</code> 只修改调用线程。初始化线程、轮询线程和创建线程之间的关系必须清晰。</p>
+<p>常用做法是：</p>
+<ol>
+<li>在创建工作线程前，由主线程阻塞专用信号；</li>
+<li>工作线程继承该屏蔽字；</li>
+<li>只有在 <code>epoll_pwait()</code> 的等待窗口内临时解除专用唤醒信号，同时保留其他信号的屏蔽状态。</li>
+</ol>
+<h3 id="11-5-误认为-pthread-kill-会终止线程"><a href="#11-5-误认为-pthread-kill-会终止线程" class="headerlink" title="11.5 误认为 pthread_kill() 会终止线程"></a>11.5 误认为 <code>pthread_kill()</code> 会终止线程</h3><p>函数名中的 <code>kill</code> 容易误导。它的作用是向同一进程中的指定 POSIX 线程发送一个信号。最终行为由该信号的进程级处置方式决定。</p>
+<p>在本机制中，已安装空处理函数，所以目标线程只是被中断和唤醒。</p>
+<h3 id="11-6-使用已经结束生命周期的线程标识"><a href="#11-6-使用已经结束生命周期的线程标识" class="headerlink" title="11.6 使用已经结束生命周期的线程标识"></a>11.6 使用已经结束生命周期的线程标识</h3><p>向已经退出的线程发送信号属于高风险行为。必须保证目标 <code>pthread_t</code> 仍然有效，并在退出、销毁和唤醒之间建立明确的生命周期同步。</p>
+<h2 id="12-什么时候考虑其他唤醒机制"><a href="#12-什么时候考虑其他唤醒机制" class="headerlink" title="12. 什么时候考虑其他唤醒机制"></a>12. 什么时候考虑其他唤醒机制</h2><p>Linux 事件循环还常用以下机制：</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>优点</th>
+<th>局限</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Signal + <code>epoll_pwait()</code></td>
+<td>可定向中断指定线程；不需要额外写入监听描述符</td>
+<td>处置方式为进程级；屏蔽字管理复杂；标准信号不计数</td>
+<td>已有 Signal 调度模型，或需要定向打断等待</td>
+</tr>
+<tr>
+<td><code>eventfd</code></td>
+<td>本身就是文件描述符；可直接加入 epoll；可累计计数</td>
+<td>Linux 专用；需要读写描述符</td>
+<td>进程内事件循环唤醒、任务通知</td>
+</tr>
+<tr>
+<td>pipe</td>
+<td>可移植性较好；可携带少量字节</td>
+<td>需要处理容量、非阻塞和排空</td>
+<td>跨平台自管事件循环</td>
+</tr>
+<tr>
+<td><code>signalfd</code></td>
+<td>把 Signal 转化为可读文件描述符；统一进入 epoll</td>
+<td>Linux 专用；仍需管理信号屏蔽</td>
+<td>需要同步读取信号信息</td>
+</tr>
+</tbody></table>
+<p>对于新设计，如果没有必须使用异步 Signal 的约束，<code>eventfd</code> 往往更容易封装，因为它不会修改进程级信号处理函数，并且天然属于文件描述符事件模型。</p>
+<h2 id="13-最终理解"><a href="#13-最终理解" class="headerlink" title="13. 最终理解"></a>13. 最终理解</h2><p>这段初始化代码搭建的不是一个“信号业务处理器”，而是事件循环的线程唤醒设施：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">空处理函数              让 Signal 可被实际捕获</span><br><span class="line">线程信号屏蔽字          限制 Signal 的递送时机</span><br><span class="line">pending 状态            保存提前到达的唤醒提示</span><br><span class="line">epoll_pwait()            原子替换屏蔽字并进入等待</span><br><span class="line">pthread_kill()           定向唤醒指定轮询线程</span><br><span class="line">EINTR                     通知事件循环重新检查状态</span><br><span class="line">共享状态或任务队列       保存真正需要处理的内容</span><br></pre></td></tr></table></figure>
+
+<p>理解这套机制的关键不是“Signal 处理了什么”，而是：</p>
+<blockquote>
+<p>Signal 什么也不处理，它只负责打断休眠；事件循环醒来后，再根据可靠的共享状态决定下一步动作。</p>
+</blockquote>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><p>以下资料均来自 Linux man-pages 项目，访问日期：2026-07-16。</p>
+<ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man7/signal.7.html">signal(7): overview of signals</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man2/sigaction.2.html">sigaction(2): examine and change a signal action</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man3/pthread_sigmask.3.html">pthread_sigmask(3): examine and change mask of blocked signals</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man2/sigprocmask.2.html">sigprocmask(2): examine and change blocked signals</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man2/epoll_wait.2.html">epoll_wait(2): wait for an I&#x2F;O event on an epoll file descriptor</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man3/pthread_kill.3.html">pthread_kill(3): send a signal to a thread</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://man7.org/linux/man-pages/man2/epoll_create.2.html">epoll_create(2): open an epoll file descriptor</a></li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/dd28a911/">https://wdfk-prog.space/posts/dd28a911/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/user/">user</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/04.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/posts/a28edf5f/" title="linux glibc 中 errno 的原理、线程隔离与实现路径"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">linux glibc 中 errno 的原理、线程隔离与实现路径</div></div><div class="info-2"><div class="info-item-1">  Linux&#x2F;glibc 中 errno 的原理、线程隔离与实现路径@[toc]  本文面向已经接触 C、Linux 系统调用、pthread 或 RTOS，但对错误码如何产生、传递和隔离仍有疑问的开发者。文章从用户态接口、Linux 内核、C 运行库和 RTOS 四个层次，逐步说明 errno 的宏展开、线程局部存储、系统调用错误转换，以及不同操作系统的错误返回模型。  结论先行1errsv = errno;  这行代码不会在执行时向 Linux 内核查询最新错误码。 在 glibc 环境中，errno 通常是一个宏： 1#define errno (*__errno_location())  因此，代码近似展开为： 1errsv = *__errno_location();  __errno_location() 返回当前线程专属的 errno 存储地址，解引用后得到该线程当前保存的错误码。 这个错误码通常已经由下列某一方写入：  glibc 的系统调用包装层； 某个纯用户态库函数； 应用程序自身； 某个将其他错误模型转换为 errno 模型的兼容层。  所以最准...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/a28edf5f/" title="linux glibc 中 errno 的原理、线程隔离与实现路径"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-16</div><div class="info-item-2">linux glibc 中 errno 的原理、线程隔离与实现路径</div></div><div class="info-2"><div class="info-item-1">  Linux&#x2F;glibc 中 errno 的原理、线程隔离与实现路径@[toc]  本文面向已经接触 C、Linux 系统调用、pthread 或 RTOS，但对错误码如何产生、传递和隔离仍有疑问的开发者。文章从用户态接口、Linux 内核、C 运行库和 RTOS 四个层次，逐步说明 errno 的宏展开、线程局部存储、系统调用错误转换，以及不同操作系统的错误返回模型。  结论先行1errsv = errno;  这行代码不会在执行时向 Linux 内核查询最新错误码。 在 glibc 环境中，errno 通常是一个宏： 1#define errno (*__errno_location())  因此，代码近似展开为： 1errsv = *__errno_location();  __errno_location() 返回当前线程专属的 errno 存储地址，解引用后得到该线程当前保存的错误码。 这个错误码通常已经由下列某一方写入：  glibc 的系统调用包装层； 某个纯用户态库函数； 应用程序自身； 某个将其他错误模型转换为 errno 模型的兼容层。  所以最准...</div></div></div></a><a class="pagination-related" href="/posts/be154ebb/" title="GCC"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-01-18</div><div class="info-item-2">GCC</div></div><div class="info-2"><div class="info-item-1">自定义指令先给结论，再给必要说明。内容较长或包含多个独立问题时，用 Markdown 的 ##&#x2F;###、递进列表和表格组织,并且提供文档既可,不要直接输出；适合交付文件时提供下载链接。代码问题优先给可落地修改，不只讲原则。 代码修改要求：  优先保证可执行性、一致性和最小必要改动。 保持原有排版和风格，避免无关重排、无关重命名和大面积格式化。 新增或修改函数、结构体、枚举、宏、函数指针、重要变量、参数、返回值等时，补充或修正 Doxygen 风格注释。 注释语言参考同文件或相邻代码；若旧注释不统一、不规范、信息不足或与代码不一致，仅对本次变更相关处用英文 Doxygen 修正，不大面积改写旧注释。 注释与代码对齐；相邻注释风格一致；宏续行反斜杠尽量对齐；同类声明尽量整齐。 避免无意义换行，仅当单行明显过长时再换行，目标是一行超过约 135字节再考虑换行。  条件编译要求：  对 #if&#x2F;#ifdef&#x2F;#ifndef&#x2F;#elif&#x2F;#else&#x2F;#endif 相关代码块，如需补充或修正注释，必须保证 #endif 注释与起始条...</div></div></div></a><a class="pagination-related" href="/posts/d8c38d13/" title="dmaengine"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-21</div><div class="info-item-2">dmaengine</div></div><div class="info-2"><div class="info-item-1">   [toc]  drivers&#x2F;dma&#x2F;dmaengine.hstruct dma_chan &#x2F; struct dma_chan_dev: DMA 通道对象与其 sysfs 设备包装对象的语义建模 struct dma_chan：DMAengine 框架中“可被客户端申请与提交事务”的通道抽象，承载运行期状态（cookie、完成度、客户端引用计数、路由信息等）以及与上层可见性的关联（sysfs&#x2F;debugfs 相关字段）。 struct dma_chan_dev：把通道映射为 Linux 设备模型中的一个 struct device，用于 sysfs 节点呈现与生命周期管理；同时保存 dma_chan * 的反向指针（也就是你前面讨论的 chan-&gt;dev-&gt;chan 这一条关键可见性路径）。  这两个结构体之所以分开，是因为 DMAengine 需要同时满足：  运行期快速访问与调度（dma_chan） 设备模型可见性、热插拔&#x2F;解绑生命周期、sysfs 目录树一致性（dma_chan_dev + struct d...</div></div></div></a><a class="pagination-related" href="/posts/dd631879/" title="kallsyms"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-06</div><div class="info-item-2">kallsyms</div></div><div class="info-2"><div class="info-item-1">   [TOC] linux-gnu&#x2F;bits&#x2F;getopt_ext.h getopt_long: GNU 命令行长选项解析接口本代码片段是一个 C 语言头文件（getopt_ext.h，通常被 getopt.h 包含），它定义了 GNU C 库中用于解析命令行参数的 getopt_long 函数及其核心数据结构 struct option。其主要功能是为命令行程序提供一个强大且灵活的机制，使其能够支持并解析长格式的选项（例如，--all-symbols），而不仅仅是传统的单字母短格式选项（如 -a）。 实现原理分析此机制的核心是通过一个描述符结构体数组，将命令行中的字符串与程序内部的变量和行为进行声明式映射。  选项描述符 (struct option): 这是整个机制的核心数据结构。开发者需要创建一个 struct option 类型的数组，数组中的每一个元素都完整地描述了一个长选项：  const char *name: 定义了长选项的名称，即 -- 后面的字符串，例如 &quot;all-symbols&quot;。 int has_arg: 指定该选...</div></div></div></a><a class="pagination-related" href="/posts/c674e474/" title="init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">init</div></div><div class="info-2"><div class="info-item-1">  [TOC]  init&#x2F;init_task.c 内核线程的一个核心特征是：它们没有自己独立的用户地址空间。它们只在内核空间运行，而内核地址空间是所有进程共享的。因此，内核线程不需要一个属于自己的内存描述符 struct mm_struct，所以它们的 task-&gt;mm 指针通常是 NULL  init_task 就是大名鼎鼎的 PID 0 进程，也常被称为 swapper 进程。从它的标志位 .flags &#x3D; PF_KTHREAD 可以看出，它是一个内核线程。  init_task 的调度策略(policy)是 SCHED_NORMAL，这意味着它是一个普通的分时调度任务，而不是实时任务。但是初始化阶段调用了init_idle()，使得它的sched_class 是 SCHED_IDLE，这样它就可以作为 CPU 的空闲任务运行。但是fork出来的其他进程继承的还是 SCHED_NORMAL 策略。  进程的“始祖”：init_task 是系统中所有进程的祖先。在系统启动后，它会创建第一个内核线程 kernel_init（它最终会成为 PID 1 的...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">    [TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">534</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E7%94%A8-POSIX-Signal-%E5%94%A4%E9%86%92-epoll-%E4%BA%8B%E4%BB%B6%E5%BE%AA%E7%8E%AF%EF%BC%9A%E5%8E%9F%E7%90%86%E3%80%81%E9%80%90%E8%A1%8C%E8%A7%A3%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5"><span class="toc-number">1.</span> <span class="toc-text">用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%85%88%E5%BB%BA%E7%AB%8B%E6%95%B4%E4%BD%93%E8%AE%A4%E8%AF%86"><span class="toc-number">1.1.</span> <span class="toc-text">1. 先建立整体认识</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-Signal-%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.</span> <span class="toc-text">2. Signal 到底是什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E9%98%BB%E5%A1%9E%E4%B8%8D%E7%AD%89%E4%BA%8E%E4%B8%A2%E5%BC%83"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 阻塞不等于丢弃</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%BB%98%E8%AE%A4%E9%80%89%E6%8B%A9-SIGUSR1"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 为什么默认选择 SIGUSR1</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E8%BF%99%E5%A5%97%E5%94%A4%E9%86%92%E6%9C%BA%E5%88%B6%E5%A6%82%E4%BD%95%E5%B7%A5%E4%BD%9C"><span class="toc-number">1.3.</span> <span class="toc-text">3. 这套唤醒机制如何工作</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AE%89%E8%A3%85%E2%80%9C%E7%A9%BA%E5%A4%84%E7%90%86%E5%87%BD%E6%95%B0%E2%80%9D%EF%BC%8C%E8%80%8C%E4%B8%8D%E6%98%AF%E7%9B%B4%E6%8E%A5%E5%BF%BD%E7%95%A5"><span class="toc-number">1.4.</span> <span class="toc-text">4. 为什么安装“空处理函数”，而不是直接忽略</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E5%85%88%E9%98%BB%E5%A1%9E%EF%BC%8C%E5%86%8D%E5%9C%A8%E7%AD%89%E5%BE%85%E6%9C%9F%E9%97%B4%E8%A7%A3%E9%99%A4%E9%98%BB%E5%A1%9E"><span class="toc-number">1.5.</span> <span class="toc-text">5. 为什么要先阻塞，再在等待期间解除阻塞</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E4%B8%8D%E9%98%BB%E5%A1%9E%E6%97%B6%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 不阻塞时的问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-epoll-pwait-%E7%9A%84%E5%8E%9F%E5%AD%90%E5%B1%8F%E8%94%BD%E5%AD%97%E5%88%87%E6%8D%A2"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 epoll_pwait() 的原子屏蔽字切换</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-io-poll-init-%E9%80%90%E6%AE%B5%E8%A7%A3%E6%9E%90"><span class="toc-number">1.6.</span> <span class="toc-text">6. io_poll_init() 逐段解析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E6%A3%80%E6%9F%A5%E5%BF%85%E9%9C%80%E5%8F%82%E6%95%B0"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 检查必需参数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E9%80%89%E6%8B%A9%E9%BB%98%E8%AE%A4%E5%94%A4%E9%86%92%E4%BF%A1%E5%8F%B7"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 选择默认唤醒信号</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E4%BF%9D%E5%AD%98%E9%A6%96%E4%B8%AA%E5%A4%B1%E8%B4%A5%E5%8E%9F%E5%9B%A0"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 保存首个失败原因</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E7%BB%91%E5%AE%9A%E6%9C%8D%E5%8A%A1%E6%8E%A5%E5%8F%A3%E3%80%81%E4%B8%8A%E4%B8%8B%E6%96%87%E5%92%8C%E8%BD%AE%E8%AF%A2%E6%8E%A5%E5%8F%A3"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 绑定服务接口、上下文和轮询接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-%E6%9E%84%E9%80%A0-sigaction-%E9%85%8D%E7%BD%AE"><span class="toc-number">1.6.5.</span> <span class="toc-text">6.5 构造 sigaction 配置</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#act-sa-handler"><span class="toc-number">1.6.5.1.</span> <span class="toc-text">act.sa_handler</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#sigemptyset-act-sa-mask"><span class="toc-number">1.6.5.2.</span> <span class="toc-text">sigemptyset(&amp;act.sa_mask)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#act-sa-flags-0"><span class="toc-number">1.6.5.3.</span> <span class="toc-text">act.sa_flags &#x3D; 0</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-6-%E5%AE%89%E8%A3%85%E5%A4%84%E7%90%86%E5%87%BD%E6%95%B0%E5%B9%B6%E4%BF%9D%E5%AD%98%E6%97%A7%E9%85%8D%E7%BD%AE"><span class="toc-number">1.6.6.</span> <span class="toc-text">6.6 安装处理函数并保存旧配置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-7-%E6%9E%84%E9%80%A0%E5%8F%AA%E5%8C%85%E5%90%AB%E5%94%A4%E9%86%92%E4%BF%A1%E5%8F%B7%E7%9A%84%E9%9B%86%E5%90%88"><span class="toc-number">1.6.7.</span> <span class="toc-text">6.7 构造只包含唤醒信号的集合</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-8-%E5%9C%A8%E7%BA%BF%E7%A8%8B%E6%AD%A3%E5%B8%B8%E8%BF%90%E8%A1%8C%E6%9C%9F%E9%97%B4%E9%98%BB%E5%A1%9E%E5%94%A4%E9%86%92%E4%BF%A1%E5%8F%B7"><span class="toc-number">1.6.8.</span> <span class="toc-text">6.8 在线程正常运行期间阻塞唤醒信号</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-9-%E5%B0%86-epoll-%E6%96%87%E4%BB%B6%E6%8F%8F%E8%BF%B0%E7%AC%A6%E5%88%9D%E5%A7%8B%E5%8C%96%E4%B8%BA%E6%97%A0%E6%95%88%E5%80%BC"><span class="toc-number">1.6.9.</span> <span class="toc-text">6.9 将 epoll 文件描述符初始化为无效值</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-10-%E5%88%9D%E5%A7%8B%E5%8C%96%E4%BA%92%E6%96%A5%E9%94%81"><span class="toc-number">1.6.10.</span> <span class="toc-text">6.10 初始化互斥锁</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-11-%E5%88%9D%E5%A7%8B%E5%8C%96%E7%9B%91%E5%90%AC%E9%A1%B9%E7%B4%A2%E5%BC%95%E5%92%8C%E8%AE%A1%E6%95%B0"><span class="toc-number">1.6.11.</span> <span class="toc-text">6.11 初始化监听项索引和计数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-12-%E5%88%9B%E5%BB%BA-epoll-%E5%AE%9E%E4%BE%8B"><span class="toc-number">1.6.12.</span> <span class="toc-text">6.12 创建 epoll 实例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-13-%E6%B3%A8%E5%86%8C%E5%88%B0%E8%BF%90%E8%A1%8C%E4%B8%8A%E4%B8%8B%E6%96%87"><span class="toc-number">1.6.13.</span> <span class="toc-text">6.13 注册到运行上下文</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-14-%E6%88%90%E5%8A%9F%E8%BF%94%E5%9B%9E"><span class="toc-number">1.6.14.</span> <span class="toc-text">6.14 成功返回</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E9%94%99%E8%AF%AF%E5%9B%9E%E6%BB%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BD%BF%E7%94%A8-goto"><span class="toc-number">1.7.</span> <span class="toc-text">7. 错误回滚为什么使用 goto</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E6%81%A2%E5%A4%8D%E5%8E%9F%E4%BF%A1%E5%8F%B7%E5%B1%8F%E8%94%BD%E5%AD%97"><span class="toc-number">1.7.1.</span> <span class="toc-text">7.1 恢复原信号屏蔽字</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-%E6%81%A2%E5%A4%8D%E5%8E%9F%E4%BF%A1%E5%8F%B7%E5%A4%84%E7%BD%AE%E6%96%B9%E5%BC%8F"><span class="toc-number">1.7.2.</span> <span class="toc-text">7.2 恢复原信号处置方式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E6%81%A2%E5%A4%8D%E7%9C%9F%E6%AD%A3%E7%9A%84%E9%94%99%E8%AF%AF%E7%A0%81"><span class="toc-number">1.7.3.</span> <span class="toc-text">7.3 恢复真正的错误码</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E5%94%A4%E9%86%92%E5%87%BD%E6%95%B0%E5%BA%94%E5%A6%82%E4%BD%95%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.8.</span> <span class="toc-text">8. 唤醒函数应如何设计</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E8%BD%AE%E8%AF%A2%E5%87%BD%E6%95%B0%E5%BA%94%E5%A6%82%E4%BD%95%E5%A4%84%E7%90%86-EINTR"><span class="toc-number">1.9.</span> <span class="toc-text">9. 轮询函数应如何处理 EINTR</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA%E4%B8%8E%E9%A3%8E%E9%99%A9"><span class="toc-number">1.10.</span> <span class="toc-text">11. 常见误区与风险</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#12-1-%E6%8A%8A-Signal-%E5%BD%93%E4%BD%9C%E4%BB%BB%E5%8A%A1%E9%98%9F%E5%88%97"><span class="toc-number">1.10.1.</span> <span class="toc-text">12.1 把 Signal 当作任务队列</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-%E5%9C%A8%E5%A4%84%E7%90%86%E5%87%BD%E6%95%B0%E4%B8%AD%E5%8A%A0%E9%94%81%E6%88%96%E6%89%93%E5%8D%B0"><span class="toc-number">1.10.2.</span> <span class="toc-text">11.2 在处理函数中加锁或打印</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-3-%E5%BF%BD%E7%95%A5%E5%A4%84%E7%90%86%E5%87%BD%E6%95%B0%E7%9A%84%E8%BF%9B%E7%A8%8B%E7%BA%A7%E5%BD%B1%E5%93%8D"><span class="toc-number">1.10.3.</span> <span class="toc-text">11.3 忽略处理函数的进程级影响</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-4-%E5%9C%A8%E9%94%99%E8%AF%AF%E7%BA%BF%E7%A8%8B%E4%B8%8A%E4%BF%AE%E6%94%B9%E5%B1%8F%E8%94%BD%E5%AD%97"><span class="toc-number">1.10.4.</span> <span class="toc-text">11.4 在错误线程上修改屏蔽字</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-5-%E8%AF%AF%E8%AE%A4%E4%B8%BA-pthread-kill-%E4%BC%9A%E7%BB%88%E6%AD%A2%E7%BA%BF%E7%A8%8B"><span class="toc-number">1.10.5.</span> <span class="toc-text">11.5 误认为 pthread_kill() 会终止线程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-6-%E4%BD%BF%E7%94%A8%E5%B7%B2%E7%BB%8F%E7%BB%93%E6%9D%9F%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E7%9A%84%E7%BA%BF%E7%A8%8B%E6%A0%87%E8%AF%86"><span class="toc-number">1.10.6.</span> <span class="toc-text">11.6 使用已经结束生命周期的线程标识</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E8%80%83%E8%99%91%E5%85%B6%E4%BB%96%E5%94%A4%E9%86%92%E6%9C%BA%E5%88%B6"><span class="toc-number">1.11.</span> <span class="toc-text">12. 什么时候考虑其他唤醒机制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-%E6%9C%80%E7%BB%88%E7%90%86%E8%A7%A3"><span class="toc-number">1.12.</span> <span class="toc-text">13. 最终理解</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.13.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/dd28a911/" title="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践"/></a><div class="content"><a class="title" href="/posts/dd28a911/" title="用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践">用 POSIX Signal 唤醒 epoll 事件循环：原理、逐行解析与实践</a><time datetime="2026-07-16T07:17:48.425Z" title="更新于 2026-07-16 15:17:48">2026-07-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/a28edf5f/" title="linux glibc 中 errno 的原理、线程隔离与实现路径"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="linux glibc 中 errno 的原理、线程隔离与实现路径"/></a><div class="content"><a class="title" href="/posts/a28edf5f/" title="linux glibc 中 errno 的原理、线程隔离与实现路径">linux glibc 中 errno 的原理、线程隔离与实现路径</a><time datetime="2026-07-16T06:30:28.188Z" title="更新于 2026-07-16 14:30:28">2026-07-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/51bace97/" title="Lely `dcf-tools` 与 `master"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely `dcf-tools` 与 `master"/></a><div class="content"><a class="title" href="/posts/51bace97/" title="Lely `dcf-tools` 与 `master">Lely `dcf-tools` 与 `master</a><time datetime="2026-07-15T08:18:44.711Z" title="更新于 2026-07-15 16:18:44">2026-07-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/4cd5709e/" title="Lely canopen：用 EDS 和 `master"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely canopen：用 EDS 和 `master"/></a><div class="content"><a class="title" href="/posts/4cd5709e/" title="Lely canopen：用 EDS 和 `master">Lely canopen：用 EDS 和 `master</a><time datetime="2026-07-15T05:28:28.688Z" title="更新于 2026-07-15 13:28:28">2026-07-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/d2acd6ca/" title="RTOS 优先级翻转与实时任务阻塞的通用治理"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="RTOS 优先级翻转与实时任务阻塞的通用治理"/></a><div class="content"><a class="title" href="/posts/d2acd6ca/" title="RTOS 优先级翻转与实时任务阻塞的通用治理">RTOS 优先级翻转与实时任务阻塞的通用治理</a><time datetime="2026-07-15T01:36:13.018Z" title="更新于 2026-07-15 09:36:13">2026-07-15</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/04.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '94032c4c7ddea6c3fc2d39bf09546272'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9,5,2,21,15],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":266,"path":"linux"},{"name":"canopen","children":[],"count":18,"path":"canopen"},{"name":"嵌入式面试真题","children":[],"count":11,"path":"嵌入式面试真题"},{"name":"MCU","children":[],"count":38,"path":"MCU"},{"name":"杂谈","children":[],"count":33,"path":"杂谈"},{"name":"git","children":[],"count":12,"path":"git"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
