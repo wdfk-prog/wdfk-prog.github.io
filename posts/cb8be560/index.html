@@ -1,0 +1,1665 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Lely CANopen Timer 的实现原理与运行流程 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Lely CANopen: Timer 的实现原理与运行流程 @[toc] 一句话结论Lely 的 lely::io::Timer 不是一个独立线程，也不是一个直接执行回调的传统软件定时器。它本质上是一个异步事件适配器： 123456789Linux timerfd 负责计时        ↓io_poll 负责监听 timerfd 的可读事件        ↓内部 wait_task 负责读">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Lely CANopen Timer 的实现原理与运行流程">
+<meta property="og:url" content="https://wdfk-prog.space/posts/cb8be560/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Lely CANopen: Timer 的实现原理与运行流程 @[toc] 一句话结论Lely 的 lely::io::Timer 不是一个独立线程，也不是一个直接执行回调的传统软件定时器。它本质上是一个异步事件适配器： 123456789Linux timerfd 负责计时        ↓io_poll 负责监听 timerfd 的可读事件        ↓内部 wait_task 负责读">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/09.jpg">
+<meta property="article:published_time" content="2026-07-27T06:50:36.000Z">
+<meta property="article:modified_time" content="2026-07-27T06:52:15.586Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="canopen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/09.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lely CANopen Timer 的实现原理与运行流程",
+  "url": "https://wdfk-prog.space/posts/cb8be560/",
+  "image": "https://wdfk-prog.space/images/covers/09.jpg",
+  "datePublished": "2026-07-27T06:50:36.000Z",
+  "dateModified": "2026-07-27T06:52:15.586Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/cb8be560/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Lely CANopen Timer 的实现原理与运行流程',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">543</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/09.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">Lely CANopen Timer 的实现原理与运行流程</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Lely CANopen Timer 的实现原理与运行流程<a class="post-edit-link" href="null_posts/canopen/Lely CANopen Timer 的实现原理与运行流程.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-27T06:50:36.000Z" title="发表于 2026-07-27 14:50:36">2026-07-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-27T06:52:15.586Z" title="更新于 2026-07-27 14:52:15">2026-07-27</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/canopen/">canopen</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>24分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/cb8be560/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-27 14:52:15&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Lely-CANopen-Timer-的实现原理与运行流程"><a href="#Lely-CANopen-Timer-的实现原理与运行流程" class="headerlink" title="Lely CANopen: Timer 的实现原理与运行流程"></a>Lely CANopen: Timer 的实现原理与运行流程</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/a588a14772624848b2c99235617bfe3f.png" alt="在这里插入图片描述"></p>
+<p>@[toc]</p>
+<h2 id="一句话结论"><a href="#一句话结论" class="headerlink" title="一句话结论"></a>一句话结论</h2><p>Lely 的 <code>lely::io::Timer</code> 不是一个独立线程，也不是一个直接执行回调的传统软件定时器。它本质上是一个异步事件适配器：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Linux timerfd 负责计时</span><br><span class="line">        ↓</span><br><span class="line">io_poll 负责监听 timerfd 的可读事件</span><br><span class="line">        ↓</span><br><span class="line">内部 wait_task 负责读取到期计数</span><br><span class="line">        ↓</span><br><span class="line">ev_exec 负责调度完成任务</span><br><span class="line">        ↓</span><br><span class="line">io_timer_wait 对应的回调最终被执行</span><br></pre></td></tr></table></figure>
+
+<p>创建 Timer、设置到期时间和提交等待操作是三个不同动作：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">创建 Timer：建立 timerfd 并注册到 io_poll</span><br><span class="line">设置时间：调用 timerfd_settime()，决定何时到期</span><br><span class="line">提交等待：把 io_timer_wait 放入 wait_queue，决定到期后通知谁</span><br></pre></td></tr></table></figure>
+
+<p>从 CANopen 主站视角看，还要再增加两层调度：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">BasicMaster / Node</span><br><span class="line">        ↓ 传入专用 io::TimerBase&amp;</span><br><span class="line">io::CanNet / io_can_net</span><br><span class="line">        ↓ 创建 io_tqueue，并注册 can_net 的 next 回调</span><br><span class="line">io_tqueue</span><br><span class="line">        ↓ 用一个底层 io_timer_wait 复用同一个系统 Timer</span><br><span class="line">can_net.timer_heap</span><br><span class="line">        ↓ 管理 NMT、Heartbeat、SDO、PDO、SYNC 等 can_timer_t</span><br><span class="line">具体协议定时回调</span><br></pre></td></tr></table></figure>
+
+<p>因此，Lely CANopen 的核心设计不是“每个协议功能创建一个 Linux timerfd”，而是：</p>
+<blockquote>
+<p>一个 CANopen Node 使用一个专用系统 Timer；<code>io_tqueue</code> 和 <code>can_net</code> 的两级最小堆把大量逻辑超时复用到这个 Timer 上。</p>
+</blockquote>
+<hr>
+<h2 id="1-从-C-创建语句开始"><a href="#1-从-C-创建语句开始" class="headerlink" title="1. 从 C++ 创建语句开始"></a>1. 从 C++ 创建语句开始</h2><p>上层代码：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">impl_-&gt;timer.<span class="built_in">reset</span>(</span><br><span class="line">    <span class="keyword">new</span> lely::io::<span class="built_in">Timer</span>(</span><br><span class="line">        *impl_-&gt;poll,</span><br><span class="line">        *impl_-&gt;executor,</span><br><span class="line">        CLOCK_MONOTONIC));</span><br></pre></td></tr></table></figure>
+
+<p>构造函数：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">Timer</span>(<span class="type">io_poll_t</span>* poll, <span class="type">ev_exec_t</span>* exec, <span class="type">clockid_t</span> clockid)</span><br><span class="line">    : <span class="built_in">TimerBase</span>(<span class="built_in">io_timer_create</span>(poll, exec, clockid)) &#123;</span><br><span class="line">  <span class="keyword">if</span> (!timer)</span><br><span class="line">    util::<span class="built_in">throw_errc</span>(<span class="string">&quot;Timer&quot;</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>可以确认的创建链路为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">lely::io::Timer::Timer()</span><br><span class="line">  └─ io_timer_create()</span><br><span class="line">      ├─ io_timer_alloc()</span><br><span class="line">      └─ io_timer_init()</span><br><span class="line">          ├─ 初始化 io_timer_impl</span><br><span class="line">          ├─ 初始化 watch 回调</span><br><span class="line">          ├─ 初始化内部 wait_task</span><br><span class="line">          ├─ io_timer_impl_open()</span><br><span class="line">          │   ├─ timerfd_create()</span><br><span class="line">          │   └─ io_poll_watch()</span><br><span class="line">          └─ io_ctx_insert()</span><br></pre></td></tr></table></figure>
+
+<p>这里完成的是“创建 I&#x2F;O 定时器基础设施”，还没有指定具体的到期时刻。</p>
+<h3 id="1-1-CLOCK-MONOTONIC-的作用"><a href="#1-1-CLOCK-MONOTONIC-的作用" class="headerlink" title="1.1 CLOCK_MONOTONIC 的作用"></a>1.1 <code>CLOCK_MONOTONIC</code> 的作用</h3><p>Timer 使用：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">CLOCK_MONOTONIC</span><br></pre></td></tr></table></figure>
+
+<p>表示定时器基于单调时钟运行。它适合协议超时和周期调度，因为系统日历时间被人工修改时，单调时钟不会发生向前或向后的跳变。</p>
+<p>对 CANopen 而言，心跳超时、SDO 超时、PDO 事件定时、SYNC 周期等都属于持续时间或截止时间问题，而不是日历时间问题，因此使用单调时钟符合这类任务的需求。</p>
+<hr>
+<h2 id="2-io-timer-impl：Timer-的真实内部对象"><a href="#2-io-timer-impl：Timer-的真实内部对象" class="headerlink" title="2. io_timer_impl：Timer 的真实内部对象"></a>2. <code>io_timer_impl</code>：Timer 的真实内部对象</h2><p>Linux 实现中的核心结构体为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">io_timer_impl</span> &#123;</span></span><br><span class="line">    <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">io_dev_vtbl</span> *<span class="title">dev_vptr</span>;</span></span><br><span class="line">    <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_vtbl</span> *<span class="title">timer_vptr</span>;</span></span><br><span class="line">    <span class="type">io_poll_t</span> *poll;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">io_svc</span> <span class="title">svc</span>;</span></span><br><span class="line">    <span class="type">io_ctx_t</span> *ctx;</span><br><span class="line">    <span class="type">ev_exec_t</span> *exec;</span><br><span class="line">    <span class="type">clockid_t</span> clockid;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">io_poll_watch</span> <span class="title">watch</span>;</span></span><br><span class="line">    <span class="type">int</span> tfd;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> <span class="title">wait_task</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !LELY_NO_THREADS</span></span><br><span class="line">    <span class="type">pthread_mutex_t</span> mtx;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">    <span class="type">unsigned</span> shutdown : <span class="number">1</span>;</span><br><span class="line">    <span class="type">unsigned</span> wait_posted : <span class="number">1</span>;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">sllist</span> <span class="title">wait_queue</span>;</span></span><br><span class="line">    <span class="type">int</span> overrun;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>关键字段如下：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>poll</code></td>
+<td>监听 <code>timerfd</code> 是否出现可读事件</td>
+</tr>
+<tr>
+<td><code>exec</code></td>
+<td>执行内部任务和等待完成任务</td>
+</tr>
+<tr>
+<td><code>clockid</code></td>
+<td>指定 <code>CLOCK_MONOTONIC</code> 或 <code>CLOCK_REALTIME</code></td>
+</tr>
+<tr>
+<td><code>tfd</code></td>
+<td>Linux <code>timerfd</code> 文件描述符</td>
+</tr>
+<tr>
+<td><code>watch</code></td>
+<td>注册到 <code>io_poll</code> 的监听对象</td>
+</tr>
+<tr>
+<td><code>wait_task</code></td>
+<td><code>timerfd</code> 就绪后投递给 executor 的内部处理任务</td>
+</tr>
+<tr>
+<td><code>wait_queue</code></td>
+<td>保存等待下一次 Timer 完成的 <code>io_timer_wait</code></td>
+</tr>
+<tr>
+<td><code>wait_posted</code></td>
+<td>防止同一到期事件重复投递内部任务</td>
+</tr>
+<tr>
+<td><code>shutdown</code></td>
+<td>标记 Timer 已进入关闭流程</td>
+</tr>
+<tr>
+<td><code>overrun</code></td>
+<td>保存额外到期次数</td>
+</tr>
+<tr>
+<td><code>mtx</code></td>
+<td>保护等待队列和状态位</td>
+</tr>
+</tbody></table>
+<h3 id="2-1-一个对象同时暴露多个接口"><a href="#2-1-一个对象同时暴露多个接口" class="headerlink" title="2.1 一个对象同时暴露多个接口"></a>2.1 一个对象同时暴露多个接口</h3><p><code>io_timer_impl</code> 同时包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">dev_vptr    → io_dev_t 接口</span><br><span class="line">timer_vptr  → io_timer_t 接口</span><br><span class="line">svc         → io_svc 服务接口</span><br></pre></td></tr></table></figure>
+
+<p>Lely 使用类似 <code>container_of()</code> 的 <code>structof()</code> 机制，由成员地址反推出完整对象地址：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="keyword">struct</span> io_timer_impl *</span><br><span class="line"><span class="title function_">io_timer_impl_from_timer</span><span class="params">(<span class="type">const</span> <span class="type">io_timer_t</span> *timer)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> structof(timer, <span class="keyword">struct</span> io_timer_impl, timer_vptr);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这也是为什么 <code>io_timer_alloc()</code> 返回的不是 <code>impl</code>，而是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> &amp;impl-&gt;timer_vptr;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="3-打开-Timer：timerfd-create-与-io-poll-watch"><a href="#3-打开-Timer：timerfd-create-与-io-poll-watch" class="headerlink" title="3. 打开 Timer：timerfd_create() 与 io_poll_watch()"></a>3. 打开 Timer：<code>timerfd_create()</code> 与 <code>io_poll_watch()</code></h2><p>真正创建 Linux 定时器的代码位于：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span></span><br><span class="line"><span class="title function_">io_timer_impl_open</span><span class="params">(<span class="keyword">struct</span> io_timer_impl *impl)</span></span><br><span class="line">&#123;</span><br><span class="line">    ...</span><br><span class="line"></span><br><span class="line">    impl-&gt;tfd = timerfd_create(</span><br><span class="line">            impl-&gt;clockid,</span><br><span class="line">            TFD_NONBLOCK | TFD_CLOEXEC);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (impl-&gt;tfd == <span class="number">-1</span>)</span><br><span class="line">        ...</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (io_poll_watch(</span><br><span class="line">            impl-&gt;poll,</span><br><span class="line">            impl-&gt;tfd,</span><br><span class="line">            IO_EVENT_IN,</span><br><span class="line">            &amp;impl-&gt;watch) == <span class="number">-1</span>)</span><br><span class="line">        ...</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-1-TFD-NONBLOCK"><a href="#3-1-TFD-NONBLOCK" class="headerlink" title="3.1 TFD_NONBLOCK"></a>3.1 <code>TFD_NONBLOCK</code></h3><p><code>TFD_NONBLOCK</code> 让：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">read(impl-&gt;tfd, ...)</span><br></pre></td></tr></table></figure>
+
+<p>在当前没有到期计数可读时立即返回 <code>EAGAIN</code> 或 <code>EWOULDBLOCK</code>，而不是阻塞 executor 线程。</p>
+<p>这是异步事件循环中的关键要求。若内部处理任务在 <code>read()</code> 上阻塞，使用同一个 executor 的其他 CANopen 任务也可能被阻塞。</p>
+<h3 id="3-2-TFD-CLOEXEC"><a href="#3-2-TFD-CLOEXEC" class="headerlink" title="3.2 TFD_CLOEXEC"></a>3.2 <code>TFD_CLOEXEC</code></h3><p><code>TFD_CLOEXEC</code> 表示进程执行 <code>exec()</code> 加载新程序时，内核自动关闭该文件描述符，避免子程序意外继承 Timer 资源。</p>
+<p>它只影响 <code>exec()</code>，不阻止 <code>fork()</code> 继承。<code>fork()</code> 的处理由后面的 <code>io_timer_impl_svc_notify_fork()</code> 完成。</p>
+<h3 id="3-3-io-poll-watch-IO-EVENT-IN"><a href="#3-3-io-poll-watch-IO-EVENT-IN" class="headerlink" title="3.3 io_poll_watch(..., IO_EVENT_IN, ...)"></a>3.3 <code>io_poll_watch(..., IO_EVENT_IN, ...)</code></h3><p>该调用的语义是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">请 io_poll 监听 impl-&gt;tfd；</span><br><span class="line">当该 fd 可读时，通过 impl-&gt;watch 调用注册的 watch 回调。</span><br></pre></td></tr></table></figure>
+
+<p><code>IO_EVENT_IN</code> 对应“可读事件”。对 timerfd 而言，可读意味着至少发生过一次定时到期，内核中存在可读取的 64 位到期计数。</p>
+<p>这条 <code>if</code> 判断的是“注册监听是否失败”，不是判断 Timer 是否已经到期。</p>
+<hr>
+<h2 id="4-设置时间：io-timer-impl-settime"><a href="#4-设置时间：io-timer-impl-settime" class="headerlink" title="4. 设置时间：io_timer_impl_settime()"></a>4. 设置时间：<code>io_timer_impl_settime()</code></h2><p>Timer 的虚函数表包含：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_vtbl</span> <span class="title">io_timer_impl_vtbl</span> =</span> &#123;</span><br><span class="line">    &amp;io_timer_impl_get_dev,</span><br><span class="line">    &amp;io_timer_impl_get_clock,</span><br><span class="line">    &amp;io_timer_impl_getoverrun,</span><br><span class="line">    &amp;io_timer_impl_gettime,</span><br><span class="line">    &amp;io_timer_impl_settime,</span><br><span class="line">    &amp;io_timer_impl_submit_wait</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>其中设置时间的实现为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span></span><br><span class="line"><span class="title function_">io_timer_impl_settime</span><span class="params">(<span class="type">io_timer_t</span> *timer, <span class="type">int</span> flags,</span></span><br><span class="line"><span class="params">        <span class="type">const</span> <span class="keyword">struct</span> itimerspec *value, <span class="keyword">struct</span> itimerspec *ovalue)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_impl</span> *<span class="title">impl</span> =</span> io_timer_impl_from_timer(timer);</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> flags_ = <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">if</span> (flags &amp; TIMER_ABSTIME)</span><br><span class="line">        flags_ |= TFD_TIMER_ABSTIME;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> timerfd_settime(impl-&gt;tfd, flags_, value, ovalue);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-1-flags-TFD-TIMER-ABSTIME-是什么"><a href="#4-1-flags-TFD-TIMER-ABSTIME-是什么" class="headerlink" title="4.1 flags_ |= TFD_TIMER_ABSTIME 是什么"></a>4.1 <code>flags_ |= TFD_TIMER_ABSTIME</code> 是什么</h3><p>这句把 Lely 通用定时接口中的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">TIMER_ABSTIME</span><br></pre></td></tr></table></figure>
+
+<p>转换为 Linux timerfd 使用的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">TFD_TIMER_ABSTIME</span><br></pre></td></tr></table></figure>
+
+<p>两种模式的区别：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th><code>it_value</code> 的含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>未设置 <code>TFD_TIMER_ABSTIME</code></td>
+<td>从现在开始再等待多长时间</td>
+</tr>
+<tr>
+<td>设置 <code>TFD_TIMER_ABSTIME</code></td>
+<td>当指定 clock 到达哪个绝对时间点时到期</td>
+</tr>
+</tbody></table>
+<p>假设当前 <code>CLOCK_MONOTONIC</code> 为 100 秒，<code>it_value</code> 为 10 秒：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">相对模式：在 110 秒时到期</span><br><span class="line">绝对模式：目标时刻是 10 秒，已过期，因此会立即就绪</span><br></pre></td></tr></table></figure>
+
+<p>绝对时间模式常用于避免周期调度的累计漂移。上层可以始终维护固定截止时间轴，而不是在每次任务执行完后再重新增加一个相对周期。</p>
+<p>需要注意：<code>TFD_TIMER_ABSTIME</code> 主要改变首次到期值 <code>it_value</code> 的解释方式；周期字段 <code>it_interval</code> 仍表示每次到期后的相对间隔。</p>
+<h3 id="4-2-TimerBase-的完整-C-API-已可确认"><a href="#4-2-TimerBase-的完整-C-API-已可确认" class="headerlink" title="4.2 TimerBase 的完整 C++ API 已可确认"></a>4.2 <code>TimerBase</code> 的完整 C++ API 已可确认</h3><p>官方 <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/io2/timer.hpp"><code>include/lely/io2/timer.hpp</code></a> 显示，<code>TimerBase</code> 不是只有一个模糊的“异步等待接口”，而是提供了完整的时间和等待操作封装：</p>
+<table>
+<thead>
+<tr>
+<th>C++ 接口</th>
+<th>下层 C 接口</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>get_clock()</code></td>
+<td><code>io_timer_get_clock()</code></td>
+<td>获取 Timer 使用的时钟</td>
+</tr>
+<tr>
+<td><code>getoverrun()</code></td>
+<td><code>io_timer_getoverrun()</code></td>
+<td>获取最近一次额外到期次数</td>
+</tr>
+<tr>
+<td><code>gettime()</code></td>
+<td><code>io_timer_gettime()</code></td>
+<td>获取剩余时间和周期</td>
+</tr>
+<tr>
+<td><code>settime(duration, period)</code></td>
+<td><code>io_timer_settime(..., 0, ...)</code></td>
+<td>按相对时间设置</td>
+</tr>
+<tr>
+<td><code>settime(time_point, period)</code></td>
+<td><code>io_timer_settime(..., TIMER_ABSTIME, ...)</code></td>
+<td>按绝对时间设置</td>
+</tr>
+<tr>
+<td><code>submit_wait(io_timer_wait&amp;)</code></td>
+<td><code>io_timer_submit_wait()</code></td>
+<td>提交已有等待对象</td>
+</tr>
+<tr>
+<td><code>submit_wait(F)</code></td>
+<td><code>make_timer_wait_wrapper()</code></td>
+<td>包装回调并提交；完成后自动释放 wrapper</td>
+</tr>
+<tr>
+<td><code>cancel_wait()</code></td>
+<td><code>io_timer_cancel_wait()</code></td>
+<td>取消并以错误结果完成</td>
+</tr>
+<tr>
+<td><code>abort_wait()</code></td>
+<td><code>io_timer_abort_wait()</code></td>
+<td>移除任务，不走正常完成路径</td>
+</tr>
+<tr>
+<td><code>async_wait()</code></td>
+<td><code>io_timer_async_wait()</code></td>
+<td>返回 <code>ev::Future&lt;int, int&gt;</code></td>
+</tr>
+</tbody></table>
+<p>其中，回调包装器最终执行的函数签名为：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">void</span>(<span class="type">int</span> overrun, std::error_code ec)</span><br></pre></td></tr></table></figure>
+
+<p><code>overrun == -1</code> 时，<code>ec</code> 由 <code>wait-&gt;r.errc</code> 构造；正常到期时，<code>overrun</code> 为额外到期次数。<code>make_timer_wait_wrapper()</code> 创建的对象在任务执行完成后会 <code>delete self</code>，因此提交以后调用方不能再手动释放它。</p>
+<hr>
+<h2 id="5-提交等待：io-timer-impl-submit-wait"><a href="#5-提交等待：io-timer-impl-submit-wait" class="headerlink" title="5. 提交等待：io_timer_impl_submit_wait()"></a>5. 提交等待：<code>io_timer_impl_submit_wait()</code></h2><p>实现如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">io_timer_impl_submit_wait</span><span class="params">(<span class="type">io_timer_t</span> *timer, <span class="keyword">struct</span> io_timer_wait *wait)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_impl</span> *<span class="title">impl</span> =</span> io_timer_impl_from_timer(timer);</span><br><span class="line">    assert(wait);</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> *<span class="title">task</span> =</span> &amp;wait-&gt;task;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (!task-&gt;exec)</span><br><span class="line">        task-&gt;exec = impl-&gt;exec;</span><br><span class="line">    ev_exec_on_task_init(task-&gt;exec);</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !LELY_NO_THREADS</span></span><br><span class="line">    pthread_mutex_lock(&amp;impl-&gt;mtx);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">    <span class="keyword">if</span> (impl-&gt;shutdown) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !LELY_NO_THREADS</span></span><br><span class="line">        pthread_mutex_unlock(&amp;impl-&gt;mtx);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">        io_timer_wait_post(wait, <span class="number">-1</span>, ECANCELED);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        sllist_push_back(&amp;impl-&gt;wait_queue, &amp;task-&gt;_node);</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !LELY_NO_THREADS</span></span><br><span class="line">        pthread_mutex_unlock(&amp;impl-&gt;mtx);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-1-它提交的不是“立即执行任务”"><a href="#5-1-它提交的不是“立即执行任务”" class="headerlink" title="5.1 它提交的不是“立即执行任务”"></a>5.1 它提交的不是“立即执行任务”</h3><p>更准确的语义是：</p>
+<blockquote>
+<p>将一个一次性的异步等待操作登记到 Timer；当 Timer 下一次到期、出错或被取消时，再把该等待对象中的任务投递给 executor。</p>
+</blockquote>
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">io_timer_impl_submit_wait()</span><br><span class="line">    ≠ 启动 Timer</span><br><span class="line">    ≠ 设置 Timer 时间</span><br><span class="line">    ≠ 立即调用回调</span><br><span class="line">    = 把 io_timer_wait 加入 wait_queue</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-2-默认-executor"><a href="#5-2-默认-executor" class="headerlink" title="5.2 默认 executor"></a>5.2 默认 executor</h3><p>如果调用者没有为 <code>wait-&gt;task</code> 指定 executor：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!task-&gt;exec)</span><br><span class="line">    task-&gt;exec = impl-&gt;exec;</span><br></pre></td></tr></table></figure>
+
+<p>就使用创建 Timer 时传入的默认 executor。</p>
+<h3 id="5-3-ev-exec-on-task-init"><a href="#5-3-ev-exec-on-task-init" class="headerlink" title="5.3 ev_exec_on_task_init()"></a>5.3 <code>ev_exec_on_task_init()</code></h3><p>这不是执行任务，而是通知 executor：存在一个尚未完成的异步任务。它与完成时的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_exec_on_task_fini(exec);</span><br></pre></td></tr></table></figure>
+
+<p>形成生命周期配对。</p>
+<h3 id="5-4-shutdown-后提交"><a href="#5-4-shutdown-后提交" class="headerlink" title="5.4 shutdown 后提交"></a>5.4 shutdown 后提交</h3><p>如果 Timer 已关闭，新提交的 wait 不会进入队列，而是以：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">result = -1</span><br><span class="line">errc   = ECANCELED</span><br></pre></td></tr></table></figure>
+
+<p>完成，并被投递给 executor。这样调用者不会得到一个永远无法结束的悬空异步操作。</p>
+<h3 id="5-5-同一个-wait-不能重复挂入"><a href="#5-5-同一个-wait-不能重复挂入" class="headerlink" title="5.5 同一个 wait 不能重复挂入"></a>5.5 同一个 wait 不能重复挂入</h3><p>队列保存的是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&amp;task-&gt;_node</span><br></pre></td></tr></table></figure>
+
+<p>同一个链表节点在完成或取消前不能重复加入同一个或其他队列，否则可能破坏链表结构。</p>
+<hr>
+<h2 id="6-Timer-到期后发生什么"><a href="#6-Timer-到期后发生什么" class="headerlink" title="6. Timer 到期后发生什么"></a>6. Timer 到期后发生什么</h2><p>核心流程分成两个阶段：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">poll 阶段：发现 fd 就绪，投递内部任务</span><br><span class="line">executor 阶段：读取 timerfd，完成所有 wait</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-1-第一阶段：io-timer-impl-watch-func"><a href="#6-1-第一阶段：io-timer-impl-watch-func" class="headerlink" title="6.1 第一阶段：io_timer_impl_watch_func()"></a>6.1 第一阶段：<code>io_timer_impl_watch_func()</code></h3><p>创建时已经绑定：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">impl-&gt;watch = IO_POLL_WATCH_INIT(</span><br><span class="line">        &amp;io_timer_impl_watch_func);</span><br></pre></td></tr></table></figure>
+
+<p>因此 timerfd 可读时，<code>io_poll</code> 调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">io_timer_impl_watch_func</span><span class="params">(<span class="keyword">struct</span> io_poll_watch *watch, <span class="type">int</span> events)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_impl</span> *<span class="title">impl</span> =</span></span><br><span class="line">            structof(watch, <span class="keyword">struct</span> io_timer_impl, watch);</span><br><span class="line"></span><br><span class="line">    ...</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> post_wait = !impl-&gt;wait_posted &amp;&amp; !impl-&gt;shutdown;</span><br><span class="line">    <span class="keyword">if</span> (post_wait)</span><br><span class="line">        impl-&gt;wait_posted = <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">    ...</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (post_wait)</span><br><span class="line">        ev_exec_post(impl-&gt;wait_task.exec, &amp;impl-&gt;wait_task);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>它不读取 timerfd，也不直接执行用户回调，只做两件事：</p>
+<ol>
+<li>用 <code>wait_posted</code> 防止重复投递；</li>
+<li>把内部 <code>wait_task</code> 投递给 executor。</li>
+</ol>
+<p>这样可避免在 I&#x2F;O poll 回调上下文中执行较重的处理逻辑。</p>
+<h3 id="6-2-为什么需要-wait-posted"><a href="#6-2-为什么需要-wait-posted" class="headerlink" title="6.2 为什么需要 wait_posted"></a>6.2 为什么需要 <code>wait_posted</code></h3><p>如果 poll 在内部处理任务完成前多次报告同一 fd 可读，而每次都投递一个读取任务，就可能出现多个任务竞争读取同一个 timerfd。</p>
+<p><code>wait_posted</code> 保证任意时刻最多有一个内部读取任务待执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">第一次事件：wait_posted 0 → 1，投递 wait_task</span><br><span class="line">后续重复事件：wait_posted 已为 1，不重复投递</span><br><span class="line">任务处理结束：wait_posted 重新置 0</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="7-第二阶段：io-timer-impl-wait-task-func"><a href="#7-第二阶段：io-timer-impl-wait-task-func" class="headerlink" title="7. 第二阶段：io_timer_impl_wait_task_func()"></a>7. 第二阶段：<code>io_timer_impl_wait_task_func()</code></h2><p>内部任务由 executor 执行：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">io_timer_impl_wait_task_func</span><span class="params">(<span class="keyword">struct</span> ev_task *task)</span></span><br></pre></td></tr></table></figure>
+
+<p>该函数是整个 Timer 完成路径的核心。</p>
+<h3 id="7-1-读取-timerfd-到期计数"><a href="#7-1-读取-timerfd-到期计数" class="headerlink" title="7.1 读取 timerfd 到期计数"></a>7.1 读取 timerfd 到期计数</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">uintmax_t</span> value = <span class="number">0</span>;</span><br><span class="line">result = read(impl-&gt;tfd, &amp;value, <span class="keyword">sizeof</span>(value));</span><br></pre></td></tr></table></figure>
+
+<p>一次成功读取返回 8 字节计数，表示自上次成功读取后累计发生了多少次到期。</p>
+<p>例如周期为 10 ms，但 executor 35 ms 后才处理，该值可能为 3。</p>
+<p>代码循环读取，直到返回 <code>EAGAIN</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">持续读取所有当前积压的到期计数</span><br><span class="line">        ↓</span><br><span class="line">读空后得到 EAGAIN</span><br><span class="line">        ↓</span><br><span class="line">重新监听下一次 IO_EVENT_IN</span><br></pre></td></tr></table></figure>
+
+<p>因为创建时设置了 <code>TFD_NONBLOCK</code>，读空时不会阻塞。</p>
+<h3 id="7-2-overrun-的含义"><a href="#7-2-overrun-的含义" class="headerlink" title="7.2 overrun 的含义"></a>7.2 <code>overrun</code> 的含义</h3><p>变量初始为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> overrun = <span class="number">-1</span>;</span><br></pre></td></tr></table></figure>
+
+<p>每读取到 <code>value</code> 后执行累计。结果语义为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">overrun = 总到期次数 - 1</span><br></pre></td></tr></table></figure>
+
+<p>示例：</p>
+<table>
+<thead>
+<tr>
+<th align="right">到期计数</th>
+<th align="right"><code>overrun</code></th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="right">1</td>
+<td align="right">0</td>
+<td>正常到期一次</td>
+</tr>
+<tr>
+<td align="right">2</td>
+<td align="right">1</td>
+<td>额外积压一次</td>
+</tr>
+<tr>
+<td align="right">3</td>
+<td align="right">2</td>
+<td>额外积压两次</td>
+</tr>
+</tbody></table>
+<p>代码使用饱和处理避免超过 <code>INT_MAX</code>。</p>
+<h3 id="7-3-将内部-wait-队列整体转移到局部队列"><a href="#7-3-将内部-wait-队列整体转移到局部队列" class="headerlink" title="7.3 将内部 wait 队列整体转移到局部队列"></a>7.3 将内部 wait 队列整体转移到局部队列</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">sllist</span> <span class="title">queue</span>;</span></span><br><span class="line">sllist_init(&amp;<span class="built_in">queue</span>);</span><br><span class="line"></span><br><span class="line">...</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (overrun &gt;= <span class="number">0</span> || errno)</span><br><span class="line">    sllist_append(&amp;<span class="built_in">queue</span>, &amp;impl-&gt;wait_queue);</span><br></pre></td></tr></table></figure>
+
+<p>这里不是复制，而是将当前 <code>impl-&gt;wait_queue</code> 中的等待对象整体移入局部 <code>queue</code>。</p>
+<p>效果可以理解为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">转移前：impl-&gt;wait_queue = [A, B, C]</span><br><span class="line">转移后：impl-&gt;wait_queue = []</span><br><span class="line">        local queue      = [A, B, C]</span><br></pre></td></tr></table></figure>
+
+<p>在解锁后新提交的 wait 会进入新的 <code>impl-&gt;wait_queue</code>，不会被本次到期事件完成。</p>
+<h3 id="7-4-Linux-后端确定使用-epoll-EPOLLONESHOT"><a href="#7-4-Linux-后端确定使用-epoll-EPOLLONESHOT" class="headerlink" title="7.4 Linux 后端确定使用 epoll + EPOLLONESHOT"></a>7.4 Linux 后端确定使用 <code>epoll + EPOLLONESHOT</code></h3><p>官方 <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/linux/poll.c"><code>src/io2/linux/poll.c</code></a> 已经直接证明 Linux 后端的行为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> EPOLL_EVENT_INIT(events, fd) \</span></span><br><span class="line"><span class="meta">    &#123; mapped_events | EPOLLONESHOT, &#123; .fd = (fd) &#125; &#125;</span></span><br></pre></td></tr></table></figure>
+
+<p>事件映射关系为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">IO_EVENT_IN  → EPOLLIN | EPOLLRDHUP</span><br><span class="line">IO_EVENT_PRI → EPOLLPRI</span><br><span class="line">IO_EVENT_OUT → EPOLLOUT</span><br><span class="line">并始终附加 EPOLLONESHOT</span><br></pre></td></tr></table></figure>
+
+<p><code>io_poll_watch()</code> 使用 <code>epoll_ctl()</code> 完成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">第一次监听      → EPOLL_CTL_ADD</span><br><span class="line">修改/重新激活   → EPOLL_CTL_MOD</span><br><span class="line">events == 0     → EPOLL_CTL_DEL</span><br></pre></td></tr></table></figure>
+
+<p>轮询线程通过 <code>epoll_pwait()</code> 获取事件，<code>io_poll_process()</code> 在调用 watch 回调之前先执行：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">watch-&gt;_events = <span class="number">0</span>;</span><br><span class="line">poll-&gt;nwatch--;</span><br></pre></td></tr></table></figure>
+
+<p>这意味着一次事件发生后，该 watch 在 Lely 的内部状态中也被标记为未激活。Timer 在读空 <code>timerfd</code>、得到 <code>EAGAIN</code> 后执行：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">events |= IO_EVENT_IN;</span><br><span class="line">io_poll_watch(impl-&gt;poll, impl-&gt;tfd, events, &amp;impl-&gt;watch);</span><br></pre></td></tr></table></figure>
+
+<p>不是保守性重复注册，而是对 <code>EPOLLONESHOT</code> 的必要 rearm。完整路径已经可以确定为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">epoll_pwait()</span><br><span class="line">  → io_poll_process()</span><br><span class="line">      → watch-&gt;_events = 0</span><br><span class="line">      → io_timer_impl_watch_func()</span><br><span class="line">          → executor 读取 timerfd</span><br><span class="line">          → io_poll_watch(..., IO_EVENT_IN, ...)</span><br><span class="line">              → epoll_ctl(EPOLL_CTL_MOD)</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="8-io-timer-wait-queue-post-会调用所有回调吗"><a href="#8-io-timer-wait-queue-post-会调用所有回调吗" class="headerlink" title="8. io_timer_wait_queue_post() 会调用所有回调吗"></a>8. <code>io_timer_wait_queue_post()</code> 会调用所有回调吗</h2><p>内部队列完成函数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">size_t</span></span><br><span class="line"><span class="title function_">io_timer_wait_queue_post</span><span class="params">(<span class="keyword">struct</span> sllist *<span class="built_in">queue</span>, <span class="type">int</span> result, <span class="type">int</span> errc)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">size_t</span> n = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">slnode</span> *<span class="title">node</span>;</span></span><br><span class="line">    <span class="keyword">while</span> ((node = sllist_pop_front(<span class="built_in">queue</span>))) &#123;</span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> *<span class="title">task</span> =</span> ev_task_from_node(node);</span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_wait</span> *<span class="title">wait</span> =</span> io_timer_wait_from_task(task);</span><br><span class="line">        io_timer_wait_post(wait, result, errc);</span><br><span class="line">        n += n &lt; SIZE_MAX;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> n;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>答案是：</p>
+<blockquote>
+<p>它会处理传入局部 <code>queue</code> 中的所有 <code>io_timer_wait</code>，但不是在当前调用栈中直接同步调用所有用户函数，而是逐个把每个 wait 的 <code>ev_task</code> 投递到对应 executor。</p>
+</blockquote>
+<p><code>io_timer_wait_post()</code> 做的是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">wait-&gt;r.result = result;</span><br><span class="line">wait-&gt;r.errc = errc;</span><br><span class="line"></span><br><span class="line"><span class="type">ev_exec_t</span> *exec = wait-&gt;task.exec;</span><br><span class="line">ev_exec_post(exec, &amp;wait-&gt;task);</span><br><span class="line">ev_exec_on_task_fini(exec);</span><br></pre></td></tr></table></figure>
+
+<p>所以实际链路为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">io_timer_wait_queue_post()</span><br><span class="line">  └─ 遍历当前局部 queue</span><br><span class="line">      └─ io_timer_wait_post()</span><br><span class="line">          ├─ 写入 result / errc</span><br><span class="line">          ├─ ev_exec_post()</span><br><span class="line">          └─ ev_exec_on_task_fini()</span><br><span class="line">                  ↓</span><br><span class="line">          executor 之后执行 task 绑定的函数</span><br></pre></td></tr></table></figure>
+
+<h3 id="8-1-“所有”的边界"><a href="#8-1-“所有”的边界" class="headerlink" title="8.1 “所有”的边界"></a>8.1 “所有”的边界</h3><p>这里的“所有”只包括：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">本次被转移到局部 queue 的等待对象</span><br></pre></td></tr></table></figure>
+
+<p>不包括：</p>
+<ul>
+<li>其他 Timer 的 wait；</li>
+<li>已完成、已取消或已 abort 的 wait；</li>
+<li>队列转移后才提交的新 wait；</li>
+<li>系统中所有历史注册函数；</li>
+<li>未包装为 <code>io_timer_wait</code> 的普通函数。</li>
+</ul>
+<h3 id="8-2-wait-是一次性的"><a href="#8-2-wait-是一次性的" class="headerlink" title="8.2 wait 是一次性的"></a>8.2 wait 是一次性的</h3><p>队列使用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sllist_pop_front(<span class="built_in">queue</span>)</span><br></pre></td></tr></table></figure>
+
+<p>每个 wait 完成后都会离开等待队列。因此即使底层 timerfd 是周期性的，一次 <code>submit_wait()</code> 也只完成一次。若上层需要持续接收每个周期，必须重新提交 wait，或者由更高层封装自动重新提交。</p>
+<hr>
+<h2 id="9-正常到期的完整时序"><a href="#9-正常到期的完整时序" class="headerlink" title="9. 正常到期的完整时序"></a>9. 正常到期的完整时序</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant App as 上层/CANopen逻辑</span><br><span class="line">    participant Timer as lely::io::Timer</span><br><span class="line">    participant TFD as Linux timerfd</span><br><span class="line">    participant Poll as io_poll</span><br><span class="line">    participant Exec as ev_exec</span><br><span class="line">    participant Wait as io_timer_wait任务</span><br><span class="line"></span><br><span class="line">    App-&gt;&gt;Timer: 设置 itimerspec</span><br><span class="line">    Timer-&gt;&gt;TFD: timerfd_settime()</span><br><span class="line">    App-&gt;&gt;Timer: submit_wait(wait)</span><br><span class="line">    Timer-&gt;&gt;Timer: wait 加入 wait_queue</span><br><span class="line"></span><br><span class="line">    Note over TFD: 到达截止时间</span><br><span class="line">    TFD--&gt;&gt;Poll: fd 可读 / IO_EVENT_IN</span><br><span class="line">    Poll-&gt;&gt;Timer: io_timer_impl_watch_func()</span><br><span class="line">    Timer-&gt;&gt;Exec: ev_exec_post(wait_task)</span><br><span class="line">    Exec-&gt;&gt;Timer: io_timer_impl_wait_task_func()</span><br><span class="line">    Timer-&gt;&gt;TFD: read() 到期计数</span><br><span class="line">    Timer-&gt;&gt;Timer: 移走当前 wait_queue</span><br><span class="line">    Timer-&gt;&gt;Exec: 逐个 ev_exec_post(wait-&gt;&gt;task)</span><br><span class="line">    Exec-&gt;&gt;Wait: 执行完成任务</span><br><span class="line">    Wait--&gt;&gt;App: result / errc / overrun</span><br></pre></td></tr></table></figure>
+
+<p>用一句话概括：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">内核产生到期事件，poll 发现事件，executor 读取事件，再由 executor 执行用户等待任务。</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="10-取消、abort-与-shutdown"><a href="#10-取消、abort-与-shutdown" class="headerlink" title="10. 取消、abort 与 shutdown"></a>10. 取消、abort 与 shutdown</h2><h3 id="10-1-cancel"><a href="#10-1-cancel" class="headerlink" title="10.1 cancel"></a>10.1 cancel</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_timer_impl_dev_cancel()</span><br></pre></td></tr></table></figure>
+
+<p>将指定 wait 或全部 wait 从队列中取出，然后：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_timer_wait_queue_post(&amp;<span class="built_in">queue</span>, <span class="number">-1</span>, ECANCELED);</span><br></pre></td></tr></table></figure>
+
+<p>调用者仍会收到完成通知，只是结果为取消。</p>
+<h3 id="10-2-abort"><a href="#10-2-abort" class="headerlink" title="10.2 abort"></a>10.2 abort</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_timer_impl_dev_abort()</span><br></pre></td></tr></table></figure>
+
+<p>将任务移出队列并调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_task_queue_abort(&amp;<span class="built_in">queue</span>);</span><br></pre></td></tr></table></figure>
+
+<p>语义上，abort 不走正常完成回调路径。</p>
+<h3 id="10-3-shutdown"><a href="#10-3-shutdown" class="headerlink" title="10.3 shutdown"></a>10.3 shutdown</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">io_timer_impl_svc_shutdown</span><span class="params">(<span class="keyword">struct</span> io_svc *svc)</span></span><br></pre></td></tr></table></figure>
+
+<p>关闭流程：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">shutdown = 1</span><br><span class="line">    ↓</span><br><span class="line">停止监听 timerfd</span><br><span class="line">    ↓</span><br><span class="line">尝试 abort 已投递的内部 wait_task</span><br><span class="line">    ↓</span><br><span class="line">取消所有仍在 wait_queue 中的等待操作</span><br><span class="line">    ↓</span><br><span class="line">等待者以 ECANCELED 完成</span><br></pre></td></tr></table></figure>
+
+<p>之后 <code>io_timer_fini()</code> 会关闭 timerfd 并销毁互斥锁。</p>
+<hr>
+<h2 id="11-io-timer-impl-svc-notify-fork-为什么存在"><a href="#11-io-timer-impl-svc-notify-fork-为什么存在" class="headerlink" title="11. io_timer_impl_svc_notify_fork() 为什么存在"></a>11. <code>io_timer_impl_svc_notify_fork()</code> 为什么存在</h2><p>实现：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span></span><br><span class="line"><span class="title function_">io_timer_impl_svc_notify_fork</span><span class="params">(<span class="keyword">struct</span> io_svc *svc, <span class="keyword">enum</span> io_fork_event e)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">io_timer_impl</span> *<span class="title">impl</span> =</span> io_timer_impl_from_svc(svc);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (e != IO_FORK_CHILD || impl-&gt;shutdown)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">itimerspec</span> <span class="title">value</span> =</span> &#123; &#123; <span class="number">0</span>, <span class="number">0</span> &#125;, &#123; <span class="number">0</span>, <span class="number">0</span> &#125; &#125;;</span><br><span class="line">    timerfd_gettime(impl-&gt;tfd, &amp;value);</span><br><span class="line">    io_timer_impl_close(impl);</span><br><span class="line">    io_timer_impl_open(impl);</span><br><span class="line">    timerfd_settime(impl-&gt;tfd, <span class="number">0</span>, &amp;value, <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="11-1-Timer-不会主动-fork"><a href="#11-1-Timer-不会主动-fork" class="headerlink" title="11.1 Timer 不会主动 fork"></a>11.1 Timer 不会主动 fork</h3><p>这段函数并不意味着 Timer 会创建子进程。它只是作为 <code>io_svc</code> 回调注册到 <code>io_ctx</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">impl-&gt;svc = IO_SVC_INIT(&amp;io_timer_impl_svc_vtbl);</span><br><span class="line">io_ctx_insert(impl-&gt;ctx, &amp;impl-&gt;svc);</span><br></pre></td></tr></table></figure>
+
+<p>只有宿主程序或依赖库确实执行了 <code>fork()</code>，并且 <code>io_ctx</code> 收到相应通知时，该回调才会被调用。</p>
+<h3 id="11-2-为什么子进程要重建-timerfd"><a href="#11-2-为什么子进程要重建-timerfd" class="headerlink" title="11.2 为什么子进程要重建 timerfd"></a>11.2 为什么子进程要重建 timerfd</h3><p><code>fork()</code> 后，子进程继承父进程的文件描述符，父子进程中的 fd 指向同一个底层 timerfd 对象。若双方都读取到期计数，可能互相消费事件。</p>
+<p>因此子进程执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">timerfd_gettime()   保存剩余时间和周期</span><br><span class="line">io_timer_impl_close() 关闭继承的 timerfd</span><br><span class="line">io_timer_impl_open()  创建独立 timerfd 并重新注册 poll</span><br><span class="line">timerfd_settime()     按剩余时间恢复</span><br></pre></td></tr></table></figure>
+
+<p>父进程继续使用原 timerfd，子进程使用新 timerfd，双方不再共享到期计数。</p>
+<h3 id="11-3-与-TFD-CLOEXEC-的区别"><a href="#11-3-与-TFD-CLOEXEC-的区别" class="headerlink" title="11.3 与 TFD_CLOEXEC 的区别"></a>11.3 与 <code>TFD_CLOEXEC</code> 的区别</h3><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>处理方式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>fork()</code> 后仍继续运行 Lely</td>
+<td><code>io_timer_impl_svc_notify_fork()</code> 重建 timerfd</td>
+</tr>
+<tr>
+<td>随后 <code>exec()</code> 加载新程序</td>
+<td><code>TFD_CLOEXEC</code> 自动关闭 timerfd</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="12-从-BasicMaster-到-Linux-Timer：官方源码中的真实所有权"><a href="#12-从-BasicMaster-到-Linux-Timer：官方源码中的真实所有权" class="headerlink" title="12. 从 BasicMaster 到 Linux Timer：官方源码中的真实所有权"></a>12. 从 <code>BasicMaster</code> 到 Linux Timer：官方源码中的真实所有权</h2><p>此前不能确认的“完整 CANopen 主站工程调用关系”，在官方 <code>coapp</code>、<code>io2</code> 和 <code>can</code> 源码中可以完整闭环。</p>
+<h3 id="12-1-BasicMaster-不创建-Timer，而是接收外部-Timer"><a href="#12-1-BasicMaster-不创建-Timer，而是接收外部-Timer" class="headerlink" title="12.1 BasicMaster 不创建 Timer，而是接收外部 Timer"></a>12.1 <code>BasicMaster</code> 不创建 Timer，而是接收外部 Timer</h3><p><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/coapp/master.cpp#L84-L105"><code>BasicMaster</code></a> 的构造函数接收：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io::TimerBase&amp; timer</span><br></pre></td></tr></table></figure>
+
+<p>然后直接传给父类 <code>Node</code>：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">BasicMaster::<span class="built_in">BasicMaster</span>(..., io::TimerBase&amp; timer, ...)</span><br><span class="line">    : <span class="built_in">Node</span>(exec, timer, chan, ...), ... &#123;&#125;</span><br></pre></td></tr></table></figure>
+
+<p><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/coapp/node.hpp#L125-L151"><code>Node</code></a> 的接口文档明确要求：</p>
+<blockquote>
+<p>传入的 Timer 用于 CANopen 事件，且不得用于其他目的。</p>
+</blockquote>
+<p><code>Node</code> 构造时继续把 Timer 传给 <code>io::CanNet</code>：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Node::<span class="built_in">Node</span>(..., io::TimerBase&amp; timer, ...)</span><br><span class="line">    : io::<span class="built_in">CanNet</span>(exec, timer, chan, <span class="number">0</span>, <span class="number">0</span>), ... &#123;&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以在你的工程中：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">impl_-&gt;timer.<span class="built_in">reset</span>(<span class="keyword">new</span> lely::io::<span class="built_in">Timer</span>(...));</span><br></pre></td></tr></table></figure>
+
+<p><code>impl_-&gt;timer</code> 是 Timer 的所有者；Lely 的 <code>BasicMaster/Node</code> 只接收引用并使用它，不负责创建该系统 Timer。</p>
+<h3 id="12-2-真正直接保存-io-timer-t-的是-io-can-net"><a href="#12-2-真正直接保存-io-timer-t-的是-io-can-net" class="headerlink" title="12.2 真正直接保存 io_timer_t* 的是 io_can_net"></a>12.2 真正直接保存 <code>io_timer_t*</code> 的是 <code>io_can_net</code></h3><p><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/io2/can_net.hpp#L39-L78"><code>io::CanNet</code></a> 将 Timer 传给：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_create(exec, timer, chan, ...)</span><br></pre></td></tr></table></figure>
+
+<p><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/can_net.c#L69-L89"><code>struct io_can_net</code></a> 中直接保存：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">io_timer_t</span> *timer;</span><br><span class="line"><span class="type">io_tqueue_t</span> *tq;</span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">io_tqueue_wait</span> <span class="title">wait_next</span>;</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">io_tqueue_wait</span> <span class="title">wait_confirm</span>;</span></span><br></pre></td></tr></table></figure>
+
+<p>初始化时：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">net-&gt;timer = timer;</span><br><span class="line">net-&gt;tq = io_tqueue_create(net-&gt;timer, <span class="literal">NULL</span>);</span><br><span class="line">can_net_set_next_func(net-&gt;net, &amp;io_can_net_next_func, net);</span><br></pre></td></tr></table></figure>
+
+<p>因此系统 Timer 的直接使用者是 I&#x2F;O CAN 网络适配层 <code>io_can_net</code>，而不是 NMT、SDO、PDO 模块。</p>
+<h3 id="12-3-io-tqueue-如何用一个系统-Timer-管理多个绝对截止时间"><a href="#12-3-io-tqueue-如何用一个系统-Timer-管理多个绝对截止时间" class="headerlink" title="12.3 io_tqueue 如何用一个系统 Timer 管理多个绝对截止时间"></a>12.3 <code>io_tqueue</code> 如何用一个系统 Timer 管理多个绝对截止时间</h3><p><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/tqueue.c#L66-L80"><code>struct io_tqueue</code></a> 包含：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">io_timer_t</span> *timer;          <span class="comment">// 唯一底层 Timer</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">io_timer_wait</span> <span class="title">wait</span>;</span>  <span class="comment">// 唯一底层 Timer wait</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">timespec</span> <span class="title">next</span>;</span>       <span class="comment">// 当前最早截止时间</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">pheap</span> <span class="title">queue</span>;</span>         <span class="comment">// 多个 io_tqueue_wait 的最小堆</span></span><br></pre></td></tr></table></figure>
+
+<p>当上层提交一个 <code>io_tqueue_wait</code> 时，<code>io_tqueue_submit_wait()</code>：</p>
+<ol>
+<li><p>将等待对象按绝对时间插入 <code>pheap</code>；</p>
+</li>
+<li><p>如果它成为最早截止时间，调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_timer_settime(tq-&gt;timer, TIMER_ABSTIME, &amp;value, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+</li>
+<li><p>若底层尚未提交等待，则只提交一个：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_timer_submit_wait(tq-&gt;timer, &amp;tq-&gt;wait);</span><br></pre></td></tr></table></figure></li>
+</ol>
+<p>底层 Timer 到期后，<code>io_tqueue_wait_func()</code>：</p>
+<ol>
+<li>获取当前时刻；</li>
+<li>从堆中弹出所有 <code>value &lt;= now</code> 的等待对象；</li>
+<li>将底层 Timer 重新设置为下一个最早截止时间；</li>
+<li>如果堆仍非空，再次提交同一个 <code>tq-&gt;wait</code>；</li>
+<li>将所有已到期的 <code>io_tqueue_wait</code> 投递给各自 executor。</li>
+</ol>
+<p>这证明 <code>io_tqueue</code> 是第一层逻辑定时复用器。</p>
+<h3 id="12-4-io-can-net-中-TimerQueue-的两个直接用途"><a href="#12-4-io-can-net-中-TimerQueue-的两个直接用途" class="headerlink" title="12.4 io_can_net 中 TimerQueue 的两个直接用途"></a>12.4 <code>io_can_net</code> 中 TimerQueue 的两个直接用途</h3><p><code>io_can_net</code> 在同一 <code>io_tqueue</code> 中至少维护两个等待操作：</p>
+<table>
+<thead>
+<tr>
+<th>等待对象</th>
+<th>目的</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>wait_next</code></td>
+<td>等待下一个 CAN&#x2F;CANopen 逻辑定时器到期</td>
+</tr>
+<tr>
+<td><code>wait_confirm</code></td>
+<td>等待 CAN 帧发送确认超时</td>
+</tr>
+</tbody></table>
+<p><code>io_can_net_next_func()</code> 收到 <code>can_net</code> 更新后的最早时间后，会设置：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">net-&gt;wait_next.value = *tp;</span><br><span class="line">io_tqueue_submit_wait(net-&gt;tq, &amp;net-&gt;wait_next);</span><br></pre></td></tr></table></figure>
+
+<p>而发送 CAN 帧时，<code>io_can_net_do_write()</code> 会为写确认计算绝对截止时间并提交 <code>wait_confirm</code>。因此同一个系统 Timer 不仅承载 CANopen 协议定时器，也承载 CAN 通道发送确认超时。</p>
+<hr>
+<h2 id="13-CANopen-协议定时器如何映射到同一个-timerfd"><a href="#13-CANopen-协议定时器如何映射到同一个-timerfd" class="headerlink" title="13. CANopen 协议定时器如何映射到同一个 timerfd"></a>13. CANopen 协议定时器如何映射到同一个 <code>timerfd</code></h2><h3 id="13-1-can-net-是第二层逻辑定时复用器"><a href="#13-1-can-net-是第二层逻辑定时复用器" class="headerlink" title="13.1 can_net 是第二层逻辑定时复用器"></a>13.1 <code>can_net</code> 是第二层逻辑定时复用器</h3><p><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/can/net.c#L38-L56"><code>struct __can_net</code></a> 保存：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">pheap</span> <span class="title">timer_heap</span>;</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">timespec</span> <span class="title">time</span>;</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">timespec</span> <span class="title">next</span>;</span></span><br><span class="line"><span class="type">can_timer_func_t</span> *next_func;</span><br></pre></td></tr></table></figure>
+
+<p>每个 <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/can/net.c#L64-L81"><code>can_timer_t</code></a> 保存：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">timespec</span> <span class="title">start</span>;</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">timespec</span> <span class="title">interval</span>;</span></span><br><span class="line"><span class="type">can_timer_func_t</span> *func;</span><br><span class="line"><span class="type">void</span> *data;</span><br></pre></td></tr></table></figure>
+
+<p><code>can_timer_start()</code> 将逻辑 Timer 插入 <code>can_net.timer_heap</code>，再调用 <code>can_net_set_next()</code>。后者取堆顶，也就是最早截止时间，并调用注册的 <code>next_func</code>。在 <code>io_can_net</code> 中，这个回调就是 <code>io_can_net_next_func()</code>。</p>
+<h3 id="13-2-一次协议-Timer-到期的完整、可验证调用链"><a href="#13-2-一次协议-Timer-到期的完整、可验证调用链" class="headerlink" title="13.2 一次协议 Timer 到期的完整、可验证调用链"></a>13.2 一次协议 Timer 到期的完整、可验证调用链</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">NMT / Heartbeat / SDO / PDO / SYNC 模块</span><br><span class="line">  │ can_timer_start()</span><br><span class="line">  ▼</span><br><span class="line">can_net.timer_heap</span><br><span class="line">  │ can_net_set_next()：取最早 start</span><br><span class="line">  ▼</span><br><span class="line">io_can_net_next_func()</span><br><span class="line">  │ 更新 net-&gt;next，提交 wait_next</span><br><span class="line">  ▼</span><br><span class="line">io_tqueue_submit_wait()</span><br><span class="line">  │ 插入 io_tqueue.pheap</span><br><span class="line">  │ io_timer_settime(TIMER_ABSTIME)</span><br><span class="line">  │ io_timer_submit_wait(&amp;tq-&gt;wait)</span><br><span class="line">  ▼</span><br><span class="line">io_timer_impl_settime()</span><br><span class="line">  │ timerfd_settime(TFD_TIMER_ABSTIME)</span><br><span class="line">  ▼</span><br><span class="line">Linux timerfd 到期</span><br><span class="line">  ▼</span><br><span class="line">epoll_pwait() + EPOLLONESHOT</span><br><span class="line">  ▼</span><br><span class="line">io_timer_impl_watch_func()</span><br><span class="line">  │ ev_exec_post(wait_task)</span><br><span class="line">  ▼</span><br><span class="line">io_timer_impl_wait_task_func()</span><br><span class="line">  │ read(timerfd)</span><br><span class="line">  │ io_timer_wait_queue_post()</span><br><span class="line">  ▼</span><br><span class="line">io_tqueue_wait_func()</span><br><span class="line">  │ 弹出全部已到期 io_tqueue_wait</span><br><span class="line">  │ 重新设置下一个绝对截止时间</span><br><span class="line">  ▼</span><br><span class="line">io_can_net_wait_next_func()</span><br><span class="line">  │ io_can_net_set_time()</span><br><span class="line">  ▼</span><br><span class="line">can_net_set_time()</span><br><span class="line">  │ 弹出所有 start &lt;= now 的 can_timer_t</span><br><span class="line">  │ 周期 Timer 先重入堆</span><br><span class="line">  │ 调用 timer-&gt;func(&amp;net-&gt;time, timer-&gt;data)</span><br><span class="line">  ▼</span><br><span class="line">具体协议回调</span><br></pre></td></tr></table></figure>
+
+<p>这里有一个重要设计点：<code>can_net_set_time()</code> 在调用周期 Timer 的协议回调之前，先把该 Timer 的 <code>start</code> 增加 <code>interval</code> 并重新插回堆中。这可以降低回调内部修改或停止 Timer 时的状态复杂度。</p>
+<h3 id="13-3-哪些-CANopen-模块持有逻辑-can-timer-t"><a href="#13-3-哪些-CANopen-模块持有逻辑-can-timer-t" class="headerlink" title="13.3 哪些 CANopen 模块持有逻辑 can_timer_t"></a>13.3 哪些 CANopen 模块持有逻辑 <code>can_timer_t</code></h3><p>协议模块不直接持有 <code>lely::io::Timer</code> 或 Linux <code>timerfd</code>，而是持有注册在 <code>can_net.timer_heap</code> 中的 <code>can_timer_t</code>。</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>源码中的逻辑 Timer</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>NMT 主&#x2F;从服务</td>
+<td><code>ec_timer</code></td>
+<td>life guarding 或 heartbeat 生产</td>
+</tr>
+<tr>
+<td>NMT Master</td>
+<td><code>cs_timer</code></td>
+<td>发送缓冲的 NMT 命令</td>
+</tr>
+<tr>
+<td>每个 NMT slave 状态</td>
+<td><code>timer</code></td>
+<td>node guarding</td>
+</tr>
+<tr>
+<td>Heartbeat consumer</td>
+<td><code>timer</code></td>
+<td>消费者心跳超时，每个 consumer 一个</td>
+</tr>
+<tr>
+<td>Client-SDO</td>
+<td><code>timer</code></td>
+<td>SDO 请求&#x2F;分段&#x2F;块传输超时</td>
+</tr>
+<tr>
+<td>TPDO</td>
+<td><code>timer_event</code></td>
+<td>event timer、事件驱动 TPDO</td>
+</tr>
+<tr>
+<td>TPDO</td>
+<td><code>timer_swnd</code></td>
+<td>同步窗口截止时间</td>
+</tr>
+<tr>
+<td>RPDO</td>
+<td><code>timer_event</code></td>
+<td>deadline monitoring</td>
+</tr>
+<tr>
+<td>RPDO</td>
+<td><code>timer_swnd</code></td>
+<td>同步窗口截止时间</td>
+</tr>
+<tr>
+<td>SYNC</td>
+<td><code>timer</code></td>
+<td>SYNC producer 周期</td>
+</tr>
+</tbody></table>
+<p>对应官方源码：</p>
+<ul>
+<li>NMT：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/nmt.c#L84-L149"><code>src/co/nmt.c</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/nmt.c#L152-L250"><code>src/co/nmt.c</code></a></li>
+<li>Heartbeat consumer：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/nmt_hb.c#L34-L69"><code>src/co/nmt_hb.c</code></a></li>
+<li>Client-SDO：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/csdo.c#L72-L89"><code>src/co/csdo.c</code></a></li>
+<li>TPDO：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/tpdo.c#L54-L96"><code>src/co/tpdo.c</code></a></li>
+<li>RPDO：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/rpdo.c#L45-L81"><code>src/co/rpdo.c</code></a></li>
+<li>SYNC：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/sync.c#L41-L69"><code>src/co/sync.c</code></a></li>
+</ul>
+<h3 id="13-4-“哪个模块直接持有-Timer”的准确答案"><a href="#13-4-“哪个模块直接持有-Timer”的准确答案" class="headerlink" title="13.4 “哪个模块直接持有 Timer”的准确答案"></a>13.4 “哪个模块直接持有 Timer”的准确答案</h3><p>可以分三层回答：</p>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>直接持有对象</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>应用&#x2F;运行时</td>
+<td><code>std::unique_ptr&lt;lely::io::Timer&gt;</code></td>
+<td>你的 <code>impl_-&gt;timer</code> 负责所有权</td>
+</tr>
+<tr>
+<td>I&#x2F;O CAN 网络层</td>
+<td><code>io_timer_t *timer</code>、<code>io_tqueue_t *tq</code></td>
+<td><code>io_can_net</code> 直接使用系统 Timer</td>
+</tr>
+<tr>
+<td>CANopen 协议层</td>
+<td><code>can_timer_t *</code></td>
+<td>NMT、Heartbeat、SDO、PDO、SYNC 等只持有逻辑 Timer</td>
+</tr>
+</tbody></table>
+<p>因此不能说“SDO 直接调用 Linux timerfd”，也不能说“每个 NMT&#x2F;SDO&#x2F;PDO 都有独立 Timer”。准确关系是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">协议模块 can_timer_t</span><br><span class="line">  → can_net 最小堆</span><br><span class="line">  → io_can_net.wait_next</span><br><span class="line">  → io_tqueue 最小堆</span><br><span class="line">  → 单个 io::Timer</span><br><span class="line">  → 单个 Linux timerfd</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="14-完整生命周期"><a href="#14-完整生命周期" class="headerlink" title="14. 完整生命周期"></a>14. 完整生命周期</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[C++ Timer 构造] --&gt; B[io_timer_create]</span><br><span class="line">    B --&gt; C[io_timer_init]</span><br><span class="line">    C --&gt; D[timerfd_create]</span><br><span class="line">    D --&gt; E[io_poll_watch IO_EVENT_IN]</span><br><span class="line">    E --&gt; F[Timer 已创建但未必已设置时间]</span><br><span class="line"></span><br><span class="line">    F --&gt; G[settime 设置截止时间]</span><br><span class="line">    F --&gt; H[submit_wait 登记等待对象]</span><br><span class="line">    G --&gt; I[Linux 内核计时]</span><br><span class="line">    H --&gt; J[wait_queue]</span><br><span class="line"></span><br><span class="line">    I --&gt; K[timerfd 可读]</span><br><span class="line">    K --&gt; L[watch_func]</span><br><span class="line">    L --&gt; M[executor 执行 wait_task]</span><br><span class="line">    M --&gt; N[read 到期计数]</span><br><span class="line">    N --&gt; O[转移当前 wait_queue]</span><br><span class="line">    O --&gt; P[逐个 post wait task]</span><br><span class="line">    P --&gt; Q[用户完成任务执行]</span><br><span class="line"></span><br><span class="line">    Q --&gt; R&#123;是否再次等待&#125;</span><br><span class="line">    R -- 是 --&gt; H</span><br><span class="line">    R -- 否 --&gt; S[等待结束]</span><br><span class="line"></span><br><span class="line">    F --&gt; T[shutdown/fini]</span><br><span class="line">    T --&gt; U[停止 poll 监听]</span><br><span class="line">    U --&gt; V[取消未完成 waits]</span><br><span class="line">    V --&gt; W[close timerfd]</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="15-调试一次真实到期流程"><a href="#15-调试一次真实到期流程" class="headerlink" title="15. 调试一次真实到期流程"></a>15. 调试一次真实到期流程</h2><p>推荐断点顺序：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">lely::io::Timer::Timer</span><br><span class="line">io_timer_create</span><br><span class="line">io_timer_init</span><br><span class="line">io_timer_impl_open</span><br><span class="line">io_timer_impl_settime</span><br><span class="line">io_timer_impl_submit_wait</span><br><span class="line">io_timer_impl_watch_func</span><br><span class="line">io_timer_impl_wait_task_func</span><br><span class="line">io_timer_wait_queue_post</span><br><span class="line">io_timer_wait_post</span><br></pre></td></tr></table></figure>
+
+<p>重点观察：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">impl-&gt;tfd</span><br><span class="line">impl-&gt;clockid</span><br><span class="line">impl-&gt;shutdown</span><br><span class="line">impl-&gt;wait_posted</span><br><span class="line">impl-&gt;wait_queue</span><br><span class="line">impl-&gt;overrun</span><br><span class="line">value</span><br><span class="line">result</span><br><span class="line">errno</span><br></pre></td></tr></table></figure>
+
+<h3 id="15-1-查看-timerfd-状态"><a href="#15-1-查看-timerfd-状态" class="headerlink" title="15.1 查看 timerfd 状态"></a>15.1 查看 timerfd 状态</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">ls</span> -l /proc/&lt;pid&gt;/fd</span><br><span class="line"><span class="built_in">cat</span> /proc/&lt;pid&gt;/fdinfo/&lt;tfd&gt;</span><br></pre></td></tr></table></figure>
+
+<h3 id="15-2-使用-strace"><a href="#15-2-使用-strace" class="headerlink" title="15.2 使用 strace"></a>15.2 使用 strace</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">strace -f -tt \</span><br><span class="line">  -e trace=timerfd_create,timerfd_settime,<span class="built_in">read</span>,close,epoll_ctl,epoll_wait \</span><br><span class="line">  ./your_program</span><br></pre></td></tr></table></figure>
+
+<p>预期可观察到类似链路：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">timerfd_create(..., TFD_CLOEXEC|TFD_NONBLOCK) = 7</span><br><span class="line">timerfd_settime(7, TFD_TIMER_ABSTIME, ...)     = 0</span><br><span class="line">epoll_wait(...)                                = 1</span><br><span class="line">read(7, ..., 8)                                = 8</span><br></pre></td></tr></table></figure>
+
+<h3 id="15-3-确认程序是否-fork"><a href="#15-3-确认程序是否-fork" class="headerlink" title="15.3 确认程序是否 fork"></a>15.3 确认程序是否 fork</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">strace -ff -e trace=process ./your_program</span><br></pre></td></tr></table></figure>
+
+<p>GDB 可设置：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">break fork</span><br><span class="line">break __libc_fork</span><br><span class="line">break vfork</span><br><span class="line">break posix_spawn</span><br><span class="line">break io_timer_impl_svc_notify_fork</span><br></pre></td></tr></table></figure>
+
+<p>若 <code>io_timer_impl_svc_notify_fork()</code> 从未命中，说明该兼容路径没有参与当前程序运行。</p>
+<hr>
+<h2 id="16-常见误区"><a href="#16-常见误区" class="headerlink" title="16. 常见误区"></a>16. 常见误区</h2><h3 id="误区-1：创建-Timer-就开始计时"><a href="#误区-1：创建-Timer-就开始计时" class="headerlink" title="误区 1：创建 Timer 就开始计时"></a>误区 1：创建 Timer 就开始计时</h3><p>错误。创建阶段只建立 timerfd 和 poll 监听，真正计时由 <code>timerfd_settime()</code> 启动或更新。</p>
+<h3 id="误区-2：submit-wait-会立即执行任务"><a href="#误区-2：submit-wait-会立即执行任务" class="headerlink" title="误区 2：submit_wait() 会立即执行任务"></a>误区 2：<code>submit_wait()</code> 会立即执行任务</h3><p>错误。它只把 wait 放入 <code>wait_queue</code>。只有到期、错误或取消后，wait 才会被投递给 executor。</p>
+<h3 id="误区-3：io-timer-wait-queue-post-直接调用所有用户函数"><a href="#误区-3：io-timer-wait-queue-post-直接调用所有用户函数" class="headerlink" title="误区 3：io_timer_wait_queue_post() 直接调用所有用户函数"></a>误区 3：<code>io_timer_wait_queue_post()</code> 直接调用所有用户函数</h3><p>不准确。它逐个调用 <code>ev_exec_post()</code>，由 executor 决定具体何时、在哪个执行上下文运行任务。</p>
+<h3 id="误区-4：周期-timerfd-会自动反复执行同一个-wait"><a href="#误区-4：周期-timerfd-会自动反复执行同一个-wait" class="headerlink" title="误区 4：周期 timerfd 会自动反复执行同一个 wait"></a>误区 4：周期 timerfd 会自动反复执行同一个 wait</h3><p>错误。<code>io_timer_wait</code> 是一次性等待操作。完成后已从队列移除，下一周期需要重新提交。</p>
+<h3 id="误区-5：Timer-内部会主动-fork"><a href="#误区-5：Timer-内部会主动-fork" class="headerlink" title="误区 5：Timer 内部会主动 fork"></a>误区 5：Timer 内部会主动 fork</h3><p>错误。Timer 只注册 fork 通知回调；是否 fork 由宿主程序或依赖库决定。</p>
+<h3 id="误区-6：TFD-TIMER-ABSTIME-表示周期时间是绝对值"><a href="#误区-6：TFD-TIMER-ABSTIME-表示周期时间是绝对值" class="headerlink" title="误区 6：TFD_TIMER_ABSTIME 表示周期时间是绝对值"></a>误区 6：<code>TFD_TIMER_ABSTIME</code> 表示周期时间是绝对值</h3><p>错误。它改变首次到期值 <code>it_value</code> 的解释；<code>it_interval</code> 仍是相对周期。</p>
+<hr>
+<h2 id="17-最终心智模型"><a href="#17-最终心智模型" class="headerlink" title="17. 最终心智模型"></a>17. 最终心智模型</h2><p>阅读完整源码时，应把它拆成八个角色：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">1. can_timer_t</span><br><span class="line">   NMT、Heartbeat、SDO、PDO、SYNC 的协议逻辑 Timer</span><br><span class="line"></span><br><span class="line">2. can_net.timer_heap</span><br><span class="line">   对全部协议 Timer 排序，只上报最早截止时间</span><br><span class="line"></span><br><span class="line">3. io_can_net</span><br><span class="line">   把 can_net 的最早截止时间转换为 io_tqueue_wait</span><br><span class="line"></span><br><span class="line">4. io_tqueue</span><br><span class="line">   复用一个系统 Timer，管理 wait_next、wait_confirm 和 Node 用户等待</span><br><span class="line"></span><br><span class="line">5. io::Timer / timerfd</span><br><span class="line">   设置唯一的内核截止时间并累计到期次数</span><br><span class="line"></span><br><span class="line">6. io_poll / epoll</span><br><span class="line">   使用 EPOLLONESHOT 发现 timerfd 可读，并要求显式 rearm</span><br><span class="line"></span><br><span class="line">7. wait_task / wait_queue</span><br><span class="line">   从 poll 上下文切到 executor，读取 timerfd 并分发完成任务</span><br><span class="line"></span><br><span class="line">8. executor</span><br><span class="line">   执行 tqueue、CAN 网络和最终协议回调</span><br></pre></td></tr></table></figure>
+
+<p>完整运行公式：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">can_timer_start 决定“协议逻辑何时到期”</span><br><span class="line">can_net 决定“所有协议 Timer 中谁最早”</span><br><span class="line">io_tqueue 决定“所有 I/O 等待中谁最早”</span><br><span class="line">TimerBase/settime 决定“内核何时唤醒”</span><br><span class="line">epoll 决定“如何发现唤醒”</span><br><span class="line">executor 决定“在哪里推进状态机和执行回调”</span><br></pre></td></tr></table></figure>
+
+<p>最终应形成的核心心智模型是：</p>
+<blockquote>
+<p>Lely CANopen 用两级最小堆将大量协议定时事件压缩为一个绝对截止时间，再由一个 <code>timerfd</code> 唤醒事件循环。到期后时间从底层向上回灌，最终由 <code>can_net_set_time()</code> 批量执行所有已到期的协议回调。</p>
+</blockquote>
+<hr>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><h3 id="官方-Lely-源码基线"><a href="#官方-Lely-源码基线" class="headerlink" title="官方 Lely 源码基线"></a>官方 Lely 源码基线</h3><ul>
+<li>仓库：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core"><code>lely-industries/lely-core</code></a></li>
+<li>固定提交：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/commit/620d1858eb8520dbc3dc5e1a7314565becd54199"><code>620d1858eb8520dbc3dc5e1a7314565becd54199</code></a></li>
+<li><code>TimerBase</code> C++ API：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/io2/timer.hpp"><code>include/lely/io2/timer.hpp</code></a></li>
+<li>Linux Timer：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/linux/timer.c"><code>src/io2/linux/timer.c</code></a></li>
+<li>Linux epoll 后端：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/linux/poll.c"><code>src/io2/linux/poll.c</code></a></li>
+<li>TimerQueue：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/tqueue.c"><code>src/io2/tqueue.c</code></a></li>
+<li>I&#x2F;O CAN 网络适配：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/io2/can_net.c"><code>src/io2/can_net.c</code></a></li>
+<li>CAN 网络逻辑 Timer：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/can/net.c"><code>src/can/net.c</code></a></li>
+<li>CANopen Node：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/coapp/node.hpp"><code>include/lely/coapp/node.hpp</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/coapp/node.cpp"><code>src/coapp/node.cpp</code></a></li>
+<li>CANopen Master：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/coapp/master.hpp"><code>include/lely/coapp/master.hpp</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lely-industries/lely-core/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/coapp/master.cpp"><code>src/coapp/master.cpp</code></a><br>制规定的实现方式。</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/cb8be560/">https://wdfk-prog.space/posts/cb8be560/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/canopen/">canopen</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/09.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/posts/f24244bf/" title="VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查</div></div><div class="info-2"><div class="info-item-1">   VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查@[toc] 在嵌入式 Linux 远程调试中，经常会出现一种容易误判的情况：  业务程序已经使用 Debug 参数构建； 依赖的第三方动态库已经能够加载符号； info sharedlibrary 中目标库已经显示 Syms Read = Yes； 断点可以命中 main() 或业务入口；  但继续调试时仍然可能遇到：  在某一行按 F11 后，VS Code 直接变成“运行中”； std::string、容器、内存分配等语句无法稳定单步； 点击暂停后只看到一个地址和 ??； step、next、finish 报 Cannot find bounds of current function； 明明已经配置了 skip，仍然会停进系统库； 无法同步目标板系统库到宿主机，不知道该继续调试还是直接绕过。  这类问题说明：动态库符号加载成功，只解决了“某个库能否源码级调试”的问题，并不等于整个进程中的所有执行路径都具备源码、函数边界和行号信息。 本文重点讨论以下场景：  已确认业务程序和目标动态库可调试； 仍...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/51bace97/" title="Lely &#96;dcf-tools&#96; 与 &#96;master"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-15</div><div class="info-item-2">Lely &#96;dcf-tools&#96; 与 &#96;master</div></div><div class="info-2"><div class="info-item-1">  Lely dcf-tools 与 master.yml 配置教程：从 EDS 生成可用的主站 DCF @[toc]  适用版本：原生 Lely CANopen 2.4.0 dcfgen。本文使用上游 master/options/&lt;slave&gt; 结构，不适用于 ROS 2 或其他 downstream 项目自定义的 defaults/nodes YAML 格式。  本文解决什么问题Lely 主站通常不是直接读取从机 EDS 后运行，而是先在开发机上通过 dcfgen 合并主站策略、从机 EDS 和 PDO&#x2F;SDO 配置，生成 master.dcf 以及按需生成的 concise DCF 二进制文件。 本文给出一条可复现的配置路径：  在 Ubuntu 开发机安装与目标 Lely 源码匹配的 dcf-tools； 准备从机 EDS 和 master.yml； 逐项理解 options、master 和从机 section； 生成并检查 master.dcf； 使用一份完整的 demo.yml 作为字段字典，其中非必需字段全部保留为注释。  本文示例环境： ...</div></div></div></a><a class="pagination-related" href="/posts/4cd5709e/" title="Lely canopen：用 EDS 和 &#96;master"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-15</div><div class="info-item-2">Lely canopen：用 EDS 和 &#96;master</div></div><div class="info-2"><div class="info-item-1">  Lely canopen：用 EDS 和 master.yml 生成 CANopen 主站 DCF  本文以 Lely CANopen 2.4.0、Ubuntu 20.04 和 CANopenNode 从站为例，演示如何在开发机上安装 dcf-tools，编写原生 Lely master.yml，并从 EDS 生成可供主站程序使用的 master.dcf。  本文要解决的问题在嵌入式 CANopen 项目中，经常会同时存在两套运行环境：  目标板运行交叉编译后的 Lely C&#x2F;C++ 库； 开发机运行 Python 版 dcf-tools，用于检查 EDS&#x2F;DCF 和生成主站配置。  这两部分相互配合，但不需要安装到同一个系统，也不要求使用同一种架构。目标板可以继续使用 --disable-python --disable-cython 构建 Lely；dcf-tools 只安装在 Ubuntu 开发机上即可。 完成本文后，你将得到： 123456789config/├── project.eds                 # 原始从站 EDS├──...</div></div></div></a><a class="pagination-related" href="/posts/526a5796/" title="CANopen CiA 协议全景：核心内容、重点与组合关系"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-30</div><div class="info-item-2">CANopen CiA 协议全景：核心内容、重点与组合关系</div></div><div class="info-2"><div class="info-item-1">  CANopen CiA 协议全景：重点规范、核心内容与组合关系 @[toc]  本文面向 CANopen 工程学习、设备选型、对象字典设计和协议组合判断。本版按你的要求移除了原文末尾的项目建议和评审清单类章节。图片均为 PNG，不包含 SVG；交付格式为 Markdown + images 目录。  1. 结论CANopen 的协议体系可以按三层理解：  通信基础层：以 CiA 301 &#x2F; CiA 1301 为核心，定义对象字典、通信服务和网络管理。 横向功能层：例如 CiA 320 处理 sleep&#x2F;wake-up，CiA 710 处理 bootloader，CiA 305 处理 LSS，CiA 306 处理 EDS&#x2F;DCF。 设备与应用 Profile 层：例如 CiA 401、402、406、445、461、434 等，为某类设备定义应用对象、过程数据、配置参数、诊断信息和默认 PDO 思路。  本版重点单独展开 8 个规范：CiA 320、CiA 710、CiA 401、CiA 402、CiA 445、CiA 406、CiA 461、Ci...</div></div></div></a><a class="pagination-related" href="/posts/ca8bdea3/" title="CANopenEditor 从新建工程到导出 EDS  OD"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-30</div><div class="info-item-2">CANopenEditor 从新建工程到导出 EDS  OD</div></div><div class="info-2"><div class="info-item-1">  CANopenEditor 从新建工程到导出 EDS &#x2F; OD.c &#x2F; OD.h 从新建工程开始先新建空工程执行： 1File -&gt; New  此时左侧显示 New Product，Object Dictionary 里还没有完整的 CiA 301 通信对象。不要直接在空工程里逐个手写 0x1000、0x1018、0x1200、0x1800、0x1A00 等标准对象，容易漏子索引、数据类型、访问权限和 CANopenNode 导出属性。 插入 DS301 profile执行： 1Insert Profile -&gt; DS301_profile.xpd   这里的含义是：    项目 含义    DS301_profile.xpd CiA 301 通信对象 profile，提供标准通信对象候选项   DS301_profile_old.xpd 旧版本 profile，除非兼容旧工程，否则不优先使用   DS401_profile.xpd I&#x2F;O 类设备 profile，只有做对应设备类型时再插入   DSP302-NMTMaster.xp...</div></div></div></a><a class="pagination-related" href="/posts/1d4e9f18/" title="CANopen PDO 运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-29</div><div class="info-item-2">CANopen PDO 运行流程</div></div><div class="info-2"><div class="info-item-1">  CANopen PDO 运行流程 @[toc] PDO 不是“带 index&#x2F;sub-index 的小 SDO”，也不是“谁发给谁的一问一答报文”。它更像一条预先约定好格式的实时数据通道：发送方把对象字典里的几个变量按固定顺序塞进一个 CAN 数据帧，接收方再按自己的 PDO 映射表把这些字节拆回本地对象字典变量。 理解 PDO 时要先把两个问题分开：  协议规定 PDO 应该是什么样。 包括它为什么只有过程数据、为什么要靠对象字典配置、为什么要区分 RPDO&#x2F;TPDO、为什么 transmission type 会影响触发时机。 CANopenNode 源码怎样实现这些规定。 包括 CO_CANopenInitPDO() 如何初始化每个 PDO，CO_PDO_receive() 为什么只缓存，CO_RPDO_process() 为什么等到主循环才写 OD，CO_TPDO_process() 又为什么要同时看 SYNC、event timer、inhibit timer 和 sendRequest。  本文按这个顺序讲。前半部分先把协议模型讲清楚，后半部分...</div></div></div></a><a class="pagination-related" href="/posts/7a565dc9/" title="CANopen  TIME&#x2F;SYNC 运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">CANopen  TIME&#x2F;SYNC 运行流程</div></div><div class="info-2"><div class="info-item-1">   CANopen  TIME&#x2F;SYNC 运行流程 @[toc]  1. 先把 TIME 和 SYNC 分开TIME 和 SYNC 都属于 CANopen 的特殊功能通信对象，但它们解决的问题不同：    对象 核心问题 默认 CAN-ID 数据长度 典型用途    SYNC “什么时候进入一个同步周期？” 0x080 0 或 1 同步 TPDO&#x2F;RPDO、周期采样、周期控制   TIME “网络当前时间是多少？” 0x100 6 网络时间校准、时间戳、日志时间基准   一句话区分： 1SYNC 是节拍；TIME 是时钟。  SYNC 不携带实际过程数据，它只广播一个同步事件。同步 PDO 在这个事件前后按配置动作。TIME 也不携带过程数据，它只携带“当天毫秒数 + 自 1984-01-01 起的天数”。  2. 协议侧：SYNC 规定了什么2.1 SYNC 的角色SYNC 使用 producer&#x2F;consumer 模型： 1234567flowchart LR    P[&quot;SYNC producer&lt;br/&gt;周期发送同步对...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">543</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Lely-CANopen-Timer-%E7%9A%84%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E4%B8%8E%E8%BF%90%E8%A1%8C%E6%B5%81%E7%A8%8B"><span class="toc-number">1.</span> <span class="toc-text">Lely CANopen: Timer 的实现原理与运行流程</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E5%8F%A5%E8%AF%9D%E7%BB%93%E8%AE%BA"><span class="toc-number">1.1.</span> <span class="toc-text">一句话结论</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%BB%8E-C-%E5%88%9B%E5%BB%BA%E8%AF%AD%E5%8F%A5%E5%BC%80%E5%A7%8B"><span class="toc-number">1.2.</span> <span class="toc-text">1. 从 C++ 创建语句开始</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-CLOCK-MONOTONIC-%E7%9A%84%E4%BD%9C%E7%94%A8"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 CLOCK_MONOTONIC 的作用</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-io-timer-impl%EF%BC%9ATimer-%E7%9A%84%E7%9C%9F%E5%AE%9E%E5%86%85%E9%83%A8%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.3.</span> <span class="toc-text">2. io_timer_impl：Timer 的真实内部对象</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%B8%80%E4%B8%AA%E5%AF%B9%E8%B1%A1%E5%90%8C%E6%97%B6%E6%9A%B4%E9%9C%B2%E5%A4%9A%E4%B8%AA%E6%8E%A5%E5%8F%A3"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 一个对象同时暴露多个接口</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E6%89%93%E5%BC%80-Timer%EF%BC%9Atimerfd-create-%E4%B8%8E-io-poll-watch"><span class="toc-number">1.4.</span> <span class="toc-text">3. 打开 Timer：timerfd_create() 与 io_poll_watch()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-TFD-NONBLOCK"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 TFD_NONBLOCK</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-TFD-CLOEXEC"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 TFD_CLOEXEC</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-io-poll-watch-IO-EVENT-IN"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 io_poll_watch(..., IO_EVENT_IN, ...)</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E8%AE%BE%E7%BD%AE%E6%97%B6%E9%97%B4%EF%BC%9Aio-timer-impl-settime"><span class="toc-number">1.5.</span> <span class="toc-text">4. 设置时间：io_timer_impl_settime()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-flags-TFD-TIMER-ABSTIME-%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 flags_ |&#x3D; TFD_TIMER_ABSTIME 是什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-TimerBase-%E7%9A%84%E5%AE%8C%E6%95%B4-C-API-%E5%B7%B2%E5%8F%AF%E7%A1%AE%E8%AE%A4"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 TimerBase 的完整 C++ API 已可确认</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E6%8F%90%E4%BA%A4%E7%AD%89%E5%BE%85%EF%BC%9Aio-timer-impl-submit-wait"><span class="toc-number">1.6.</span> <span class="toc-text">5. 提交等待：io_timer_impl_submit_wait()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E5%AE%83%E6%8F%90%E4%BA%A4%E7%9A%84%E4%B8%8D%E6%98%AF%E2%80%9C%E7%AB%8B%E5%8D%B3%E6%89%A7%E8%A1%8C%E4%BB%BB%E5%8A%A1%E2%80%9D"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 它提交的不是“立即执行任务”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E9%BB%98%E8%AE%A4-executor"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 默认 executor</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-ev-exec-on-task-init"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 ev_exec_on_task_init()</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-shutdown-%E5%90%8E%E6%8F%90%E4%BA%A4"><span class="toc-number">1.6.4.</span> <span class="toc-text">5.4 shutdown 后提交</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-%E5%90%8C%E4%B8%80%E4%B8%AA-wait-%E4%B8%8D%E8%83%BD%E9%87%8D%E5%A4%8D%E6%8C%82%E5%85%A5"><span class="toc-number">1.6.5.</span> <span class="toc-text">5.5 同一个 wait 不能重复挂入</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-Timer-%E5%88%B0%E6%9C%9F%E5%90%8E%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88"><span class="toc-number">1.7.</span> <span class="toc-text">6. Timer 到期后发生什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E7%AC%AC%E4%B8%80%E9%98%B6%E6%AE%B5%EF%BC%9Aio-timer-impl-watch-func"><span class="toc-number">1.7.1.</span> <span class="toc-text">6.1 第一阶段：io_timer_impl_watch_func()</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81-wait-posted"><span class="toc-number">1.7.2.</span> <span class="toc-text">6.2 为什么需要 wait_posted</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E7%AC%AC%E4%BA%8C%E9%98%B6%E6%AE%B5%EF%BC%9Aio-timer-impl-wait-task-func"><span class="toc-number">1.8.</span> <span class="toc-text">7. 第二阶段：io_timer_impl_wait_task_func()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E8%AF%BB%E5%8F%96-timerfd-%E5%88%B0%E6%9C%9F%E8%AE%A1%E6%95%B0"><span class="toc-number">1.8.1.</span> <span class="toc-text">7.1 读取 timerfd 到期计数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-overrun-%E7%9A%84%E5%90%AB%E4%B9%89"><span class="toc-number">1.8.2.</span> <span class="toc-text">7.2 overrun 的含义</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E5%B0%86%E5%86%85%E9%83%A8-wait-%E9%98%9F%E5%88%97%E6%95%B4%E4%BD%93%E8%BD%AC%E7%A7%BB%E5%88%B0%E5%B1%80%E9%83%A8%E9%98%9F%E5%88%97"><span class="toc-number">1.8.3.</span> <span class="toc-text">7.3 将内部 wait 队列整体转移到局部队列</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-Linux-%E5%90%8E%E7%AB%AF%E7%A1%AE%E5%AE%9A%E4%BD%BF%E7%94%A8-epoll-EPOLLONESHOT"><span class="toc-number">1.8.4.</span> <span class="toc-text">7.4 Linux 后端确定使用 epoll + EPOLLONESHOT</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-io-timer-wait-queue-post-%E4%BC%9A%E8%B0%83%E7%94%A8%E6%89%80%E6%9C%89%E5%9B%9E%E8%B0%83%E5%90%97"><span class="toc-number">1.9.</span> <span class="toc-text">8. io_timer_wait_queue_post() 会调用所有回调吗</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E2%80%9C%E6%89%80%E6%9C%89%E2%80%9D%E7%9A%84%E8%BE%B9%E7%95%8C"><span class="toc-number">1.9.1.</span> <span class="toc-text">8.1 “所有”的边界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-wait-%E6%98%AF%E4%B8%80%E6%AC%A1%E6%80%A7%E7%9A%84"><span class="toc-number">1.9.2.</span> <span class="toc-text">8.2 wait 是一次性的</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E6%AD%A3%E5%B8%B8%E5%88%B0%E6%9C%9F%E7%9A%84%E5%AE%8C%E6%95%B4%E6%97%B6%E5%BA%8F"><span class="toc-number">1.10.</span> <span class="toc-text">9. 正常到期的完整时序</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E5%8F%96%E6%B6%88%E3%80%81abort-%E4%B8%8E-shutdown"><span class="toc-number">1.11.</span> <span class="toc-text">10. 取消、abort 与 shutdown</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#10-1-cancel"><span class="toc-number">1.11.1.</span> <span class="toc-text">10.1 cancel</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-2-abort"><span class="toc-number">1.11.2.</span> <span class="toc-text">10.2 abort</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-3-shutdown"><span class="toc-number">1.11.3.</span> <span class="toc-text">10.3 shutdown</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-io-timer-impl-svc-notify-fork-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AD%98%E5%9C%A8"><span class="toc-number">1.12.</span> <span class="toc-text">11. io_timer_impl_svc_notify_fork() 为什么存在</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-1-Timer-%E4%B8%8D%E4%BC%9A%E4%B8%BB%E5%8A%A8-fork"><span class="toc-number">1.12.1.</span> <span class="toc-text">11.1 Timer 不会主动 fork</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AD%90%E8%BF%9B%E7%A8%8B%E8%A6%81%E9%87%8D%E5%BB%BA-timerfd"><span class="toc-number">1.12.2.</span> <span class="toc-text">11.2 为什么子进程要重建 timerfd</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-3-%E4%B8%8E-TFD-CLOEXEC-%E7%9A%84%E5%8C%BA%E5%88%AB"><span class="toc-number">1.12.3.</span> <span class="toc-text">11.3 与 TFD_CLOEXEC 的区别</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E4%BB%8E-BasicMaster-%E5%88%B0-Linux-Timer%EF%BC%9A%E5%AE%98%E6%96%B9%E6%BA%90%E7%A0%81%E4%B8%AD%E7%9A%84%E7%9C%9F%E5%AE%9E%E6%89%80%E6%9C%89%E6%9D%83"><span class="toc-number">1.13.</span> <span class="toc-text">12. 从 BasicMaster 到 Linux Timer：官方源码中的真实所有权</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#12-1-BasicMaster-%E4%B8%8D%E5%88%9B%E5%BB%BA-Timer%EF%BC%8C%E8%80%8C%E6%98%AF%E6%8E%A5%E6%94%B6%E5%A4%96%E9%83%A8-Timer"><span class="toc-number">1.13.1.</span> <span class="toc-text">12.1 BasicMaster 不创建 Timer，而是接收外部 Timer</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-2-%E7%9C%9F%E6%AD%A3%E7%9B%B4%E6%8E%A5%E4%BF%9D%E5%AD%98-io-timer-t-%E7%9A%84%E6%98%AF-io-can-net"><span class="toc-number">1.13.2.</span> <span class="toc-text">12.2 真正直接保存 io_timer_t* 的是 io_can_net</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-3-io-tqueue-%E5%A6%82%E4%BD%95%E7%94%A8%E4%B8%80%E4%B8%AA%E7%B3%BB%E7%BB%9F-Timer-%E7%AE%A1%E7%90%86%E5%A4%9A%E4%B8%AA%E7%BB%9D%E5%AF%B9%E6%88%AA%E6%AD%A2%E6%97%B6%E9%97%B4"><span class="toc-number">1.13.3.</span> <span class="toc-text">12.3 io_tqueue 如何用一个系统 Timer 管理多个绝对截止时间</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-4-io-can-net-%E4%B8%AD-TimerQueue-%E7%9A%84%E4%B8%A4%E4%B8%AA%E7%9B%B4%E6%8E%A5%E7%94%A8%E9%80%94"><span class="toc-number">1.13.4.</span> <span class="toc-text">12.4 io_can_net 中 TimerQueue 的两个直接用途</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-CANopen-%E5%8D%8F%E8%AE%AE%E5%AE%9A%E6%97%B6%E5%99%A8%E5%A6%82%E4%BD%95%E6%98%A0%E5%B0%84%E5%88%B0%E5%90%8C%E4%B8%80%E4%B8%AA-timerfd"><span class="toc-number">1.14.</span> <span class="toc-text">13. CANopen 协议定时器如何映射到同一个 timerfd</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#13-1-can-net-%E6%98%AF%E7%AC%AC%E4%BA%8C%E5%B1%82%E9%80%BB%E8%BE%91%E5%AE%9A%E6%97%B6%E5%A4%8D%E7%94%A8%E5%99%A8"><span class="toc-number">1.14.1.</span> <span class="toc-text">13.1 can_net 是第二层逻辑定时复用器</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-2-%E4%B8%80%E6%AC%A1%E5%8D%8F%E8%AE%AE-Timer-%E5%88%B0%E6%9C%9F%E7%9A%84%E5%AE%8C%E6%95%B4%E3%80%81%E5%8F%AF%E9%AA%8C%E8%AF%81%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-number">1.14.2.</span> <span class="toc-text">13.2 一次协议 Timer 到期的完整、可验证调用链</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-3-%E5%93%AA%E4%BA%9B-CANopen-%E6%A8%A1%E5%9D%97%E6%8C%81%E6%9C%89%E9%80%BB%E8%BE%91-can-timer-t"><span class="toc-number">1.14.3.</span> <span class="toc-text">13.3 哪些 CANopen 模块持有逻辑 can_timer_t</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-4-%E2%80%9C%E5%93%AA%E4%B8%AA%E6%A8%A1%E5%9D%97%E7%9B%B4%E6%8E%A5%E6%8C%81%E6%9C%89-Timer%E2%80%9D%E7%9A%84%E5%87%86%E7%A1%AE%E7%AD%94%E6%A1%88"><span class="toc-number">1.14.4.</span> <span class="toc-text">13.4 “哪个模块直接持有 Timer”的准确答案</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-%E5%AE%8C%E6%95%B4%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.15.</span> <span class="toc-text">14. 完整生命周期</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E8%B0%83%E8%AF%95%E4%B8%80%E6%AC%A1%E7%9C%9F%E5%AE%9E%E5%88%B0%E6%9C%9F%E6%B5%81%E7%A8%8B"><span class="toc-number">1.16.</span> <span class="toc-text">15. 调试一次真实到期流程</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#15-1-%E6%9F%A5%E7%9C%8B-timerfd-%E7%8A%B6%E6%80%81"><span class="toc-number">1.16.1.</span> <span class="toc-text">15.1 查看 timerfd 状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-2-%E4%BD%BF%E7%94%A8-strace"><span class="toc-number">1.16.2.</span> <span class="toc-text">15.2 使用 strace</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-3-%E7%A1%AE%E8%AE%A4%E7%A8%8B%E5%BA%8F%E6%98%AF%E5%90%A6-fork"><span class="toc-number">1.16.3.</span> <span class="toc-text">15.3 确认程序是否 fork</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA"><span class="toc-number">1.17.</span> <span class="toc-text">16. 常见误区</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA-1%EF%BC%9A%E5%88%9B%E5%BB%BA-Timer-%E5%B0%B1%E5%BC%80%E5%A7%8B%E8%AE%A1%E6%97%B6"><span class="toc-number">1.17.1.</span> <span class="toc-text">误区 1：创建 Timer 就开始计时</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA-2%EF%BC%9Asubmit-wait-%E4%BC%9A%E7%AB%8B%E5%8D%B3%E6%89%A7%E8%A1%8C%E4%BB%BB%E5%8A%A1"><span class="toc-number">1.17.2.</span> <span class="toc-text">误区 2：submit_wait() 会立即执行任务</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA-3%EF%BC%9Aio-timer-wait-queue-post-%E7%9B%B4%E6%8E%A5%E8%B0%83%E7%94%A8%E6%89%80%E6%9C%89%E7%94%A8%E6%88%B7%E5%87%BD%E6%95%B0"><span class="toc-number">1.17.3.</span> <span class="toc-text">误区 3：io_timer_wait_queue_post() 直接调用所有用户函数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA-4%EF%BC%9A%E5%91%A8%E6%9C%9F-timerfd-%E4%BC%9A%E8%87%AA%E5%8A%A8%E5%8F%8D%E5%A4%8D%E6%89%A7%E8%A1%8C%E5%90%8C%E4%B8%80%E4%B8%AA-wait"><span class="toc-number">1.17.4.</span> <span class="toc-text">误区 4：周期 timerfd 会自动反复执行同一个 wait</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA-5%EF%BC%9ATimer-%E5%86%85%E9%83%A8%E4%BC%9A%E4%B8%BB%E5%8A%A8-fork"><span class="toc-number">1.17.5.</span> <span class="toc-text">误区 5：Timer 内部会主动 fork</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA-6%EF%BC%9ATFD-TIMER-ABSTIME-%E8%A1%A8%E7%A4%BA%E5%91%A8%E6%9C%9F%E6%97%B6%E9%97%B4%E6%98%AF%E7%BB%9D%E5%AF%B9%E5%80%BC"><span class="toc-number">1.17.6.</span> <span class="toc-text">误区 6：TFD_TIMER_ABSTIME 表示周期时间是绝对值</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-%E6%9C%80%E7%BB%88%E5%BF%83%E6%99%BA%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.18.</span> <span class="toc-text">17. 最终心智模型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.19.</span> <span class="toc-text">参考资料</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%98%E6%96%B9-Lely-%E6%BA%90%E7%A0%81%E5%9F%BA%E7%BA%BF"><span class="toc-number">1.19.1.</span> <span class="toc-text">官方 Lely 源码基线</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/cb8be560/" title="Lely CANopen Timer 的实现原理与运行流程"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen Timer 的实现原理与运行流程"/></a><div class="content"><a class="title" href="/posts/cb8be560/" title="Lely CANopen Timer 的实现原理与运行流程">Lely CANopen Timer 的实现原理与运行流程</a><time datetime="2026-07-27T06:52:15.586Z" title="更新于 2026-07-27 14:52:15">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/7a565dc9/" title="CANopen  TIME/SYNC 运行流程"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="CANopen  TIME/SYNC 运行流程"/></a><div class="content"><a class="title" href="/posts/7a565dc9/" title="CANopen  TIME/SYNC 运行流程">CANopen  TIME/SYNC 运行流程</a><time datetime="2026-07-27T06:51:36.214Z" title="更新于 2026-07-27 14:51:36">2026-07-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/f24244bf/" title="VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查"/></a><div class="content"><a class="title" href="/posts/f24244bf/" title="VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查">VS Code + GDB 远程调试中的系统库边界、跳过策略与反汇编排查</a><time datetime="2026-07-25T08:42:43.808Z" title="更新于 2026-07-25 16:42:43">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/95e2e7d2/" title="VS Code Remote GDB 调试动态库源码断点灰色：问题分析与解决方案"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="VS Code Remote GDB 调试动态库源码断点灰色：问题分析与解决方案"/></a><div class="content"><a class="title" href="/posts/95e2e7d2/" title="VS Code Remote GDB 调试动态库源码断点灰色：问题分析与解决方案">VS Code Remote GDB 调试动态库源码断点灰色：问题分析与解决方案</a><time datetime="2026-07-25T08:42:41.213Z" title="更新于 2026-07-25 16:42:41">2026-07-25</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/608424c6/" title="Lely CANopen 入门：从协议背景到 i"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen 入门：从协议背景到 i"/></a><div class="content"><a class="title" href="/posts/608424c6/" title="Lely CANopen 入门：从协议背景到 i">Lely CANopen 入门：从协议背景到 i</a><time datetime="2026-07-25T02:28:09.711Z" title="更新于 2026-07-25 10:28:09">2026-07-25</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/09.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'a754cbcea372177118985693645f5f41'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",1]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9,5,2,21,24],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"canopen","children":[],"count":19,"path":"canopen"},{"name":"杂谈","children":[],"count":35,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":17,"path":"嵌入式面试真题"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":266,"path":"linux"},{"name":"MCU","children":[],"count":38,"path":"MCU"},{"name":"git","children":[],"count":12,"path":"git"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>
