@@ -1,0 +1,1413 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系 @[toc] 一句话结论io_tqueue 是一个“多路逻辑定时器复用器”：  上层可以同时提交很多个不同绝对截止时间的 io_tqueue_wait； 中间用 pheap 维护“当前最早到期”的等待； 下层始终只占用 一个 io_timer_t； 底层 Timer 到">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程">
+<meta property="og:url" content="https://wdfk-prog.space/posts/ddeb74ca/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系 @[toc] 一句话结论io_tqueue 是一个“多路逻辑定时器复用器”：  上层可以同时提交很多个不同绝对截止时间的 io_tqueue_wait； 中间用 pheap 维护“当前最早到期”的等待； 下层始终只占用 一个 io_timer_t； 底层 Timer 到">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/10.jpg">
+<meta property="article:published_time" content="2026-07-29T05:36:09.000Z">
+<meta property="article:modified_time" content="2026-07-29T05:37:04.979Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="canopen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/10.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程",
+  "url": "https://wdfk-prog.space/posts/ddeb74ca/",
+  "image": "https://wdfk-prog.space/images/covers/10.jpg",
+  "datePublished": "2026-07-29T05:36:09.000Z",
+  "dateModified": "2026-07-29T05:37:04.979Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/ddeb74ca/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">551</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/10.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程<a class="post-edit-link" href="null_posts/canopen/Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-29T05:36:09.000Z" title="发表于 2026-07-29 13:36:09">2026-07-29</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-29T05:37:04.979Z" title="更新于 2026-07-29 13:37:04">2026-07-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/canopen/">canopen</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">5.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>18分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/ddeb74ca/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-29 13:37:04&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Lely-CANopen：io-tqueue-与-pheap-的实现原理、运行流程及其与-Timer、can-net-的关系"><a href="#Lely-CANopen：io-tqueue-与-pheap-的实现原理、运行流程及其与-Timer、can-net-的关系" class="headerlink" title="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系"></a>Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/0ac2b4931c3e496f8e777ba72aa4013d.png" alt="在这里插入图片描述"></p>
+<p>@[toc]</p>
+<h2 id="一句话结论"><a href="#一句话结论" class="headerlink" title="一句话结论"></a>一句话结论</h2><p><code>io_tqueue</code> 是一个“多路逻辑定时器复用器”：</p>
+<ul>
+<li>上层可以同时提交很多个不同绝对截止时间的 <code>io_tqueue_wait</code>；</li>
+<li>中间用 <code>pheap</code> 维护“当前最早到期”的等待；</li>
+<li>下层始终只占用 <strong>一个</strong> <code>io_timer_t</code>；</li>
+<li>底层 Timer 到期时，再回到 <code>io_tqueue</code> 批量完成所有 <code>value &lt;= now</code> 的等待。</li>
+</ul>
+<p>它与 <code>can_net</code> 串起来之后，又形成“两级最早截止时间压缩”：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">很多 can_timer_t</span><br><span class="line">    ↓</span><br><span class="line">can_net.timer_heap</span><br><span class="line">    ↓ 选出协议层最早一个</span><br><span class="line">io_tqueue.queue</span><br><span class="line">    ↓ 再与其他 I/O 等待一起排序</span><br><span class="line">一个 io_timer_t</span><br><span class="line">    ↓</span><br><span class="line">Linux timerfd / poll / executor</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="1-为什么需要-io-tqueue"><a href="#1-为什么需要-io-tqueue" class="headerlink" title="1. 为什么需要 io_tqueue"></a>1. 为什么需要 <code>io_tqueue</code></h2><p>如果没有 <code>io_tqueue</code>，最直观的设计是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">每一个逻辑等待</span><br><span class="line">    → 一个 io_timer_t</span><br><span class="line">    → 一个系统层定时器（如 Linux timerfd）</span><br><span class="line">    → 一个异步等待对象</span><br></pre></td></tr></table></figure>
+
+<p>但 CANopen 运行时会同时出现很多不同类型的超时和周期事件，例如：</p>
+<ul>
+<li>心跳生产 &#x2F; 消费；</li>
+<li>SDO 超时；</li>
+<li>PDO event timer；</li>
+<li>SYNC 周期；</li>
+<li>CAN 帧写确认超时；</li>
+<li>其他用户层异步等待。</li>
+</ul>
+<p>如果每个都单独占用一个系统定时器，成本会很高。</p>
+<p><code>io_tqueue</code> 的核心思想是：</p>
+<blockquote>
+<p>只维护“谁最早到期”，并把这个最早截止时间映射到底层唯一的 <code>io_timer_t</code> 上。</p>
+</blockquote>
+<p>因此，系统里可能有很多逻辑等待，但底层只有一个真正被设置到内核的 Timer。</p>
+<hr>
+<h2 id="2-四层对象模型"><a href="#2-四层对象模型" class="headerlink" title="2. 四层对象模型"></a>2. 四层对象模型</h2><p>从上到下可以分成四层：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">第 1 层：用户逻辑等待</span><br><span class="line">    struct io_tqueue_wait</span><br><span class="line"></span><br><span class="line">第 2 层：逻辑等待队列</span><br><span class="line">    struct io_tqueue</span><br><span class="line">    └── struct pheap queue</span><br><span class="line"></span><br><span class="line">第 3 层：底层唯一 Timer 等待</span><br><span class="line">    struct io_timer_wait wait</span><br><span class="line"></span><br><span class="line">第 4 层：真正系统 Timer</span><br><span class="line">    io_timer_t</span><br><span class="line">    └── Linux 后端通常落到 timerfd</span><br></pre></td></tr></table></figure>
+
+<p>也可以画成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">很多 io_tqueue_wait</span><br><span class="line">        ↓</span><br><span class="line">io_tqueue.queue（pheap）</span><br><span class="line">        ↓ 只取堆顶最早截止时间</span><br><span class="line">一个 io_timer_t</span><br><span class="line">        ↓</span><br><span class="line">到期后触发 io_tqueue_wait_func()</span><br><span class="line">        ↓</span><br><span class="line">批量完成所有已过期等待</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="3-io-tqueue-wait：一个逻辑截止时间"><a href="#3-io-tqueue-wait：一个逻辑截止时间" class="headerlink" title="3. io_tqueue_wait：一个逻辑截止时间"></a>3. <code>io_tqueue_wait</code>：一个逻辑截止时间</h2><p><code>io_tqueue_wait</code> 里最关键的成员有三个：</p>
+<ul>
+<li><code>value</code>：绝对到期时间；</li>
+<li><code>task</code>：完成时投递到 executor 的任务；</li>
+<li><code>_node</code>：嵌入在等待对象里的 <code>pnode</code>，用于把这个等待挂入 <code>pheap</code>。</li>
+</ul>
+<p>可以把它理解为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">一个等待对象 = 截止时间 + 完成回调 + 堆节点</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-1-为什么-node-直接嵌入-io-tqueue-wait"><a href="#3-1-为什么-node-直接嵌入-io-tqueue-wait" class="headerlink" title="3.1 为什么 _node 直接嵌入 io_tqueue_wait"></a>3.1 为什么 <code>_node</code> 直接嵌入 <code>io_tqueue_wait</code></h3><p>这是典型的 <strong>侵入式数据结构</strong> 设计。</p>
+<p>好处：</p>
+<ul>
+<li>不需要为堆节点单独再分配内存；</li>
+<li><code>pheap</code> 只负责维护“节点关系”，业务数据仍然在外部对象里；</li>
+<li>从 <code>pnode</code> 可以通过 <code>structof()</code> 很快回到 <code>io_tqueue_wait</code>。</li>
+</ul>
+<h3 id="3-2-value-为什么不能在入堆后修改"><a href="#3-2-value-为什么不能在入堆后修改" class="headerlink" title="3.2 value 为什么不能在入堆后修改"></a>3.2 <code>value</code> 为什么不能在入堆后修改</h3><p>因为 <code>pnode.key</code> 指向的就是 <code>wait-&gt;value</code>。</p>
+<p>一旦节点已经在堆里，如果你直接改了 <code>value</code>，堆序就可能被破坏。</p>
+<p>所以正确做法只能是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">先 remove</span><br><span class="line">再修改时间</span><br><span class="line">再 insert</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="4-pheap：为什么适合这里"><a href="#4-pheap：为什么适合这里" class="headerlink" title="4. pheap：为什么适合这里"></a>4. <code>pheap</code>：为什么适合这里</h2><p>Lely 这里使用的是 <strong>pairing heap（配对堆）</strong>。</p>
+<h3 id="4-1-它维护什么性质"><a href="#4-1-它维护什么性质" class="headerlink" title="4.1 它维护什么性质"></a>4.1 它维护什么性质</h3><p>对最小堆来说，<code>pheap</code> 只保证：</p>
+<ul>
+<li><code>root</code> 是全局最小值；</li>
+<li>每个父节点不大于自己的子节点。</li>
+</ul>
+<p><strong>它并不保证兄弟链表有序，也不保证整棵树线性有序。</strong></p>
+<p>这点非常重要。可以画成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">      root = 10</span><br><span class="line">     /    |    \</span><br><span class="line">   20     30    25</span><br><span class="line">  /  \           |</span><br><span class="line">21   40         26</span><br></pre></td></tr></table></figure>
+
+<p>这里只能保证：</p>
+<ul>
+<li><code>10</code> 是全局最小；</li>
+<li><code>20 &gt;= 10</code>，<code>30 &gt;= 10</code>，<code>25 &gt;= 10</code>；</li>
+<li><code>21 &gt;= 20</code>，<code>40 &gt;= 20</code>，<code>26 &gt;= 25</code>。</li>
+</ul>
+<p>但是：</p>
+<ul>
+<li>兄弟 <code>20 / 30 / 25</code> 没有顺序含义；</li>
+<li>不能通过兄弟链顺序直接推断第二小、第三小；</li>
+<li>“下一小是谁”不是简单看 <code>root-&gt;next</code> 或第一个 child。</li>
+</ul>
+<h3 id="4-2-为什么-pheap-first-能是-O-1"><a href="#4-2-为什么-pheap-first-能是-O-1" class="headerlink" title="4.2 为什么 pheap_first() 能是 O(1)"></a>4.2 为什么 <code>pheap_first()</code> 能是 <code>O(1)</code></h3><p>因为最小值总是堆根：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">struct</span> pnode *<span class="title function_">pheap_first</span><span class="params">(<span class="type">const</span> <span class="keyword">struct</span> pheap *heap)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> heap-&gt;root;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以“取当前最早截止时间”非常便宜，这正适合 <code>io_tqueue</code> 高频做的操作。</p>
+<h3 id="4-3-为什么插入成本也低"><a href="#4-3-为什么插入成本也低" class="headerlink" title="4.3 为什么插入成本也低"></a>4.3 为什么插入成本也低</h3><p>新节点插入时，只需要和当前根比较：</p>
+<ul>
+<li>如果新节点更小，新节点成为新根，旧根挂成它的子节点；</li>
+<li>否则把新节点挂到根的子节点链表。</li>
+</ul>
+<p>因此插入是 <code>O(1)</code>。</p>
+<hr>
+<h2 id="5-你最关心的问题：删除-root-后，下一个最小节点怎么产生？"><a href="#5-你最关心的问题：删除-root-后，下一个最小节点怎么产生？" class="headerlink" title="5. 你最关心的问题：删除 root 后，下一个最小节点怎么产生？"></a>5. 你最关心的问题：删除 root 后，下一个最小节点怎么产生？</h2><p>这是理解配对堆最关键的一步。</p>
+<p>你的判断完全对：</p>
+<ul>
+<li><code>root</code> 是全局最小值；</li>
+<li>其他节点只满足“父不大于子”；</li>
+<li>根的孩子链表 <strong>不是</strong> 一个排好序的线性序列；</li>
+<li>所以 root 删除后，不能靠“顺着兄弟链找下一个”来得到最小值。</li>
+</ul>
+<p>那答案是什么？</p>
+<blockquote>
+<p>删除 root 之后，不是“找一个现成排好序的第二名”；而是把 root 的各个子树重新做一次 <strong>meld &#x2F; merge（融合）</strong>，融合完成后，新根自然就是剩余节点中的全局最小值。</p>
+</blockquote>
+<h3 id="5-1-先看-pheap-remove-删除-root-时做了什么"><a href="#5-1-先看-pheap-remove-删除-root-时做了什么" class="headerlink" title="5.1 先看 pheap_remove() 删除 root 时做了什么"></a>5.1 先看 <code>pheap_remove()</code> 删除 root 时做了什么</h3><p>对 root 节点来说，逻辑可以概括成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">1. 把 root 从堆中摘掉</span><br><span class="line">2. 取出 root 的 child 链表</span><br><span class="line">3. 对这些 child 子树做配对融合（pnode_merge_pairs）</span><br><span class="line">4. 融合出来的一棵树，作为新的 root</span><br></pre></td></tr></table></figure>
+
+<p>源码语义可以简化为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">if 删除的是 root:</span><br><span class="line">    heap-&gt;root = NULL</span><br><span class="line"></span><br><span class="line">child = root-&gt;child</span><br><span class="line">root-&gt;child = NULL</span><br><span class="line"></span><br><span class="line">if child 不为空:</span><br><span class="line">    child = pnode_merge_pairs(child, cmp)</span><br><span class="line">    heap-&gt;root = pnode_merge(heap-&gt;root, child, cmp)</span><br><span class="line">    heap-&gt;root-&gt;parent = NULL</span><br></pre></td></tr></table></figure>
+
+<p>要点是：</p>
+<ul>
+<li>root 被删掉后，原来挂在 root 下面的每一个 child，实际上都代表“一棵仍然满足堆序的子树”；</li>
+<li>每棵子树的根，都是它自己这棵子树里的最小值；</li>
+<li>把这些“子树根”不断两两融合，最终得到一棵新树；</li>
+<li>新树的根，就是整个剩余集合里的最小值。</li>
+</ul>
+<h3 id="5-2-为什么这样融合后就能得到新的全局最小值"><a href="#5-2-为什么这样融合后就能得到新的全局最小值" class="headerlink" title="5.2 为什么这样融合后就能得到新的全局最小值"></a>5.2 为什么这样融合后就能得到新的全局最小值</h3><p>假设删掉 root 后，剩余子树根分别是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">20, 21, 22, 25</span><br></pre></td></tr></table></figure>
+
+<p>它们各自还带着自己的子树，但不用先扫描全部后代，因为：</p>
+<ul>
+<li><code>20</code> 已经是自己那棵子树里的最小值；</li>
+<li><code>21</code> 也是自己那棵子树里的最小值；</li>
+<li><code>22</code> 也是；</li>
+<li><code>25</code> 也是。</li>
+</ul>
+<p>于是只要不断比较这些“子树根”即可。</p>
+<p>例如配对融合的直觉过程可以理解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">(20, 21) 先融合  →  得到一棵以 20 为根的树</span><br><span class="line">(22, 25) 先融合  →  得到一棵以 22 为根的树</span><br><span class="line">再把这两棵树融合 →  得到一棵以 20 为根的树</span><br></pre></td></tr></table></figure>
+
+<p>最终新根就是 <code>20</code>，它就是删除原 root 后的全局最小值。</p>
+<p>注意：</p>
+<ul>
+<li>这里的“20 是下一个最小值”并不是因为它恰好排在 child 链表第一个；</li>
+<li>而是因为在一轮轮 <code>merge</code> 之后，它在所有剩余子树根中最小。</li>
+</ul>
+<h3 id="5-3-这不是“寻找第二小”，而是“重建堆顶”"><a href="#5-3-这不是“寻找第二小”，而是“重建堆顶”" class="headerlink" title="5.3 这不是“寻找第二小”，而是“重建堆顶”"></a>5.3 这不是“寻找第二小”，而是“重建堆顶”</h3><p>这是很容易想岔的一点。</p>
+<p>很多人会自然地想成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">删除最小值(root)</span><br><span class="line">    → 找第二小</span><br></pre></td></tr></table></figure>
+
+<p>但配对堆不是有序数组，也不是有序链表。</p>
+<p>更准确的表述应该是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">删除 root</span><br><span class="line">    → 把 root 的子树集合重新融合</span><br><span class="line">    → 融合后的新根，就是新的全局最小值</span><br></pre></td></tr></table></figure>
+
+<p>也就是说：</p>
+<ul>
+<li>算法并不直接维护“第二名指针”；</li>
+<li>它维护的是“堆序结构”；</li>
+<li>删除 root 后，通过合并剩余子树恢复一个新的最小堆。</li>
+</ul>
+<p>这就是为什么 <code>pheap_remove()</code> 的代价要比 <code>pheap_first()</code> 和 <code>pheap_insert()</code> 高。</p>
+<hr>
+<h2 id="6-pheap-remove-root-运行流程图"><a href="#6-pheap-remove-root-运行流程图" class="headerlink" title="6. pheap_remove(root) 运行流程图"></a>6. <code>pheap_remove(root)</code> 运行流程图</h2><p>下面专门用流程图展示“root 到期后被删除，下一个最小节点如何上来”。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;当前堆的 root 是全局最小值&quot;] --&gt; B[&quot;删除 root&quot;]</span><br><span class="line">    B --&gt; C[&quot;取出 root 的所有 child 子树&quot;]</span><br><span class="line">    C --&gt; D&#123;&quot;child 是否为空&quot;&#125;</span><br><span class="line">    D -- 是 --&gt; E[&quot;heap.root 置空，堆变空&quot;]</span><br><span class="line">    D -- 否 --&gt; F[&quot;把这些 child 看作多个小堆&quot;]</span><br><span class="line">    F --&gt; G[&quot;调用 pnode_merge_pairs，沿 sibling 链逐步融合&quot;]</span><br><span class="line">    G --&gt; H[&quot;不断比较两棵子树的根&quot;]</span><br><span class="line">    H --&gt; I[&quot;较小根保留为父，较大根挂为 child&quot;]</span><br><span class="line">    I --&gt; J[&quot;逐步融合成一棵新树&quot;]</span><br><span class="line">    J --&gt; K[&quot;新树的根成为新的 heap.root&quot;]</span><br><span class="line">    K --&gt; L[&quot;新的 root 就是剩余节点中的全局最小值&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>再补一张“不是线性有序”的示意图：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    R[&quot;old root = 10&quot;] --&gt; C1[&quot;20&quot;]</span><br><span class="line">    R --&gt; C2[&quot;30&quot;]</span><br><span class="line">    R --&gt; C3[&quot;25&quot;]</span><br><span class="line">    C1 --&gt; C11[&quot;21&quot;]</span><br><span class="line">    C1 --&gt; C12[&quot;40&quot;]</span><br><span class="line">    C3 --&gt; C31[&quot;26&quot;]</span><br><span class="line"></span><br><span class="line">    X[&quot;删除 10 后&quot;] --&gt; Y[&quot;不能顺着兄弟顺序直接找第二小&quot;]</span><br><span class="line">    Y --&gt; Z[&quot;需要把 20、30、25 这些子树根重新融合&quot;]</span><br><span class="line">    Z --&gt; N[&quot;new root = min of &#123;20, 30, 25&#125;&quot;]</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-1-pnode-merge-pairs-的实际融合顺序"><a href="#6-1-pnode-merge-pairs-的实际融合顺序" class="headerlink" title="6.1 pnode_merge_pairs() 的实际融合顺序"></a>6.1 <code>pnode_merge_pairs()</code> 的实际融合顺序</h3><p>需要特别注意：当前 Lely 源码中的 <code>pnode_merge_pairs()</code> 并不是先把所有兄弟节点分成独立的两两分组，再执行第二轮反向合并。它沿着 sibling 链从左向右执行连续融合：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">while</span> (node-&gt;next) &#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">pnode</span> *<span class="title">next</span> =</span> node-&gt;next-&gt;next;</span><br><span class="line">    node-&gt;next-&gt;next = <span class="literal">NULL</span>;</span><br><span class="line">    node = pnode_merge(node, node-&gt;next, cmp);</span><br><span class="line">    node-&gt;next = next;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>假设删除旧 root 后得到的子树根链为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">20 -&gt; 30 -&gt; 25 -&gt; 40</span><br></pre></td></tr></table></figure>
+
+<p>实际执行过程如下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;初始 sibling 链&lt;br/&gt;20 → 30 → 25 → 40&quot;] --&gt; B[&quot;第 1 轮&lt;br/&gt;merge 20 与 30&lt;br/&gt;融合根为 20&quot;]</span><br><span class="line">    B --&gt; C[&quot;剩余处理链&lt;br/&gt;20 → 25 → 40&quot;]</span><br><span class="line">    C --&gt; D[&quot;第 2 轮&lt;br/&gt;merge 20 与 25&lt;br/&gt;融合根为 20&quot;]</span><br><span class="line">    D --&gt; E[&quot;剩余处理链&lt;br/&gt;20 → 40&quot;]</span><br><span class="line">    E --&gt; F[&quot;第 3 轮&lt;br/&gt;merge 20 与 40&lt;br/&gt;融合根为 20&quot;]</span><br><span class="line">    F --&gt; G[&quot;返回节点 20&lt;br/&gt;成为新的 heap.root&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>每轮 <code>pnode_merge()</code> 都会比较两棵子树的根：</p>
+<ul>
+<li>较小的根继续作为父节点；</li>
+<li>较大的根挂到较小根的 child 链；</li>
+<li>融合结果仍然是一棵满足最小堆序的子树。</li>
+</ul>
+<p>因此，在处理到第 <code>k</code> 个子树根后，变量 <code>node</code> 始终是“目前已经处理过的所有子树中的最小根”。当 sibling 链全部处理完成时，返回的 <code>node</code> 自然就是剩余全部节点中的全局最小值。</p>
+<p>这个过程的关键不是维护一条完整排序链，而是持续维护下面这个不变量：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">每完成一轮 merge：</span><br><span class="line">当前融合结果的 root = 已处理子树根中的最小值</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="7-io-tqueue-的内部状态"><a href="#7-io-tqueue-的内部状态" class="headerlink" title="7. io_tqueue 的内部状态"></a>7. <code>io_tqueue</code> 的内部状态</h2><p><code>io_tqueue</code> 的关键成员可以概括成：</p>
+<ul>
+<li><code>timer</code>：底层复用的唯一 <code>io_timer_t</code>；</li>
+<li><code>exec</code>：默认 executor；</li>
+<li><code>wait</code>：唯一的底层 <code>io_timer_wait</code>；</li>
+<li><code>submitted</code>：当前是否已经向底层提交了这个唯一 wait；</li>
+<li><code>next</code>：当前底层 Timer 被设置到的绝对截止时间；</li>
+<li><code>queue</code>：存放所有逻辑等待的 <code>pheap</code>；</li>
+<li><code>shutdown</code>：是否关闭。</li>
+</ul>
+<p>它的核心状态关系是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">queue 里可以有很多逻辑等待</span><br><span class="line">但底层 wait 永远最多只有一个 submitted</span><br><span class="line">next 永远代表“当前底层 Timer 目标截止时间”</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="8-初始化流程：io-tqueue-init"><a href="#8-初始化流程：io-tqueue-init" class="headerlink" title="8. 初始化流程：io_tqueue_init()"></a>8. 初始化流程：<code>io_tqueue_init()</code></h2><p>初始化主要做了几件事：</p>
+<ol>
+<li>保存 <code>timer</code>；</li>
+<li>选择默认 <code>exec</code>；</li>
+<li>初始化唯一底层 <code>io_timer_wait</code>，回调设为 <code>io_tqueue_wait_func()</code>；</li>
+<li>初始化互斥锁（若启用线程）；</li>
+<li><code>submitted = 0</code>，<code>next = {0,0}</code>；</li>
+<li><code>pheap_init(&amp;tq-&gt;queue, &amp;timespec_cmp)</code>；</li>
+<li>把 <code>io_tqueue</code> 注册到 <code>io_ctx</code>。</li>
+</ol>
+<h3 id="8-1-与-Timer-的约束关系"><a href="#8-1-与-Timer-的约束关系" class="headerlink" title="8.1 与 Timer 的约束关系"></a>8.1 与 Timer 的约束关系</h3><p><code>io_tqueue.h</code> 明确要求：</p>
+<blockquote>
+<p><code>io_tqueue</code> 生命周期内，外部不要再直接对这个 <code>timer</code> 调用 <code>io_timer_settime()</code>。</p>
+</blockquote>
+<p>因为 <code>io_tqueue</code> 自己要独占控制这个 Timer 的截止时间。</p>
+<p>否则就会破坏：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">堆顶截止时间  &lt;-&gt;  底层 Timer 当前设置值</span><br></pre></td></tr></table></figure>
+
+<p>这个关键对应关系。</p>
+<hr>
+<h2 id="9-提交等待：io-tqueue-submit-wait"><a href="#9-提交等待：io-tqueue-submit-wait" class="headerlink" title="9. 提交等待：io_tqueue_submit_wait()"></a>9. 提交等待：<code>io_tqueue_submit_wait()</code></h2><p>这是整个机制最重要的入口。</p>
+<h3 id="9-1-提交时做什么"><a href="#9-1-提交时做什么" class="headerlink" title="9.1 提交时做什么"></a>9.1 提交时做什么</h3><p>当一个新的 <code>io_tqueue_wait</code> 被提交时，流程大致是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">1. 若 wait.task.exec 为空，则使用 tq-&gt;exec</span><br><span class="line">2. 初始化 executor 对 task 的生命周期跟踪</span><br><span class="line">3. 若 tq 已 shutdown，则立即按 canceled 完成</span><br><span class="line">4. 否则把 wait-&gt;_node 插入 tq-&gt;queue</span><br><span class="line">5. 如果它比 tq-&gt;next 更早：重设底层 Timer</span><br><span class="line">6. 如果当前还没有 submitted 的底层 wait：提交 tq-&gt;wait</span><br></pre></td></tr></table></figure>
+
+<p>可以压缩成一张图：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;提交一个 io_tqueue_wait&quot;] --&gt; B&#123;&quot;task.exec 是否为空&quot;&#125;</span><br><span class="line">    B -- 是 --&gt; C[&quot;使用 tq-&gt;exec&quot;]</span><br><span class="line">    B -- 否 --&gt; D[&quot;保留用户指定的 exec&quot;]</span><br><span class="line">    C --&gt; E</span><br><span class="line">    D --&gt; E</span><br><span class="line">    E&#123;&quot;tq 是否 shutdown&quot;&#125;</span><br><span class="line">    E -- 是 --&gt; F[&quot;直接按 canceled 完成&quot;]</span><br><span class="line">    E -- 否 --&gt; G[&quot;初始化 wait 节点，并把 key 指向 wait.value&quot;]</span><br><span class="line">    G --&gt; H[&quot;把 wait 插入 tq.queue&quot;]</span><br><span class="line">    H --&gt; I&#123;&quot;wait.value 是否早于 tq.next&lt;br/&gt;或 tq.next 还未设置&quot;&#125;</span><br><span class="line">    I -- 是 --&gt; J[&quot;把底层 Timer 重设到 wait.value&quot;]</span><br><span class="line">    I -- 否 --&gt; K[&quot;底层 Timer 保持不变&quot;]</span><br><span class="line">    J --&gt; L</span><br><span class="line">    K --&gt; L</span><br><span class="line">    L&#123;&quot;当前是否还没有提交底层 tq.wait&quot;&#125;</span><br><span class="line">    L -- 是 --&gt; M[&quot;提交唯一的底层 io_timer_wait&quot;]</span><br><span class="line">    L -- 否 --&gt; N[&quot;结束&quot;]</span><br><span class="line">    M --&gt; N</span><br></pre></td></tr></table></figure>
+
+<h3 id="9-2-为什么不是每次提交都要重新设置-Timer"><a href="#9-2-为什么不是每次提交都要重新设置-Timer" class="headerlink" title="9.2 为什么不是每次提交都要重新设置 Timer"></a>9.2 为什么不是每次提交都要重新设置 Timer</h3><p>因为 <code>io_tqueue</code> 只关心 <strong>最早截止时间</strong>。</p>
+<p>例如当前：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">tq.next = 100ms</span><br></pre></td></tr></table></figure>
+
+<p>新来一个等待：</p>
+<ul>
+<li>若到期时间是 <code>150ms</code>：不会影响当前最早者，不必重设底层 Timer；</li>
+<li>若到期时间是 <code>80ms</code>：它变成新堆顶，需要立即把底层 Timer 改到 <code>80ms</code>。</li>
+</ul>
+<p>所以条件是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">新等待是否早于当前 tq.next</span><br></pre></td></tr></table></figure>
+
+<p>而不是“是否新插入了一个节点”。</p>
+<hr>
+<h2 id="10-Timer-到期：io-tqueue-wait-func"><a href="#10-Timer-到期：io-tqueue-wait-func" class="headerlink" title="10. Timer 到期：io_tqueue_wait_func()"></a>10. Timer 到期：<code>io_tqueue_wait_func()</code></h2><p>底层唯一 <code>io_timer_wait</code> 到期后，会执行 <code>io_tqueue_wait_func()</code>。</p>
+<p>这个函数做的事可以概括为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">1. 读取当前时间 now</span><br><span class="line">2. 清掉 submitted 标记，并清空 tq-&gt;next</span><br><span class="line">3. 从堆顶开始，反复弹出所有 value &lt;= now 的等待</span><br><span class="line">4. 如果堆还不空，把底层 Timer 设到新的最早截止时间</span><br><span class="line">5. 如有需要，再次提交唯一底层 wait</span><br><span class="line">6. 把本轮到期等待逐个 post 给 executor</span><br></pre></td></tr></table></figure>
+
+<h3 id="10-1-为什么一次会弹出多个等待"><a href="#10-1-为什么一次会弹出多个等待" class="headerlink" title="10.1 为什么一次会弹出多个等待"></a>10.1 为什么一次会弹出多个等待</h3><p>因为底层 Timer 唤醒时，可能已经有多个逻辑等待同时到期了。</p>
+<p>例如堆里有：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">100ms, 100ms, 102ms, 120ms</span><br></pre></td></tr></table></figure>
+
+<p>当前 <code>now = 105ms</code>，那本轮就要一次性完成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">100ms, 100ms, 102ms</span><br></pre></td></tr></table></figure>
+
+<p>只剩下 <code>120ms</code> 重新编程到底层 Timer。</p>
+<h3 id="10-2-io-tqueue-wait-func-主流程图"><a href="#10-2-io-tqueue-wait-func-主流程图" class="headerlink" title="10.2 io_tqueue_wait_func() 主流程图"></a>10.2 <code>io_tqueue_wait_func()</code> 主流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;底层 io_timer_wait 到期&quot;] --&gt; B[&quot;读取当前时间 now&quot;]</span><br><span class="line">    B --&gt; C[&quot;submitted 清零；next 清零&quot;]</span><br><span class="line">    C --&gt; D[&quot;查看当前堆顶&quot;]</span><br><span class="line">    D --&gt; E&#123;&quot;堆顶 wait.value 是否小于等于 now&quot;&#125;</span><br><span class="line">    E -- 是 --&gt; F[&quot;删除堆顶节点&quot;]</span><br><span class="line">    F --&gt; G[&quot;把对应 wait 放入完成队列&quot;]</span><br><span class="line">    G --&gt; D</span><br><span class="line">    E -- 否 --&gt; H&#123;&quot;堆是否为空&quot;&#125;</span><br><span class="line">    H -- 是 --&gt; I[&quot;本轮不再设置 Timer&quot;]</span><br><span class="line">    H -- 否 --&gt; J[&quot;取新的堆顶作为 tq.next&quot;]</span><br><span class="line">    J --&gt; K[&quot;把底层 Timer 设到 tq.next&quot;]</span><br><span class="line">    K --&gt; L[&quot;重新提交唯一底层 io_timer_wait&quot;]</span><br><span class="line">    I --&gt; M[&quot;锁外 post 所有到期任务&quot;]</span><br><span class="line">    L --&gt; M</span><br><span class="line">    M --&gt; N[&quot;结束&quot;]</span><br></pre></td></tr></table></figure>
+
+<h3 id="10-3-这时-pheap-remove-root-正好派上用场"><a href="#10-3-这时-pheap-remove-root-正好派上用场" class="headerlink" title="10.3 这时 pheap_remove(root) 正好派上用场"></a>10.3 这时 <code>pheap_remove(root)</code> 正好派上用场</h3><p>注意这里的弹出动作不是别的，正是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">取堆顶 → 删除 root → 新 root 自动成为剩余最小值</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>io_tqueue_wait_func()</code> 之所以能写成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">while ((node = pheap_first(&amp;tq-&gt;queue))) &#123;</span><br><span class="line">    if (now &lt; wait-&gt;value) break;</span><br><span class="line">    pheap_remove(&amp;tq-&gt;queue, node);</span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>就是因为每次删掉当前 root 之后，配对堆已经帮它把“下一个最小节点”重建成新的 root 了。</p>
+<p>这正好呼应了你前面的问题。</p>
+<hr>
+<h2 id="11-取消、abort-与-shutdown"><a href="#11-取消、abort-与-shutdown" class="headerlink" title="11. 取消、abort 与 shutdown"></a>11. 取消、abort 与 shutdown</h2><h3 id="11-1-cancel"><a href="#11-1-cancel" class="headerlink" title="11.1 cancel"></a>11.1 cancel</h3><p><code>cancel</code> 的语义是：</p>
+<ul>
+<li>如果等待还在队列里，就把它从堆里摘掉；</li>
+<li>然后以 <code>ERRNUM_CANCELED</code> 作为完成结果，正常投递它的 completion task。</li>
+</ul>
+<h3 id="11-2-abort"><a href="#11-2-abort" class="headerlink" title="11.2 abort"></a>11.2 abort</h3><p><code>abort</code> 的语义是：</p>
+<ul>
+<li>也会把等待从堆里摘掉；</li>
+<li>但 <strong>不会</strong> 投递 completion task。</li>
+</ul>
+<h3 id="11-3-堆空时为何要取消底层-wait"><a href="#11-3-堆空时为何要取消底层-wait" class="headerlink" title="11.3 堆空时为何要取消底层 wait"></a>11.3 堆空时为何要取消底层 wait</h3><p>当从堆里移除节点后，如果发现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">pheap_empty(&amp;tq-&gt;queue) &amp;&amp; tq-&gt;submitted</span><br></pre></td></tr></table></figure>
+
+<p>那么说明：</p>
+<ul>
+<li>逻辑等待已经没有了；</li>
+<li>但底层唯一 <code>io_timer_wait</code> 可能还在挂着。</li>
+</ul>
+<p>这时会调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_timer_cancel_wait(tq-&gt;timer, &amp;tq-&gt;wait)</span><br></pre></td></tr></table></figure>
+
+<p>避免底层继续无意义等待。</p>
+<h3 id="11-4-shutdown"><a href="#11-4-shutdown" class="headerlink" title="11.4 shutdown"></a>11.4 shutdown</h3><p>关闭时会：</p>
+<ol>
+<li>标记 <code>shutdown = 1</code>；</li>
+<li>若底层 wait 已提交，则尝试 <code>io_timer_abort_wait()</code>；</li>
+<li>然后把所有逻辑等待统一 cancel 掉。</li>
+</ol>
+<hr>
+<h2 id="12-io-tqueue-与-io-timer-t-的关系"><a href="#12-io-tqueue-与-io-timer-t-的关系" class="headerlink" title="12. io_tqueue 与 io_timer_t 的关系"></a>12. <code>io_tqueue</code> 与 <code>io_timer_t</code> 的关系</h2><p>二者不是替代关系，而是上下层关系。</p>
+<h3 id="12-1-io-timer-t-负责什么"><a href="#12-1-io-timer-t-负责什么" class="headerlink" title="12.1 io_timer_t 负责什么"></a>12.1 <code>io_timer_t</code> 负责什么</h3><p><code>io_timer_t</code> 负责：</p>
+<ul>
+<li>持有具体系统 Timer 资源；</li>
+<li>提供 <code>io_timer_settime()</code>；</li>
+<li>提供 <code>io_timer_submit_wait()</code> &#x2F; <code>cancel_wait()</code> &#x2F; <code>abort_wait()</code>；</li>
+<li>在 Linux 后端通常进一步映射到 <code>timerfd</code> + <code>io_poll</code>。</li>
+</ul>
+<h3 id="12-2-io-tqueue-负责什么"><a href="#12-2-io-tqueue-负责什么" class="headerlink" title="12.2 io_tqueue 负责什么"></a>12.2 <code>io_tqueue</code> 负责什么</h3><p><code>io_tqueue</code> 负责：</p>
+<ul>
+<li>把很多逻辑等待统一排序；</li>
+<li>始终找出当前最早截止时间；</li>
+<li>控制底层 Timer 应该被设成什么绝对时间；</li>
+<li>底层到期后批量回灌上层任务。</li>
+</ul>
+<p>所以职责边界可以写成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">io_tqueue = 逻辑调度器</span><br><span class="line">io_timer_t = 单个真实 Timer 的异步封装</span><br></pre></td></tr></table></figure>
+
+<h3 id="12-3-为什么这里用绝对时间"><a href="#12-3-为什么这里用绝对时间" class="headerlink" title="12.3 为什么这里用绝对时间"></a>12.3 为什么这里用绝对时间</h3><p>Lely 这里普遍采用绝对截止时间，而不是“从现在开始延时 N ms”。</p>
+<p>好处是：</p>
+<ul>
+<li>避免连续重设时的累计漂移；</li>
+<li>重新编程时只需维护“最早绝对 deadline”；</li>
+<li>和 <code>timespec_cmp()</code> 及堆排序天然配合。</li>
+</ul>
+<hr>
+<h2 id="13-io-tqueue-与-can-net-的关系"><a href="#13-io-tqueue-与-can-net-的关系" class="headerlink" title="13. io_tqueue 与 can_net 的关系"></a>13. <code>io_tqueue</code> 与 <code>can_net</code> 的关系</h2><p>这里是 CANopen 学习里非常关键的一环。</p>
+<h3 id="13-1-can-net-自己也有一个-pheap"><a href="#13-1-can-net-自己也有一个-pheap" class="headerlink" title="13.1 can_net 自己也有一个 pheap"></a>13.1 <code>can_net</code> 自己也有一个 <code>pheap</code></h3><p><code>can_net</code> 内部也维护一个协议层定时器堆：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">can_net.timer_heap</span><br></pre></td></tr></table></figure>
+
+<p>其中放的是很多 <code>can_timer_t</code>，例如：</p>
+<ul>
+<li>协议超时；</li>
+<li>周期发送；</li>
+<li>其他网络状态机的时间事件。</li>
+</ul>
+<p>它的职责是：</p>
+<blockquote>
+<p>在“协议层很多定时器”中，选出最早的一个。</p>
+</blockquote>
+<h3 id="13-2-io-can-net-会创建-io-tqueue"><a href="#13-2-io-can-net-会创建-io-tqueue" class="headerlink" title="13.2 io_can_net 会创建 io_tqueue"></a>13.2 <code>io_can_net</code> 会创建 <code>io_tqueue</code></h3><p>I&#x2F;O 桥接层 <code>io_can_net</code> 会创建一个 <code>io_tqueue</code>，并至少使用它来管理：</p>
+<ul>
+<li><code>wait_next</code>：等待下一个协议层截止时间；</li>
+<li><code>wait_confirm</code>：等待 CAN 帧写确认相关超时。</li>
+</ul>
+<p>于是关系变成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">协议层多个 can_timer_t</span><br><span class="line">    ↓</span><br><span class="line">can_net.timer_heap</span><br><span class="line">    ↓</span><br><span class="line">协议层最早截止时间</span><br><span class="line">    ↓</span><br><span class="line">io_tqueue.queue</span><br><span class="line">    ↓ 再与其他 I/O 等待合并排序</span><br><span class="line">一个 io_timer_t</span><br></pre></td></tr></table></figure>
+
+<h3 id="13-3-can-net-next-怎样进入-io-tqueue"><a href="#13-3-can-net-next-怎样进入-io-tqueue" class="headerlink" title="13.3 can_net.next 怎样进入 io_tqueue"></a>13.3 <code>can_net.next</code> 怎样进入 <code>io_tqueue</code></h3><p><code>can_net</code> 会根据自己堆顶 <code>can_timer_t</code> 的开始时间，更新：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">net-&gt;next</span><br></pre></td></tr></table></figure>
+
+<p>随后 <code>io_can_net</code> 这一桥接层会把这个时间包装进 <code>wait_next.value</code>，再提交到 <code>io_tqueue</code>。</p>
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">can_net 只负责决定“协议层下一次该何时唤醒”</span><br><span class="line">io_tqueue 负责把这个唤醒点和其他 I/O 定时等待一起复用到底层 Timer</span><br></pre></td></tr></table></figure>
+
+<h3 id="13-4-到期后如何回灌给-can-net"><a href="#13-4-到期后如何回灌给-can-net" class="headerlink" title="13.4 到期后如何回灌给 can_net"></a>13.4 到期后如何回灌给 <code>can_net</code></h3><p>底层 Timer 到期以后：</p>
+<ol>
+<li><code>io_tqueue_wait_func()</code> 发现 <code>wait_next</code> 已到期；</li>
+<li><code>wait_next.task</code> 被投递；</li>
+<li>对应的回调里再触发 <code>can_net</code> 继续处理协议层时间推进；</li>
+<li><code>can_net</code> 可能重新算出新的 <code>next</code>；</li>
+<li>再次经由 <code>io_tqueue_submit_wait()</code> 进入队列。</li>
+</ol>
+<p>这就形成了一个闭环。</p>
+<hr>
+<h2 id="14-两级堆的准确含义"><a href="#14-两级堆的准确含义" class="headerlink" title="14. 两级堆的准确含义"></a>14. 两级堆的准确含义</h2><p>很容易把 <code>can_net.timer_heap</code> 和 <code>io_tqueue.queue</code> 混成一个东西，但其实它们分层非常明确。</p>
+<h3 id="14-1-第一层：can-net-timer-heap"><a href="#14-1-第一层：can-net-timer-heap" class="headerlink" title="14.1 第一层：can_net.timer_heap"></a>14.1 第一层：<code>can_net.timer_heap</code></h3><p>作用：</p>
+<ul>
+<li>管协议层事件；</li>
+<li>元素是 <code>can_timer_t</code>；</li>
+<li>决定“CANopen 协议下一次什么时候要跑”。</li>
+</ul>
+<h3 id="14-2-第二层：io-tqueue-queue"><a href="#14-2-第二层：io-tqueue-queue" class="headerlink" title="14.2 第二层：io_tqueue.queue"></a>14.2 第二层：<code>io_tqueue.queue</code></h3><p>作用：</p>
+<ul>
+<li>管 I&#x2F;O 层逻辑等待；</li>
+<li>元素是 <code>io_tqueue_wait</code>；</li>
+<li>决定“底层唯一 Timer 下次什么时候真正要唤醒”。</li>
+</ul>
+<h3 id="14-3-为什么不能直接只有一层"><a href="#14-3-为什么不能直接只有一层" class="headerlink" title="14.3 为什么不能直接只有一层"></a>14.3 为什么不能直接只有一层</h3><p>因为这两层处理的是不同抽象：</p>
+<ul>
+<li><code>can_net.timer_heap</code> 关心的是协议状态机；</li>
+<li><code>io_tqueue.queue</code> 关心的是异步 I&#x2F;O 等待复用。</li>
+</ul>
+<p>所以可以把它们理解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">第一层：协议事件调度</span><br><span class="line">第二层：I/O 定时复用</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="15-最终心智模型"><a href="#15-最终心智模型" class="headerlink" title="15. 最终心智模型"></a>15. 最终心智模型</h2><p>把整套机制压缩成一句最容易记忆的话：</p>
+<blockquote>
+<p><code>pheap</code> 负责让“当前最早截止时间”始终出现在 root；当 root 被删除时，通过重新融合 root 的各个子树，把新的全局最小值重建成新的 root；<code>io_tqueue</code> 就利用这个特性，把很多逻辑等待压缩到底层唯一的 <code>io_timer_t</code> 上；而 <code>can_net</code> 又在它之上先做了一层协议定时器筛选。</p>
+</blockquote>
+<p>最后给一个完整总图：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[很多 can_timer_t] --&gt; B[can_net.timer_heap]</span><br><span class="line">    B --&gt; C[选出协议层最早截止时间]</span><br><span class="line">    C --&gt; D[封装为 wait_next]</span><br><span class="line">    D --&gt; E[io_tqueue.queue]</span><br><span class="line">    F[wait_confirm / 其他逻辑等待] --&gt; E</span><br><span class="line">    E --&gt; G[pheap_first = 当前全局最早等待]</span><br><span class="line">    G --&gt; H[io_timer_settime 到 tq.next]</span><br><span class="line">    H --&gt; I[唯一 io_timer_wait 已提交]</span><br><span class="line">    I --&gt; J[底层 Timer 到期]</span><br><span class="line">    J --&gt; K[io_tqueue_wait_func]</span><br><span class="line">    K --&gt; L[循环取堆顶并删除所有已过期 root]</span><br><span class="line">    L --&gt; M[每删一次 root 都通过 merge 重建新 root]</span><br><span class="line">    M --&gt; N[剩余堆顶重新设置到底层 Timer]</span><br><span class="line">    N --&gt; O[到期任务投递到 executor]</span><br><span class="line">    O --&gt; P[协议层 / I/O 层继续运行]</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><h3 id="Lely-官方源码"><a href="#Lely-官方源码" class="headerlink" title="Lely 官方源码"></a>Lely 官方源码</h3><ul>
+<li><code>lely-core/include/lely/io2/tqueue.h</code></li>
+<li><code>lely-core/src/io2/tqueue.c</code></li>
+<li><code>lely-core/include/lely/util/pheap.h</code></li>
+<li><code>lely-core/src/util/pheap.c</code></li>
+<li><code>lely-core/src/io2/can_net.c</code></li>
+<li><code>lely-core/src/can/net.c</code></li>
+</ul>
+<h3 id="前置学习笔记"><a href="#前置学习笔记" class="headerlink" title="前置学习笔记"></a>前置学习笔记</h3><ul>
+<li><code>Lely CANopen Timer 的实现原理与运行流程.md</code></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/ddeb74ca/">https://wdfk-prog.space/posts/ddeb74ca/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/canopen/">canopen</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/10.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/posts/1510f72a/" title="Lely CANopen `spscring` 单生产者单消费者环形队列完整机制学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Lely CANopen `spscring` 单生产者单消费者环形队列完整机制学习笔记</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen spscring 单生产者单消费者环形队列完整机制学习笔记 @[toc]  1. 先明确边界：spscring 不是数据缓冲区SPSC 是 Single-Producer Single-Consumer，即单生产者、单消费者。 Lely 的 spscring 与常见“结构体内部直接包含数组”的环形队列不同。它只管理：  哪些索引可以由生产者写入； 哪些索引可以由消费者读取； 生产者何时把写入结果发布给消费者； 消费者何时把已读槽位归还给生产者； 队列由空变为可读或由满变为可写时，是否需要触发回调。  实际数据存储由调用者单独提供： 12struct spscring ring;struct io_can_frame *rxbuf;  两者的关系是： 12345spscring= 索引所有权与可见性控制器rxbuf= 真正保存 CAN 帧的内存数组  因此，调用 spscring_p_alloc() 只会得到一个可写索引，不会返回数据指针，也不会复制任何数据。 1234567flowchart LR    Prod[Producer] --&gt;|p...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/1510f72a/" title="Lely CANopen &#96;spscring&#96; 单生产者单消费者环形队列完整机制学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen &#96;spscring&#96; 单生产者单消费者环形队列完整机制学习笔记</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen spscring 单生产者单消费者环形队列完整机制学习笔记 @[toc]  1. 先明确边界：spscring 不是数据缓冲区SPSC 是 Single-Producer Single-Consumer，即单生产者、单消费者。 Lely 的 spscring 与常见“结构体内部直接包含数组”的环形队列不同。它只管理：  哪些索引可以由生产者写入； 哪些索引可以由消费者读取； 生产者何时把写入结果发布给消费者； 消费者何时把已读槽位归还给生产者； 队列由空变为可读或由满变为可写时，是否需要触发回调。  实际数据存储由调用者单独提供： 12struct spscring ring;struct io_can_frame *rxbuf;  两者的关系是： 12345spscring= 索引所有权与可见性控制器rxbuf= 真正保存 CAN 帧的内存数组  因此，调用 spscring_p_alloc() 只会得到一个可写索引，不会返回数据指针，也不会复制任何数据。 1234567flowchart LR    Prod[Producer] --&gt;|p...</div></div></div></a><a class="pagination-related" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen CAN 完整机制学习笔记</div></div><div class="info-2"><div class="info-item-1">   Lely CANopen IO2 CAN 与 SocketCAN 完整机制学习笔记 @[toc]  1. CANopen、liblely-co、io2 与 SocketCAN 的边界Lely CANopen 协议栈本身是被动状态机。它不直接拥有 Linux socket，也不自行创建线程。Linux 上的实际 I&#x2F;O 由 liblely-io2 提供，任务调度由 liblely-ev 提供。 12345678910flowchart TB    APP[业务代码 / CANopen Master] --&gt; CO[liblely-co / coapp]    CO --&gt; NET[CAN network / protocol state machine]    NET --&gt; IO2[liblely-io2 abstract CAN API]    IO2 --&gt; CHAN[Linux CanChannel]    CHAN --&gt; SOCK[SocketCAN raw socket]    SOCK --&gt; KERNEL[Lin...</div></div></div></a><a class="pagination-related" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 &#96;ev_task&#96;、Executor、&#96;std_exec&#96; 到 &#96;ev_loop&#96;、Future 与 Poll"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen 事件调度机制详解：从 &#96;ev_task&#96;、Executor、&#96;std_exec&#96; 到 &#96;ev_loop&#96;、Future 与 Poll</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen 事件调度机制详解：从 ev_task、Executor、std_exec 到 ev_loop、Future 与 Poll @[toc]  0. 阅读前先记住六个结论 ev_task 只是“可执行工作”的载体，不负责排队、线程切换或等待。 ev_exec_t 是抽象 Executor 接口，本质是 C 语言虚函数表。 ev_std_exec 不是另一个事件循环，而是一个适配层：只要求后端实现 post/abort/on_task_init/on_task_fini，它补齐 dispatch/defer/run。 ev_loop 才拥有真正的全局任务队列、等待线程、Poll 线程和 outstanding work 状态。 ev_exec_run() 的关键价值不是简单调用回调，而是建立“当前线程正在这个 Executor 内执行任务”的 TLS 上下文。 Future、I&#x2F;O、定时器最终都不会直接“执行用户逻辑”；它们把 ev_task 投递给 Executor，由 ev_loop 取出并运行。  可以先把整个系统压缩成下面这条链： 1234...</div></div></div></a><a class="pagination-related" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen Future Promise 机制原理与源码详解</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen Future&#x2F;Promise 机制原理与源码详解 @[toc] 1. 先给结论：Lely Future 到底是什么Lely 的 Future&#x2F;Promise 不是一个“阻塞等待结果”的线程同步工具，而是一个和 executor、task、event loop 深度结合的一次性异步完成通知与结果共享机制。 可以先记住以下五句话：  ev_promise_t 是异步结果的生产端，负责把共享状态从未完成推进到完成； ev_future_t 是观察端，负责检查结果是否完成、读取结果、登记完成后的任务； Future 本身不会执行 I&#x2F;O，也不会主动运行回调；真正执行回调的是 task 所属的 executor； ev_future_submit() 不阻塞，而是把 task 暂存在 Future 内部队列，Future ready 后再提交给 executor； Promise 和 Future 不是两个独立对象，它们共享同一块内存、同一个引用计数和同一个生命周期。  官方 C 接口头文件直接强调：与 C++11 的 Futur...</div></div></div></a><a class="pagination-related" href="/posts/3ecba0f7/" title="Lely CANopen &#96;ev_loop&#96; 详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen &#96;ev_loop&#96; 详解</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen ev_loop 详解 @[toc] 1. 先区分三个容易混淆的“停止”状态loop.c 中至少存在三类停止或完成状态：    状态 所属范围 作用    loop-&gt;stopped 每个 ev_loop_t 整个事件循环是否处于 stopped 状态；ev_loop_stop() 会影响所有正在运行该 loop 的线程。   ev_loop_thrd.stopped 每个线程 中断该线程当前最内层的一次 run/wait 调用；返回后通常会清零，以便下次重新运行。   ctx-&gt;ready 每个等待 context 表示正在等待的 future 已经 ready，应结束本次等待。   不能把它们当作同一个状态： 12345678loop-&gt;stopped= loop 级停止thread-local stopped= 线程级、单次运行中断ctx-&gt;ready= 本次等待目标已经完成  ev_loop_ctx_wait_one() 的主循环实际同时检查这些条件： 12345loop 没有全局停止并且当前线程没有被 kill并且fu...</div></div></div></a><a class="pagination-related" href="/posts/12cc1336/" title="Lely canopen&#96;io_poll&#96; 机制原理与完整运行流程详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely canopen&#96;io_poll&#96; 机制原理与完整运行流程详解</div></div><div class="info-2"><div class="info-item-1">   Lely canopenio_poll 机制原理与完整运行流程详解 @[toc] 1. 先给结论Lely 的 io_poll 是一个基于 Linux epoll 的 I&#x2F;O 事件分发器。它不解析 CANopen，也不主动读取 SocketCAN；它只负责：  把需要关注的文件描述符 fd 登记到 Linux epoll； 阻塞等待这些 fd 出现可读、可写、异常或断开事件； 根据内核返回的 fd，在红黑树中找到对应的 io_poll_watch； 调用 watch-&gt;func(watch, events)； 因为所有登记都附加了 EPOLLONESHOT，每次通知后当前一次监听失效； 调用方若要继续接收后续事件，必须再次调用 io_poll_watch() 恢复下一次监听。  最重要的完整周期是： 1234567891011121314151617181920212223创建 Poll  ↓初始化 io_poll_watch  ↓io_poll_watch(events != 0)  ↓首次登记：EPOLL_CTL_ADD  ↓ev_poll_wait() ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">551</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Lely-CANopen%EF%BC%9Aio-tqueue-%E4%B8%8E-pheap-%E7%9A%84%E5%AE%9E%E7%8E%B0%E5%8E%9F%E7%90%86%E3%80%81%E8%BF%90%E8%A1%8C%E6%B5%81%E7%A8%8B%E5%8F%8A%E5%85%B6%E4%B8%8E-Timer%E3%80%81can-net-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.</span> <span class="toc-text">Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E5%8F%A5%E8%AF%9D%E7%BB%93%E8%AE%BA"><span class="toc-number">1.1.</span> <span class="toc-text">一句话结论</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81-io-tqueue"><span class="toc-number">1.2.</span> <span class="toc-text">1. 为什么需要 io_tqueue</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E5%9B%9B%E5%B1%82%E5%AF%B9%E8%B1%A1%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.3.</span> <span class="toc-text">2. 四层对象模型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-io-tqueue-wait%EF%BC%9A%E4%B8%80%E4%B8%AA%E9%80%BB%E8%BE%91%E6%88%AA%E6%AD%A2%E6%97%B6%E9%97%B4"><span class="toc-number">1.4.</span> <span class="toc-text">3. io_tqueue_wait：一个逻辑截止时间</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E4%B8%BA%E4%BB%80%E4%B9%88-node-%E7%9B%B4%E6%8E%A5%E5%B5%8C%E5%85%A5-io-tqueue-wait"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 为什么 _node 直接嵌入 io_tqueue_wait</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-value-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E8%83%BD%E5%9C%A8%E5%85%A5%E5%A0%86%E5%90%8E%E4%BF%AE%E6%94%B9"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 value 为什么不能在入堆后修改</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-pheap%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E9%80%82%E5%90%88%E8%BF%99%E9%87%8C"><span class="toc-number">1.5.</span> <span class="toc-text">4. pheap：为什么适合这里</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%AE%83%E7%BB%B4%E6%8A%A4%E4%BB%80%E4%B9%88%E6%80%A7%E8%B4%A8"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 它维护什么性质</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E4%B8%BA%E4%BB%80%E4%B9%88-pheap-first-%E8%83%BD%E6%98%AF-O-1"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 为什么 pheap_first() 能是 O(1)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8F%92%E5%85%A5%E6%88%90%E6%9C%AC%E4%B9%9F%E4%BD%8E"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 为什么插入成本也低</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E4%BD%A0%E6%9C%80%E5%85%B3%E5%BF%83%E7%9A%84%E9%97%AE%E9%A2%98%EF%BC%9A%E5%88%A0%E9%99%A4-root-%E5%90%8E%EF%BC%8C%E4%B8%8B%E4%B8%80%E4%B8%AA%E6%9C%80%E5%B0%8F%E8%8A%82%E7%82%B9%E6%80%8E%E4%B9%88%E4%BA%A7%E7%94%9F%EF%BC%9F"><span class="toc-number">1.6.</span> <span class="toc-text">5. 你最关心的问题：删除 root 后，下一个最小节点怎么产生？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E5%85%88%E7%9C%8B-pheap-remove-%E5%88%A0%E9%99%A4-root-%E6%97%B6%E5%81%9A%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 先看 pheap_remove() 删除 root 时做了什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%99%E6%A0%B7%E8%9E%8D%E5%90%88%E5%90%8E%E5%B0%B1%E8%83%BD%E5%BE%97%E5%88%B0%E6%96%B0%E7%9A%84%E5%85%A8%E5%B1%80%E6%9C%80%E5%B0%8F%E5%80%BC"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 为什么这样融合后就能得到新的全局最小值</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E8%BF%99%E4%B8%8D%E6%98%AF%E2%80%9C%E5%AF%BB%E6%89%BE%E7%AC%AC%E4%BA%8C%E5%B0%8F%E2%80%9D%EF%BC%8C%E8%80%8C%E6%98%AF%E2%80%9C%E9%87%8D%E5%BB%BA%E5%A0%86%E9%A1%B6%E2%80%9D"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 这不是“寻找第二小”，而是“重建堆顶”</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-pheap-remove-root-%E8%BF%90%E8%A1%8C%E6%B5%81%E7%A8%8B%E5%9B%BE"><span class="toc-number">1.7.</span> <span class="toc-text">6. pheap_remove(root) 运行流程图</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-pnode-merge-pairs-%E7%9A%84%E5%AE%9E%E9%99%85%E8%9E%8D%E5%90%88%E9%A1%BA%E5%BA%8F"><span class="toc-number">1.7.1.</span> <span class="toc-text">6.1 pnode_merge_pairs() 的实际融合顺序</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-io-tqueue-%E7%9A%84%E5%86%85%E9%83%A8%E7%8A%B6%E6%80%81"><span class="toc-number">1.8.</span> <span class="toc-text">7. io_tqueue 的内部状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E5%88%9D%E5%A7%8B%E5%8C%96%E6%B5%81%E7%A8%8B%EF%BC%9Aio-tqueue-init"><span class="toc-number">1.9.</span> <span class="toc-text">8. 初始化流程：io_tqueue_init()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E4%B8%8E-Timer-%E7%9A%84%E7%BA%A6%E6%9D%9F%E5%85%B3%E7%B3%BB"><span class="toc-number">1.9.1.</span> <span class="toc-text">8.1 与 Timer 的约束关系</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E6%8F%90%E4%BA%A4%E7%AD%89%E5%BE%85%EF%BC%9Aio-tqueue-submit-wait"><span class="toc-number">1.10.</span> <span class="toc-text">9. 提交等待：io_tqueue_submit_wait()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#9-1-%E6%8F%90%E4%BA%A4%E6%97%B6%E5%81%9A%E4%BB%80%E4%B9%88"><span class="toc-number">1.10.1.</span> <span class="toc-text">9.1 提交时做什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E6%98%AF%E6%AF%8F%E6%AC%A1%E6%8F%90%E4%BA%A4%E9%83%BD%E8%A6%81%E9%87%8D%E6%96%B0%E8%AE%BE%E7%BD%AE-Timer"><span class="toc-number">1.10.2.</span> <span class="toc-text">9.2 为什么不是每次提交都要重新设置 Timer</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-Timer-%E5%88%B0%E6%9C%9F%EF%BC%9Aio-tqueue-wait-func"><span class="toc-number">1.11.</span> <span class="toc-text">10. Timer 到期：io_tqueue_wait_func()</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#10-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%80%E6%AC%A1%E4%BC%9A%E5%BC%B9%E5%87%BA%E5%A4%9A%E4%B8%AA%E7%AD%89%E5%BE%85"><span class="toc-number">1.11.1.</span> <span class="toc-text">10.1 为什么一次会弹出多个等待</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-2-io-tqueue-wait-func-%E4%B8%BB%E6%B5%81%E7%A8%8B%E5%9B%BE"><span class="toc-number">1.11.2.</span> <span class="toc-text">10.2 io_tqueue_wait_func() 主流程图</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-3-%E8%BF%99%E6%97%B6-pheap-remove-root-%E6%AD%A3%E5%A5%BD%E6%B4%BE%E4%B8%8A%E7%94%A8%E5%9C%BA"><span class="toc-number">1.11.3.</span> <span class="toc-text">10.3 这时 pheap_remove(root) 正好派上用场</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%8F%96%E6%B6%88%E3%80%81abort-%E4%B8%8E-shutdown"><span class="toc-number">1.12.</span> <span class="toc-text">11. 取消、abort 与 shutdown</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-1-cancel"><span class="toc-number">1.12.1.</span> <span class="toc-text">11.1 cancel</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-abort"><span class="toc-number">1.12.2.</span> <span class="toc-text">11.2 abort</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-3-%E5%A0%86%E7%A9%BA%E6%97%B6%E4%B8%BA%E4%BD%95%E8%A6%81%E5%8F%96%E6%B6%88%E5%BA%95%E5%B1%82-wait"><span class="toc-number">1.12.3.</span> <span class="toc-text">11.3 堆空时为何要取消底层 wait</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-4-shutdown"><span class="toc-number">1.12.4.</span> <span class="toc-text">11.4 shutdown</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-io-tqueue-%E4%B8%8E-io-timer-t-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.13.</span> <span class="toc-text">12. io_tqueue 与 io_timer_t 的关系</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#12-1-io-timer-t-%E8%B4%9F%E8%B4%A3%E4%BB%80%E4%B9%88"><span class="toc-number">1.13.1.</span> <span class="toc-text">12.1 io_timer_t 负责什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-2-io-tqueue-%E8%B4%9F%E8%B4%A3%E4%BB%80%E4%B9%88"><span class="toc-number">1.13.2.</span> <span class="toc-text">12.2 io_tqueue 负责什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-3-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%99%E9%87%8C%E7%94%A8%E7%BB%9D%E5%AF%B9%E6%97%B6%E9%97%B4"><span class="toc-number">1.13.3.</span> <span class="toc-text">12.3 为什么这里用绝对时间</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-io-tqueue-%E4%B8%8E-can-net-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.14.</span> <span class="toc-text">13. io_tqueue 与 can_net 的关系</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#13-1-can-net-%E8%87%AA%E5%B7%B1%E4%B9%9F%E6%9C%89%E4%B8%80%E4%B8%AA-pheap"><span class="toc-number">1.14.1.</span> <span class="toc-text">13.1 can_net 自己也有一个 pheap</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-2-io-can-net-%E4%BC%9A%E5%88%9B%E5%BB%BA-io-tqueue"><span class="toc-number">1.14.2.</span> <span class="toc-text">13.2 io_can_net 会创建 io_tqueue</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-3-can-net-next-%E6%80%8E%E6%A0%B7%E8%BF%9B%E5%85%A5-io-tqueue"><span class="toc-number">1.14.3.</span> <span class="toc-text">13.3 can_net.next 怎样进入 io_tqueue</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-4-%E5%88%B0%E6%9C%9F%E5%90%8E%E5%A6%82%E4%BD%95%E5%9B%9E%E7%81%8C%E7%BB%99-can-net"><span class="toc-number">1.14.4.</span> <span class="toc-text">13.4 到期后如何回灌给 can_net</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-%E4%B8%A4%E7%BA%A7%E5%A0%86%E7%9A%84%E5%87%86%E7%A1%AE%E5%90%AB%E4%B9%89"><span class="toc-number">1.15.</span> <span class="toc-text">14. 两级堆的准确含义</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#14-1-%E7%AC%AC%E4%B8%80%E5%B1%82%EF%BC%9Acan-net-timer-heap"><span class="toc-number">1.15.1.</span> <span class="toc-text">14.1 第一层：can_net.timer_heap</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-2-%E7%AC%AC%E4%BA%8C%E5%B1%82%EF%BC%9Aio-tqueue-queue"><span class="toc-number">1.15.2.</span> <span class="toc-text">14.2 第二层：io_tqueue.queue</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-3-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E8%83%BD%E7%9B%B4%E6%8E%A5%E5%8F%AA%E6%9C%89%E4%B8%80%E5%B1%82"><span class="toc-number">1.15.3.</span> <span class="toc-text">14.3 为什么不能直接只有一层</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E6%9C%80%E7%BB%88%E5%BF%83%E6%99%BA%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.16.</span> <span class="toc-text">15. 最终心智模型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.17.</span> <span class="toc-text">参考资料</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Lely-%E5%AE%98%E6%96%B9%E6%BA%90%E7%A0%81"><span class="toc-number">1.17.1.</span> <span class="toc-text">Lely 官方源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%89%8D%E7%BD%AE%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0"><span class="toc-number">1.17.2.</span> <span class="toc-text">前置学习笔记</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/ddeb74ca/" title="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程"/></a><div class="content"><a class="title" href="/posts/ddeb74ca/" title="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程">Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程</a><time datetime="2026-07-29T05:37:04.979Z" title="更新于 2026-07-29 13:37:04">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/1510f72a/" title="Lely CANopen `spscring` 单生产者单消费者环形队列完整机制学习笔记"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen `spscring` 单生产者单消费者环形队列完整机制学习笔记"/></a><div class="content"><a class="title" href="/posts/1510f72a/" title="Lely CANopen `spscring` 单生产者单消费者环形队列完整机制学习笔记">Lely CANopen `spscring` 单生产者单消费者环形队列完整机制学习笔记</a><time datetime="2026-07-29T02:10:01.371Z" title="更新于 2026-07-29 10:10:01">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen CAN 完整机制学习笔记"/></a><div class="content"><a class="title" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记">Lely CANopen CAN 完整机制学习笔记</a><time datetime="2026-07-29T01:33:58.679Z" title="更新于 2026-07-29 09:33:58">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely canopen`io_poll` 机制原理与完整运行流程详解"/></a><div class="content"><a class="title" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解">Lely canopen`io_poll` 机制原理与完整运行流程详解</a><time datetime="2026-07-29T01:33:31.806Z" title="更新于 2026-07-29 09:33:31">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"/></a><div class="content"><a class="title" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll">Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll</a><time datetime="2026-07-28T08:14:18.460Z" title="更新于 2026-07-28 16:14:18">2026-07-28</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/10.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '6ce81199a9adb463032bffb190c2ef3d'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",3]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9,5,2,21,32],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"canopen","children":[],"count":27,"path":"canopen"},{"name":"杂谈","children":[],"count":35,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":17,"path":"嵌入式面试真题"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":266,"path":"linux"},{"name":"MCU","children":[],"count":38,"path":"MCU"},{"name":"git","children":[],"count":12,"path":"git"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
