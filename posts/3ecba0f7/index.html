@@ -1,0 +1,1715 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Lely CANopen `ev_loop` 详解 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Lely CANopen ev_loop 详解 @[toc] 1. 先区分三个容易混淆的“停止”状态loop.c 中至少存在三类停止或完成状态：    状态 所属范围 作用    loop-&gt;stopped 每个 ev_loop_t 整个事件循环是否处于 stopped 状态；ev_loop_stop() 会影响所有正在运行该 loop 的线程。   ev_loop_thrd.stopp">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Lely CANopen &#96;ev_loop&#96; 详解">
+<meta property="og:url" content="https://wdfk-prog.space/posts/3ecba0f7/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Lely CANopen ev_loop 详解 @[toc] 1. 先区分三个容易混淆的“停止”状态loop.c 中至少存在三类停止或完成状态：    状态 所属范围 作用    loop-&gt;stopped 每个 ev_loop_t 整个事件循环是否处于 stopped 状态；ev_loop_stop() 会影响所有正在运行该 loop 的线程。   ev_loop_thrd.stopp">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/01.jpg">
+<meta property="article:published_time" content="2026-07-28T06:13:10.000Z">
+<meta property="article:modified_time" content="2026-07-28T06:14:35.716Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="canopen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/01.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lely CANopen `ev_loop` 详解",
+  "url": "https://wdfk-prog.space/posts/3ecba0f7/",
+  "image": "https://wdfk-prog.space/images/covers/01.jpg",
+  "datePublished": "2026-07-28T06:13:10.000Z",
+  "dateModified": "2026-07-28T06:14:35.716Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/3ecba0f7/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Lely CANopen `ev_loop` 详解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">549</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/01.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">Lely CANopen `ev_loop` 详解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Lely CANopen `ev_loop` 详解<a class="post-edit-link" href="null_posts/canopen/Lely CANopen `ev_loop` 详解.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-28T06:13:10.000Z" title="发表于 2026-07-28 14:13:10">2026-07-28</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-28T06:14:35.716Z" title="更新于 2026-07-28 14:14:35">2026-07-28</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/canopen/">canopen</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">7.4k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>27分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/3ecba0f7/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-28 14:14:35&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Lely-CANopen-ev-loop-详解"><a href="#Lely-CANopen-ev-loop-详解" class="headerlink" title="Lely CANopen ev_loop 详解"></a>Lely CANopen <code>ev_loop</code> 详解</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/101c021ff3354fd49a88b48e1668cf15.png" alt="在这里插入图片描述"></p>
+<p>@[toc]</p>
+<h2 id="1-先区分三个容易混淆的“停止”状态"><a href="#1-先区分三个容易混淆的“停止”状态" class="headerlink" title="1. 先区分三个容易混淆的“停止”状态"></a>1. 先区分三个容易混淆的“停止”状态</h2><p><code>loop.c</code> 中至少存在三类停止或完成状态：</p>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>所属范围</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>loop-&gt;stopped</code></td>
+<td>每个 <code>ev_loop_t</code></td>
+<td>整个事件循环是否处于 stopped 状态；<code>ev_loop_stop()</code> 会影响所有正在运行该 loop 的线程。</td>
+</tr>
+<tr>
+<td><code>ev_loop_thrd.stopped</code></td>
+<td>每个线程</td>
+<td>中断该线程当前最内层的一次 <code>run/wait</code> 调用；返回后通常会清零，以便下次重新运行。</td>
+</tr>
+<tr>
+<td><code>ctx-&gt;ready</code></td>
+<td>每个等待 context</td>
+<td>表示正在等待的 future 已经 ready，应结束本次等待。</td>
+</tr>
+</tbody></table>
+<p>不能把它们当作同一个状态：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">loop-&gt;stopped</span><br><span class="line">= loop 级停止</span><br><span class="line"></span><br><span class="line">thread-local stopped</span><br><span class="line">= 线程级、单次运行中断</span><br><span class="line"></span><br><span class="line">ctx-&gt;ready</span><br><span class="line">= 本次等待目标已经完成</span><br></pre></td></tr></table></figure>
+
+<p><code>ev_loop_ctx_wait_one()</code> 的主循环实际同时检查这些条件：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">loop 没有全局停止</span><br><span class="line">并且</span><br><span class="line">当前线程没有被 kill</span><br><span class="line">并且</span><br><span class="line">future 尚未 ready</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="2-ntasks：outstanding-work-计数"><a href="#2-ntasks：outstanding-work-计数" class="headerlink" title="2. ntasks：outstanding work 计数"></a>2. <code>ntasks</code>：outstanding work 计数</h2><h3 id="2-1-统计边界：不等于任务链表长度"><a href="#2-1-统计边界：不等于任务链表长度" class="headerlink" title="2.1 统计边界：不等于任务链表长度"></a>2.1 统计边界：不等于任务链表长度</h3><p>源码注释把 <code>ntasks</code> 描述为 pending work 计数，其语义可以理解为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">事件循环已知但尚未完成的工作数量</span><br></pre></td></tr></table></figure>
+
+<p>公开接口文档进一步定义 outstanding work 为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">待执行任务</span><br><span class="line">+ 当前执行中的任务</span><br><span class="line">+ ev_exec_on_task_init() 调用次数</span><br><span class="line">- ev_exec_on_task_fini() 调用次数</span><br></pre></td></tr></table></figure>
+
+<p><code>ev_exec_on_task_init()</code> 的典型意义是：</p>
+<blockquote>
+<p>我现在还没有把任务放入队列，但未来会提交工作，事件循环不要因为暂时空队列而退出。</p>
+</blockquote>
+<p><code>ev_exec_on_task_fini()</code> 表示：</p>
+<blockquote>
+<p>先前声明的这份 outstanding work 已经结束，不再需要阻止事件循环退出。</p>
+</blockquote>
+<p>因此，<code>ntasks</code> 的关键价值是覆盖“任务尚未入队，但异步操作仍然存活”的窗口。</p>
+<h3 id="2-2-队列为空不代表异步工作已经结束"><a href="#2-2-队列为空不代表异步工作已经结束" class="headerlink" title="2.2 队列为空不代表异步工作已经结束"></a>2.2 队列为空不代表异步工作已经结束</h3><p>假设一个异步 CAN 读取操作已经启动，但当前 SocketCAN 没有数据：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">任务队列暂时为空</span><br><span class="line">SocketCAN read 正等待 I/O</span><br><span class="line">未来收到 CAN 帧后才会投递完成任务</span><br></pre></td></tr></table></figure>
+
+<p>如果 event loop 只看任务队列，就可能错误判断：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">queue 为空 → 没有工作 → stop</span><br></pre></td></tr></table></figure>
+
+<p>而 <code>ntasks &gt; 0</code> 表示仍存在已登记的异步工作，因此 loop 应继续等待 Poll 或条件变量事件。</p>
+<h3 id="2-3-ntasks-的状态变化"><a href="#2-3-ntasks-的状态变化" class="headerlink" title="2.3 ntasks 的状态变化"></a>2.3 <code>ntasks</code> 的状态变化</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">stateDiagram-v2</span><br><span class="line">    [*] --&gt; Zero: 初始化为 0</span><br><span class="line">    Zero --&gt; Active: on_task_init 0→1</span><br><span class="line">    Active --&gt; Active: on_task_init / on_task_fini 后仍大于 0</span><br><span class="line">    Active --&gt; LastDone: on_task_fini 1→0</span><br><span class="line">    LastDone --&gt; StopCheck: 加锁检查任务队列</span><br><span class="line">    StopCheck --&gt; Zero: 队列仍有任务</span><br><span class="line">    StopCheck --&gt; Stopped: 队列为空，调用 ev_loop_do_stop</span><br></pre></td></tr></table></figure>
+
+<p>关键代码路径是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">on_task_init:</span><br><span class="line">    ntasks 原子加一</span><br><span class="line"></span><br><span class="line">on_task_fini:</span><br><span class="line">    ntasks 原子减一</span><br><span class="line">    若减前为 1，即减后为 0：</span><br><span class="line">        获取 loop-&gt;mtx</span><br><span class="line">        若任务队列为空：停止 loop</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="3-ntasks-的线程安全与原子内存序"><a href="#3-ntasks-的线程安全与原子内存序" class="headerlink" title="3. ntasks 的线程安全与原子内存序"></a>3. <code>ntasks</code> 的线程安全与原子内存序</h2><h3 id="3-1-跨线程并发更新是原子化的根本原因"><a href="#3-1-跨线程并发更新是原子化的根本原因" class="headerlink" title="3.1 跨线程并发更新是原子化的根本原因"></a>3.1 跨线程并发更新是原子化的根本原因</h3><p><code>ev_exec_on_task_init()</code> 和 <code>ev_exec_on_task_fini()</code> 是 executor 的公开生命周期接口。调用它们的线程不一定是正在运行 <code>ev_loop_wait_one()</code> 的线程，也不保证已经持有 <code>loop-&gt;mtx</code>。</p>
+<p>典型并发场景：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">线程 A：启动异步读，调用 on_task_init()</span><br><span class="line">线程 B：启动异步写，调用 on_task_init()</span><br><span class="line">线程 C：某个异步操作结束，调用 on_task_fini()</span><br><span class="line">线程 D：event loop 读取 ntasks 判断是否应停止</span><br></pre></td></tr></table></figure>
+
+<p>如果使用普通 <code>size_t</code> 且没有统一互斥锁，会出现 C 语言层面的数据竞争，行为未定义。</p>
+<h3 id="3-2-非原子操作会出现丢失更新"><a href="#3-2-非原子操作会出现丢失更新" class="headerlink" title="3.2 非原子操作会出现丢失更新"></a>3.2 非原子操作会出现丢失更新</h3><p>假设 <code>ntasks == 5</code>，两个线程同时执行普通的 <code>++</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">线程 A 读取 5</span><br><span class="line">线程 B 读取 5</span><br><span class="line">线程 A 写入 6</span><br><span class="line">线程 B 写入 6</span><br></pre></td></tr></table></figure>
+
+<p>正确结果应为 7，实际可能为 6。</p>
+<p>对于 <code>ntasks</code>，计数错误会带来两类严重后果：</p>
+<table>
+<thead>
+<tr>
+<th>错误方向</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>少计</td>
+<td>loop 可能在异步操作尚未结束时提前 stop。</td>
+</tr>
+<tr>
+<td>多计</td>
+<td>loop 可能一直认为还有 outstanding work，无法自然退出。</td>
+</tr>
+</tbody></table>
+<h3 id="3-3-未统一使用-loop-mtx-的原因"><a href="#3-3-未统一使用-loop-mtx-的原因" class="headerlink" title="3.3 未统一使用 loop-&gt;mtx 的原因"></a>3.3 未统一使用 <code>loop-&gt;mtx</code> 的原因</h3><p>理论上可以把所有 <code>ntasks</code> 读写都放进 <code>loop-&gt;mtx</code>，但当前实现选择原子计数，原因可以从代码行为推断为：</p>
+<ol>
+<li><code>on_task_init()</code> 是高频轻量路径，只做原子加一，不需要锁任务队列；</li>
+<li><code>on_task_fini()</code> 在减后仍不为 0 时，也不需要进入互斥锁；</li>
+<li>只有最后一个 outstanding work 消失时，才加锁检查队列并决定是否 stop；</li>
+<li>避免每次工作引用变化都与任务队列竞争同一把锁。</li>
+</ol>
+<p>这是典型的“原子引用计数快路径 + 最后一个引用进入慢路径”的结构。</p>
+<h3 id="3-4-加一-relaxed、减一-release-和归零-acquire-fence"><a href="#3-4-加一-relaxed、减一-release-和归零-acquire-fence" class="headerlink" title="3.4 加一 relaxed、减一 release 和归零 acquire fence"></a>3.4 加一 relaxed、减一 release 和归零 acquire fence</h3><p>Linux&#x2F;POSIX 原子实现中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">加一：relaxed</span><br><span class="line">减一：release</span><br><span class="line">观察到 1→0：acquire fence</span><br></pre></td></tr></table></figure>
+
+<p>这里最基本的要求是：</p>
+<ul>
+<li>所有线程必须对同一个计数进行不可分割的 read-modify-write；</li>
+<li>单个变量的修改顺序必须一致；</li>
+<li>最后一个完成者在执行“归零后的停止判断”前，需要建立更强的内存顺序边界。</li>
+</ul>
+<p><code>relaxed</code> 加一足以完成“占一个 outstanding work 名额”；它不负责发布其他数据。</p>
+<p>减一使用 release，并在最后一个减一线程上执行 acquire fence，是常见的最后引用释放模式：只有真正从 1 变为 0 的线程承担最终收尾工作。</p>
+<p>需要强调：</p>
+<blockquote>
+<p>原子操作主要解决的是 <code>ntasks</code> 自身的并发计数问题；任务队列、waiting&#x2F;polling 链表、<code>loop-&gt;stopped</code> 等结构仍由 <code>loop-&gt;mtx</code> 保护。</p>
+</blockquote>
+<h3 id="3-5-不同构建配置下的计数类型"><a href="#3-5-不同构建配置下的计数类型" class="headerlink" title="3.5 不同构建配置下的计数类型"></a>3.5 不同构建配置下的计数类型</h3><p>源码针对不同平台和裁剪配置提供多个实现：</p>
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>实现</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>禁用线程</td>
+<td>普通 <code>size_t</code>，因为不存在并发访问。</td>
+</tr>
+<tr>
+<td>Windows MSVC</td>
+<td><code>InterlockedIncrement/Decrement</code>。</td>
+</tr>
+<tr>
+<td>支持 C11 原子</td>
+<td><code>atomic_size_t</code>。</td>
+</tr>
+<tr>
+<td>明确禁用原子且特定配置</td>
+<td>普通整数，依赖该裁剪配置的使用约束。</td>
+</tr>
+</tbody></table>
+<p>因此，“为什么要原子”准确地说是：</p>
+<blockquote>
+<p>在启用多线程且平台支持原子操作的正常构建中，<code>ntasks</code> 必须以原子方式维护；单线程构建不需要。</p>
+</blockquote>
+<hr>
+<h2 id="4-线程局部-ev-loop-thrd-与-context-栈"><a href="#4-线程局部-ev-loop-thrd-与-context-栈" class="headerlink" title="4. 线程局部 ev_loop_thrd 与 context 栈"></a>4. 线程局部 <code>ev_loop_thrd</code> 与 context 栈</h2><h3 id="4-1-TLS-实例按线程独立"><a href="#4-1-TLS-实例按线程独立" class="headerlink" title="4.1 TLS 实例按线程独立"></a>4.1 TLS 实例按线程独立</h3><p>定义使用 <code>_Thread_local</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">static + _Thread_local + struct ev_loop_thrd</span><br></pre></td></tr></table></figure>
+
+<p>三个关键词分别表示：</p>
+<table>
+<thead>
+<tr>
+<th>关键字</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>static</code></td>
+<td>变量名只在当前源文件可见。</td>
+</tr>
+<tr>
+<td><code>_Thread_local</code></td>
+<td>每个线程拥有独立存储实例。</td>
+</tr>
+<tr>
+<td>静态初始化 <code>{0, NULL}</code></td>
+<td>每个线程第一次获得的实例初始为停止标志 0、context 指针 NULL。</td>
+</tr>
+</tbody></table>
+<p>这里的“每个线程一份”是 C TLS 的存储语义，不应理解为进程启动时预先为未来所有线程集中创建对象。对实际存在并访问该符号的线程，运行库提供该线程自己的实例，并以 <code>{ 0, NULL }</code> 初始化。</p>
+<p>因此，假设有三个线程调用同一个 <code>ev_loop_t</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">线程 A：自己的 ev_loop_thrd</span><br><span class="line">线程 B：自己的 ev_loop_thrd</span><br><span class="line">线程 C：自己的 ev_loop_thrd</span><br></pre></td></tr></table></figure>
+
+<p>它们之间不会共享 <code>stopped</code> 和 <code>ctx</code> 字段。</p>
+<h3 id="4-2-线程状态与-loop-状态相互独立"><a href="#4-2-线程状态与-loop-状态相互独立" class="headerlink" title="4.2 线程状态与 loop 状态相互独立"></a>4.2 线程状态与 loop 状态相互独立</h3><p>同一个线程可以先后运行不同的 loop，甚至在任务回调中嵌套运行另一个 loop。该线程仍只有一个 <code>ev_loop_thrd</code>。</p>
+<p>这也是为什么结构体名称是 <code>ev_loop_thrd</code>，而不是 <code>ev_loop_thread_of_loop</code>。</p>
+<h3 id="4-3-两个字段的职责"><a href="#4-3-两个字段的职责" class="headerlink" title="4.3 两个字段的职责"></a>4.3 两个字段的职责</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">stopped：中断当前线程正在执行的最内层 loop 调用</span><br><span class="line">ctx：指向当前线程最内层的 ev_loop_ctx</span><br></pre></td></tr></table></figure>
+
+<p><code>ev_loop_self()</code> 返回的实际上就是当前线程这份 TLS 状态的地址。这个地址被当成线程令牌传给 <code>ev_loop_kill()</code>。</p>
+<h3 id="4-4-ctx-构成嵌套调用栈"><a href="#4-4-ctx-构成嵌套调用栈" class="headerlink" title="4.4 ctx 构成嵌套调用栈"></a>4.4 <code>ctx</code> 构成嵌套调用栈</h3><p>创建 context 时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">新 ctx.next = 当前 TLS ctx</span><br><span class="line">TLS ctx = 新 ctx</span><br></pre></td></tr></table></figure>
+
+<p>销毁时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">TLS ctx = 当前 ctx.next</span><br></pre></td></tr></table></figure>
+
+<p>形成的结构是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">TLS ev_loop_thrd.ctx</span><br><span class="line">        ↓</span><br><span class="line">最内层 ctx</span><br><span class="line">        ↓ next</span><br><span class="line">外一层 ctx</span><br><span class="line">        ↓ next</span><br><span class="line">更外层 ctx</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    T[线程局部 ev_loop_thrd] --&gt; C3[最内层 ctx]</span><br><span class="line">    C3 --&gt; C2[外层 ctx]</span><br><span class="line">    C2 --&gt; C1[最外层 ctx]</span><br><span class="line">    C1 --&gt; N[NULL]</span><br></pre></td></tr></table></figure>
+
+<p>所以 <code>ev_loop_kill()</code> 的公开契约能够实现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">存在嵌套 event loop 时，只中断最内层 loop。</span><br></pre></td></tr></table></figure>
+
+<p>它通过 <code>thr-&gt;ctx</code> 直接找到栈顶 context，而不是遍历某个全局 loop 列表。</p>
+<h3 id="4-5-ev-loop-ctx-不是-ev-loop-t"><a href="#4-5-ev-loop-ctx-不是-ev-loop-t" class="headerlink" title="4.5 ev_loop_ctx 不是 ev_loop_t"></a>4.5 <code>ev_loop_ctx</code> 不是 <code>ev_loop_t</code></h3><p>二者是“被管理对象”和“单次运行上下文”的关系：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_loop_ctx.loop ──指向──&gt; ev_loop_t</span><br></pre></td></tr></table></figure>
+
+<p>一个 <code>ev_loop_t</code> 可以同时被多个线程运行，因此可以同时存在多个 context；同一线程发生嵌套 <code>wait/run</code> 时，也可以在 TLS 栈上挂载多个 context。每个 context 只记录本次调用需要的状态，例如：</p>
+<ul>
+<li>使用哪个 <code>loop</code>；</li>
+<li>是否等待某个 <code>future</code>；</li>
+<li>当前正在 Poll 还是条件变量等待；</li>
+<li>Poll 后端线程令牌；</li>
+<li>所属线程的 <code>pstopped</code>；</li>
+<li>future 是否 ready。</li>
+</ul>
+<h3 id="4-6-context-是按需创建的"><a href="#4-6-context-是按需创建的" class="headerlink" title="4.6 context 是按需创建的"></a>4.6 context 是按需创建的</h3><p><code>ev_loop_ctx_wait_one()</code> 先尝试从任务队列取得真实任务。只有没有任务可立即执行，并且需要进入 Poll、条件变量等待或注册 future 完成通知时，才调用 <code>ev_loop_ctx_create()</code>。因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">调用 wait_one/run</span><br><span class="line">    ├─ 立即取到任务：可以不创建 context</span><br><span class="line">    └─ 需要等待或 Poll：创建 context 并压入线程 TLS 栈</span><br></pre></td></tr></table></figure>
+
+<p>这也是 <code>pctx</code> 在第一次进入 <code>ev_loop_ctx_wait_one()</code> 时允许为 <code>NULL</code> 的原因。</p>
+<hr>
+<h2 id="5-pstopped：context-到线程中断标志的引用"><a href="#5-pstopped：context-到线程中断标志的引用" class="headerlink" title="5. pstopped：context 到线程中断标志的引用"></a>5. <code>pstopped</code>：context 到线程中断标志的引用</h2><h3 id="5-1-指向当前线程-TLS-中的-stopped"><a href="#5-1-指向当前线程-TLS-中的-stopped" class="headerlink" title="5.1 指向当前线程 TLS 中的 stopped"></a>5.1 指向当前线程 TLS 中的 <code>stopped</code></h3><p>context 创建时建立关系：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ctx-&gt;pstopped</span><br><span class="line">      ↓</span><br><span class="line">当前线程的 ev_loop_thrd.stopped</span><br></pre></td></tr></table></figure>
+
+<p>所以 <code>pstopped</code> 不是指向 <code>loop-&gt;stopped</code>，也不是 context 自己单独分配的停止标志。</p>
+<h3 id="5-2-context-保存该指针的用途"><a href="#5-2-context-保存该指针的用途" class="headerlink" title="5.2 context 保存该指针的用途"></a>5.2 context 保存该指针的用途</h3><p><code>ev_loop_ctx</code> 可能被以下执行路径访问：</p>
+<ul>
+<li>当前运行线程的 wait 主循环；</li>
+<li>future 完成后执行的 <code>ctx-&gt;task</code>；</li>
+<li>其他线程调用 <code>ev_loop_kill()</code>；</li>
+<li>loop stop 或新任务到来时的唤醒逻辑。</li>
+</ul>
+<p>这些路径需要操作“该 context 所属线程的中断标志”。其他线程不能通过普通变量名取得目标线程的 TLS 实例，但 context 在创建时已经把目标 TLS 地址保存为 <code>pstopped</code>，因此可以定向访问。</p>
+<h3 id="5-3-线程级停止标志优于-context-私有标志"><a href="#5-3-线程级停止标志优于-context-私有标志" class="headerlink" title="5.3 线程级停止标志优于 context 私有标志"></a>5.3 线程级停止标志优于 context 私有标志</h3><p>从现有设计可以看出，停止语义刻意绑定到线程，而不是单个 context 对象：</p>
+<ol>
+<li><code>ev_loop_self()</code> 返回线程令牌；</li>
+<li><code>ev_loop_kill()</code> 接收线程令牌；</li>
+<li>TLS 中维护最内层 context；</li>
+<li>中断后标志会在本次 wait 返回前清零，使下一次调用能够继续运行。</li>
+</ol>
+<p>如果每个 context 有独立停止字段，就需要额外处理：</p>
+<ul>
+<li>没有 context 时发生的 kill；</li>
+<li>context 尚未创建但线程即将进入等待的窗口；</li>
+<li>嵌套 context 的停止传播规则；</li>
+<li><code>ev_loop_self()</code> 所代表的线程级语义。</li>
+</ul>
+<p>当前方案用一个线程级标志统一这些状态。</p>
+<h3 id="5-4-pstopped-的同步保护"><a href="#5-4-pstopped-的同步保护" class="headerlink" title="5.4 pstopped 的同步保护"></a>5.4 <code>pstopped</code> 的同步保护</h3><p>虽然指向的是线程局部对象，但该指针可能被其他线程使用。源码通过 <code>loop-&gt;mtx</code> 对相关访问进行同步：</p>
+<ul>
+<li>wait 主循环在持有 <code>loop-&gt;mtx</code> 时读取；</li>
+<li><code>ev_loop_kill()</code> 持有 <code>loop-&gt;mtx</code> 时设置；</li>
+<li>future 回调持有 <code>loop-&gt;mtx</code> 时检查；</li>
+<li>wait 退出时持有 <code>loop-&gt;mtx</code> 清零。</li>
+</ul>
+<p>因此，这个字段没有像 <code>ntasks</code> 一样采用原子类型。二者区别是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">ntasks：有无锁访问路径 → 必须原子化</span><br><span class="line">pstopped 指向的值：统一在 loop-&gt;mtx 下访问 → 普通 int 即可</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-5-单次中断结束后的自动清零"><a href="#5-5-单次中断结束后的自动清零" class="headerlink" title="5.5 单次中断结束后的自动清零"></a>5.5 单次中断结束后的自动清零</h3><p>线程级 stopped 的目标是中断“当前这一次”运行，而不是永久停止 loop。</p>
+<p>若本次没有执行任务，并且检测到 thread-local stopped：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">清零 stopped</span><br><span class="line">返回调用者</span><br></pre></td></tr></table></figure>
+
+<p>因此下次再调用 <code>run()</code> 或 <code>wait_one()</code> 时，可以重新进入事件循环。</p>
+<p>永久或全局停止使用的是 <code>loop-&gt;stopped</code>，需要通过 <code>ev_loop_restart()</code> 重置。</p>
+<h3 id="5-6-loop-级停止与线程定向中断"><a href="#5-6-loop-级停止与线程定向中断" class="headerlink" title="5.6 loop 级停止与线程定向中断"></a>5.6 loop 级停止与线程定向中断</h3><p>两个公开接口的作用范围不同：</p>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>作用范围</th>
+<th>内部状态</th>
+<th>恢复方式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ev_loop_stop(loop)</code></td>
+<td>停止该 <code>loop</code> 上所有正在进行及后续的 run&#x2F;wait 调用</td>
+<td>设置 <code>loop-&gt;stopped = 1</code>，并唤醒 waiting&#x2F;polling contexts</td>
+<td><code>ev_loop_restart(loop)</code></td>
+</tr>
+<tr>
+<td><code>ev_loop_kill(loop, thr)</code></td>
+<td>中断目标线程当前最内层的一次 run&#x2F;wait 调用</td>
+<td>通过栈顶 context 设置目标线程 TLS <code>stopped</code>，再 signal 条件变量或 kill Poll wait</td>
+<td>本次调用返回前自动清零</td>
+</tr>
+</tbody></table>
+<p>所以不能表述为“需要整个线程停止时直接使用 <code>stopped</code>”。<code>stopped</code> 是内部标志；对外应使用 <code>ev_loop_kill(loop, ev_loop_self() 返回的线程令牌)</code>。该接口不会终止操作系统线程，只会让目标线程当前最内层的 event-loop 调用返回。</p>
+<hr>
+<h2 id="6-cnd：非-Poll-线程的休眠与唤醒"><a href="#6-cnd：非-Poll-线程的休眠与唤醒" class="headerlink" title="6. cnd：非 Poll 线程的休眠与唤醒"></a>6. <code>cnd</code>：非 Poll 线程的休眠与唤醒</h2><h3 id="6-1-每个-context-独立持有条件变量"><a href="#6-1-每个-context-独立持有条件变量" class="headerlink" title="6.1 每个 context 独立持有条件变量"></a>6.1 每个 context 独立持有条件变量</h3><p><code>ev_loop_ctx</code> 中包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">cnd_t cond</span><br><span class="line">waiting 标志</span><br></pre></td></tr></table></figure>
+
+<p>在 Linux pthread 兼容实现中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">cnd_t              → pthread_cond_t</span><br><span class="line">cnd_wait()         → pthread_cond_wait()</span><br><span class="line">cnd_timedwait()    → pthread_cond_timedwait()</span><br><span class="line">cnd_signal()       → pthread_cond_signal()</span><br></pre></td></tr></table></figure>
+
+<p>它不是 CANopen 条件，也不是 Poll 的事件对象，而是纯线程同步原语。</p>
+<h3 id="6-2-进入条件变量等待的条件"><a href="#6-2-进入条件变量等待的条件" class="headerlink" title="6.2 进入条件变量等待的条件"></a>6.2 进入条件变量等待的条件</h3><p>只有同时满足以下条件时，线程才会进入 <code>cnd_wait()</code>：</p>
+<ol>
+<li>当前没有真实任务可执行；</li>
+<li>context 已经创建；</li>
+<li>当前线程不能进入 <code>ev_poll_wait()</code>；</li>
+<li>任务队列仍为空；</li>
+<li>loop 尚未停止、线程未被 kill、future 未 ready。</li>
+</ol>
+<p>“不能进入 Poll”通常是因为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">loop 配置了 npoll 限制</span><br><span class="line">并且</span><br><span class="line">已有足够数量的其他线程正在 ev_poll_wait()</span><br></pre></td></tr></table></figure>
+
+<p>POSIX reactor 场景通常建议 <code>npoll == 1</code>。这意味着：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">一个线程负责 epoll_pwait</span><br><span class="line">其他 loop 线程没有任务时用条件变量睡眠</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-3-Poll-并发数量限制"><a href="#6-3-Poll-并发数量限制" class="headerlink" title="6.3 Poll 并发数量限制"></a>6.3 Poll 并发数量限制</h3><p>技术上 <code>npoll == 0</code> 可以允许无限数量线程同时 poll，但在 POSIX readiness reactor 模型中，多线程同时等待同一个事件源通常会增加：</p>
+<ul>
+<li>唤醒竞争；</li>
+<li>锁竞争；</li>
+<li>同一批 readiness 事件的调度复杂度；</li>
+<li>不必要的上下文切换。</li>
+</ul>
+<p>Lely 的 C API 文档明确建议 POSIX reactor 使用单 polling thread。</p>
+<p>因此条件变量承担“非 polling worker 的休眠机制”。</p>
+<h3 id="6-4-cnd-wait-的原子解锁与重新加锁"><a href="#6-4-cnd-wait-的原子解锁与重新加锁" class="headerlink" title="6.4 cnd_wait() 的原子解锁与重新加锁"></a>6.4 <code>cnd_wait()</code> 的原子解锁与重新加锁</h3><p>调用前线程持有 <code>loop-&gt;mtx</code>。条件变量等待会完成一个原子组合动作：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">释放 loop-&gt;mtx</span><br><span class="line">并进入 cond 等待</span><br></pre></td></tr></table></figure>
+
+<p>被唤醒后：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">重新获得 loop-&gt;mtx</span><br><span class="line">然后 cnd_wait 返回</span><br></pre></td></tr></table></figure>
+
+<p>这里“释放锁并睡眠”必须是相对于 signal 过程原子的，否则会出现经典丢失唤醒：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">等待线程：检查无任务</span><br><span class="line">等待线程：准备睡眠但尚未真正睡眠</span><br><span class="line">投递线程：加入任务并 signal</span><br><span class="line">等待线程：此后才睡眠</span><br><span class="line">结果：任务已存在，但等待线程永久睡眠</span><br></pre></td></tr></table></figure>
+
+<p>条件变量和互斥锁的组合就是为解决这个窗口。</p>
+<h3 id="6-5-条件变量的唤醒来源"><a href="#6-5-条件变量的唤醒来源" class="headerlink" title="6.5 条件变量的唤醒来源"></a>6.5 条件变量的唤醒来源</h3><p><code>ev_loop_ctx_kill()</code> 根据 context 当前状态选择唤醒方式：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">ctx 正在 cnd 等待</span><br><span class="line">    → cnd_signal(&amp;ctx-&gt;cond)</span><br><span class="line"></span><br><span class="line">ctx 正在 Poll 等待</span><br><span class="line">    → ev_poll_kill(loop-&gt;poll, ctx-&gt;thr)</span><br><span class="line"></span><br><span class="line">ctx 两者都不是</span><br><span class="line">    → 只更新状态，后续循环自行观察</span><br></pre></td></tr></table></figure>
+
+<p>触发 <code>ev_loop_ctx_kill()</code> 的主要来源包括：</p>
+<ul>
+<li>新任务从空队列变为非空；</li>
+<li>future 变为 ready；</li>
+<li><code>ev_loop_stop()</code>；</li>
+<li>其他线程调用 <code>ev_loop_kill()</code>。</li>
+</ul>
+<h3 id="6-6-每个-context-独立条件变量的价值"><a href="#6-6-每个-context-独立条件变量的价值" class="headerlink" title="6.6 每个 context 独立条件变量的价值"></a>6.6 每个 context 独立条件变量的价值</h3><p>它可以做到定向唤醒：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">只唤醒被选中的 waiting context</span><br><span class="line">而不是 broadcast 唤醒所有 worker</span><br></pre></td></tr></table></figure>
+
+<p><code>loop-&gt;waiting</code> 链表按 LIFO 方式组织。<code>ev_loop_kill_any()</code> 取一个 waiting context，然后 signal 它自己的 <code>cond</code>。</p>
+<p>这减少了惊群效应。</p>
+<h3 id="6-7-虚假唤醒与循环复核"><a href="#6-7-虚假唤醒与循环复核" class="headerlink" title="6.7 虚假唤醒与循环复核"></a>6.7 虚假唤醒与循环复核</h3><p>条件变量允许虚假唤醒，因此正确写法必须始终在循环中重新检查状态，而不能认为 <code>cnd_wait()</code> 返回就必然有任务。</p>
+<p>Lely 的结构正是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">while 条件仍允许继续等待:</span><br><span class="line">    检查 stop / killed / future</span><br><span class="line">    检查任务队列</span><br><span class="line">    检查 poll 资格</span><br><span class="line">    必要时再次 wait</span><br></pre></td></tr></table></figure>
+
+<p>所以虚假唤醒不会破坏逻辑，只会多执行一轮条件检查。</p>
+<h3 id="6-8-条件变量与-Poll-的职责边界"><a href="#6-8-条件变量与-Poll-的职责边界" class="headerlink" title="6.8 条件变量与 Poll 的职责边界"></a>6.8 条件变量与 Poll 的职责边界</h3><table>
+<thead>
+<tr>
+<th>等待方式</th>
+<th>等待对象</th>
+<th>唤醒机制</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ev_poll_wait()</code></td>
+<td>外部 I&#x2F;O、timerfd、signal pipe 等 Poll 事件</td>
+<td><code>ev_poll_kill()</code> 或底层 I&#x2F;O 事件</td>
+</tr>
+<tr>
+<td><code>cnd_wait()</code></td>
+<td>loop 内部任务或状态变化</td>
+<td><code>cnd_signal()</code></td>
+</tr>
+</tbody></table>
+<p>可以把它们理解为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Poll：等外部世界</span><br><span class="line">cnd：等同一进程内其他线程</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="7-Future-Promise：一次性异步结果与-event-loop-的连接点"><a href="#7-Future-Promise：一次性异步结果与-event-loop-的连接点" class="headerlink" title="7. Future&#x2F;Promise：一次性异步结果与 event loop 的连接点"></a>7. Future&#x2F;Promise：一次性异步结果与 event loop 的连接点</h2><h3 id="7-1-Future-不是消息队列"><a href="#7-1-Future-不是消息队列" class="headerlink" title="7.1 Future 不是消息队列"></a>7.1 Future 不是消息队列</h3><p>Lely 的 Future&#x2F;Promise 可以宽泛地看成一种“异步完成通知机制”，但更准确的定义是：</p>
+<blockquote>
+<p>Future&#x2F;Promise 是围绕一份共享状态建立的一次性异步结果同步机制。</p>
+</blockquote>
+<p>它与消息队列的区别如下：</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>主要语义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>消息队列</td>
+<td>发送方可以连续写入多条消息，接收方逐条取出；通常是多次生产、多次消费。</td>
+</tr>
+<tr>
+<td>Future&#x2F;Promise</td>
+<td>Promise 最多成功完成一次；Future 观察同一个 ready 状态，并在 ready 后取得一次异步操作的结果。</td>
+</tr>
+<tr>
+<td>Event-loop task queue</td>
+<td>保存待执行的 <code>ev_task</code>，解决“在哪个 executor 上执行回调”；它不等同于 Future 的结果存储区。</td>
+</tr>
+</tbody></table>
+<p>因此，不宜把 Future 理解为“发送方把请求消息放进 loop 队列，接收方执行后再沿队列返回结果”。Future 自身不负责传输请求，也不负责执行 I&#x2F;O；它只保存或关联异步操作的完成状态、结果值以及等待完成通知的任务。</p>
+<h3 id="7-2-Promise、Future、异步操作和-Loop-的角色"><a href="#7-2-Promise、Future、异步操作和-Loop-的角色" class="headerlink" title="7.2 Promise、Future、异步操作和 Loop 的角色"></a>7.2 Promise、Future、异步操作和 Loop 的角色</h3><table>
+<thead>
+<tr>
+<th>对象</th>
+<th>准确角色</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>异步操作发起方</td>
+<td>调用 <code>AsyncRead()</code>、<code>AsyncWrite()</code>、异步 SDO 等接口，并取得 Future。</td>
+</tr>
+<tr>
+<td><code>ev_promise_t</code></td>
+<td>异步操作完成方持有的写端。操作成功、失败或取消后，通过 Promise 发布结果并将共享状态置为 ready。</td>
+</tr>
+<tr>
+<td><code>ev_future_t</code></td>
+<td>观察端。用于检查 ready、取得结果，或登记“Future ready 后应投递”的任务。</td>
+</tr>
+<tr>
+<td><code>ev_loop_t</code></td>
+<td>任务执行器和 I&#x2F;O 驱动器。它执行 executor 队列中的任务，并在队列暂时为空时进入 Poll 或条件变量等待。</td>
+</tr>
+<tr>
+<td>Poll&#x2F;I&#x2F;O 组件</td>
+<td>驱动真正的 SocketCAN、timerfd、信号或其他异步事件；事件完成后通常投递任务，任务再推进异步操作。</td>
+</tr>
+</tbody></table>
+<p><code>ev_loop_t</code> 不是固定的“发送方”或“接收方”。同一个 loop 既可能执行发起异步操作的任务，也可能执行 I&#x2F;O 完成任务、Promise 完成后的通知任务以及其他应用任务。</p>
+<h3 id="7-3-Promise-与-Future-共享一次性结果状态"><a href="#7-3-Promise-与-Future-共享一次性结果状态" class="headerlink" title="7.3 Promise 与 Future 共享一次性结果状态"></a>7.3 Promise 与 Future 共享一次性结果状态</h3><p>Promise 用于存入一个稍后由 Future 异步取得的值，其语义类似 single-shot event。Future 则提供对异步操作结果的访问。</p>
+<p>典型状态变化为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">stateDiagram-v2</span><br><span class="line">    [*] --&gt; Waiting</span><br><span class="line">    Waiting --&gt; Setting: promise acquires completion right</span><br><span class="line">    Setting --&gt; Ready: store result and publish ready</span><br><span class="line">    Ready --&gt; Ready: later completion attempts are rejected</span><br></pre></td></tr></table></figure>
+
+<p>Promise 完成后，Future 可以：</p>
+<ol>
+<li>通过 <code>ev_future_is_ready()</code> 判断是否完成；</li>
+<li>在 ready 后通过 <code>ev_future_get()</code> 取得 Promise 保存的结果；</li>
+<li>通过 <code>ev_future_submit()</code> 登记一个任务，使其在 Future ready 后被投递到指定 executor。</li>
+</ol>
+<p>这里的结果值与 executor task 是两个不同概念：结果保存在 Future&#x2F;Promise 的共享状态中；task 只负责在完成时执行通知或后续处理。</p>
+<h3 id="7-4-ev-loop-wait-loop-future-如何接入-Future"><a href="#7-4-ev-loop-wait-loop-future-如何接入-Future" class="headerlink" title="7.4 ev_loop_wait(loop, future) 如何接入 Future"></a>7.4 <code>ev_loop_wait(loop, future)</code> 如何接入 Future</h3><p>当 <code>ev_loop_ctx_create()</code> 收到非空 Future 时，它会：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">1. 获取 Future 引用并保存到 ctx-&gt;future</span><br><span class="line">2. 初始化 ctx-&gt;task，使其 executor 指向当前 loop</span><br><span class="line">3. 调用 ev_future_submit(future, &amp;ctx-&gt;task)</span><br></pre></td></tr></table></figure>
+
+<p>这一步不是把“异步请求”提交给 Future，而是把一个“Future 完成后唤醒本次 wait”的内部任务登记到 Future。</p>
+<p>当异步操作完成并满足 Promise 后：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">Promise 发布结果并置 Future ready</span><br><span class="line">    ↓</span><br><span class="line">Future 将 ctx-&gt;task 投递到 loop executor</span><br><span class="line">    ↓</span><br><span class="line">loop 从任务队列取出并执行 ctx-&gt;task</span><br><span class="line">    ↓</span><br><span class="line">ev_loop_ctx_task_func() 设置 ctx-&gt;ready = 1</span><br><span class="line">    ↓</span><br><span class="line">ev_loop_ctx_kill(ctx, 0) 唤醒 Poll 或条件变量等待</span><br><span class="line">    ↓</span><br><span class="line">ev_loop_wait() 看到 ctx-&gt;ready 后结束本次等待</span><br></pre></td></tr></table></figure>
+
+<p><code>ctx-&gt;task</code> 的职责是结束等待，不是读取和返回业务结果。业务结果仍由调用方或上层包装在 Future ready 后通过 <code>ev_future_get()</code> 或相应的 C++ Future 接口取得。</p>
+<h3 id="7-5-等待-Future-时仍要持续驱动-Loop"><a href="#7-5-等待-Future-时仍要持续驱动-Loop" class="headerlink" title="7.5 等待 Future 时仍要持续驱动 Loop"></a>7.5 等待 Future 时仍要持续驱动 Loop</h3><p><code>ev_loop_wait(loop, future)</code> 不是单纯阻塞在 Future 上。只要 Future 尚未 ready，它仍会继续推进 event loop：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Future 尚未 ready</span><br><span class="line">    ├─ queue 有真实任务：执行一个任务</span><br><span class="line">    ├─ 当前 context 可以 Poll：调用 ev_poll_wait() 等待 I/O</span><br><span class="line">    └─ 当前 context 不可 Poll：调用 cnd_wait() 等待内部唤醒</span><br></pre></td></tr></table></figure>
+
+<p>这正是异步 CANopen 操作需要的行为。例如，异步 SDO 请求的完成依赖：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">SocketCAN 收到响应或定时器到期</span><br><span class="line">    ↓</span><br><span class="line">Poll 回调投递 I/O 任务</span><br><span class="line">    ↓</span><br><span class="line">loop 执行任务并推进 SDO 状态机</span><br><span class="line">    ↓</span><br><span class="line">异步操作完成方满足 Promise</span><br><span class="line">    ↓</span><br><span class="line">Future ready，wait 返回</span><br></pre></td></tr></table></figure>
+
+<p>如果线程只是同步睡眠而不再驱动同一个 loop，且没有其他线程负责执行该 loop，那么依赖 CAN I&#x2F;O 或超时任务的 Future 可能无法变为 ready。</p>
+<h3 id="7-6-更准确的完整流程"><a href="#7-6-更准确的完整流程" class="headerlink" title="7.6 更准确的完整流程"></a>7.6 更准确的完整流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant Caller as AsyncCaller</span><br><span class="line">    participant Operation as AsyncOperation</span><br><span class="line">    participant EL as EventLoop</span><br><span class="line">    participant Poller as PollBackend</span><br><span class="line">    participant Device as SocketCAN</span><br><span class="line">    participant Promise as PromiseFuture</span><br><span class="line"></span><br><span class="line">    Caller-&gt;&gt;Operation: start async request</span><br><span class="line">    Operation--&gt;&gt;Caller: return Future</span><br><span class="line">    Caller-&gt;&gt;EL: wait on Future</span><br><span class="line">    EL-&gt;&gt;Promise: submit internal wake task</span><br><span class="line">    EL-&gt;&gt;Poller: wait for I/O</span><br><span class="line">    Device--&gt;&gt;Poller: response or readiness event</span><br><span class="line">    Poller--&gt;&gt;EL: post completion task</span><br><span class="line">    EL-&gt;&gt;Operation: run completion task</span><br><span class="line">    Operation-&gt;&gt;Promise: publish result and set ready</span><br><span class="line">    Promise--&gt;&gt;EL: post Future-ready task</span><br><span class="line">    EL-&gt;&gt;EL: set context ready and wake wait</span><br><span class="line">    EL--&gt;&gt;Caller: wait returns</span><br><span class="line">    Caller-&gt;&gt;Promise: obtain result</span><br></pre></td></tr></table></figure>
+
+<p>因此，更准确的理解是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">异步操作发起方启动请求并取得 Future；</span><br><span class="line">Loop 持续执行任务和驱动 I/O；</span><br><span class="line">异步操作完成方通过 Promise 发布结果；</span><br><span class="line">Future 把完成通知任务投递到 Loop；</span><br><span class="line">Loop 执行该通知任务并结束 wait；</span><br><span class="line">调用方再从 Future 取得结果。</span><br></pre></td></tr></table></figure>
+
+<h3 id="7-7-run-与-wait-future-的区别"><a href="#7-7-run-与-wait-future-的区别" class="headerlink" title="7.7 run() 与 wait(future) 的区别"></a>7.7 <code>run()</code> 与 <code>wait(future)</code> 的区别</h3><table>
+<thead>
+<tr>
+<th>调用</th>
+<th>内部 Future</th>
+<th>主要返回条件</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ev_loop_run(loop)</code></td>
+<td><code>NULL</code></td>
+<td>loop stopped，或 outstanding work 归零触发 stop。</td>
+</tr>
+<tr>
+<td><code>ev_loop_wait(loop, future)</code></td>
+<td>指定 Future</td>
+<td>Future ready、loop stopped、线程被中断或发生错误。</td>
+</tr>
+<tr>
+<td><code>ev_loop_wait_until(loop, future, deadline)</code></td>
+<td>指定 Future</td>
+<td>在上述条件外增加绝对超时。</td>
+</tr>
+<tr>
+<td><code>ev_loop_poll(loop)</code></td>
+<td><code>NULL</code></td>
+<td>非阻塞处理当前可立即执行的工作。</td>
+</tr>
+</tbody></table>
+<p>Future 在 <code>wait()</code> 中是“本次 event-loop 运行的结束条件之一”，而不是 loop 队列中的普通业务任务。</p>
+<hr>
+<h2 id="8-任务投递后的-Poll-cnd-唤醒路径"><a href="#8-任务投递后的-Poll-cnd-唤醒路径" class="headerlink" title="8. 任务投递后的 Poll&#x2F;cnd 唤醒路径"></a>8. 任务投递后的 Poll&#x2F;cnd 唤醒路径</h2><h3 id="8-1-任务投递路径"><a href="#8-1-任务投递路径" class="headerlink" title="8.1 任务投递路径"></a>8.1 任务投递路径</h3><p>任务被投递到 event loop 时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">获取 loop-&gt;mtx</span><br><span class="line">判断投递前队列是否为空</span><br><span class="line">把 task 放到 queue 尾部</span><br><span class="line">若此前为空，调用 ev_loop_kill_any(loop, 1)</span><br><span class="line">释放 loop-&gt;mtx</span><br></pre></td></tr></table></figure>
+
+<p>只在“空 → 非空”转换时唤醒线程，避免每次追加任务都重复发唤醒。</p>
+<h3 id="8-2-waiting-context-的优先级"><a href="#8-2-waiting-context-的优先级" class="headerlink" title="8.2 waiting context 的优先级"></a>8.2 waiting context 的优先级</h3><p><code>ev_loop_kill_any()</code> 的顺序是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">先找 waiting 链表中的 context</span><br><span class="line">若存在：通过 cnd_signal 唤醒</span><br><span class="line">否则在允许时找 polling context</span><br><span class="line">若存在：通过 ev_poll_kill 唤醒</span><br></pre></td></tr></table></figure>
+
+<p>原因很直接：</p>
+<ul>
+<li>条件变量线程本来就在等内部任务；</li>
+<li>唤醒它不需要打断正在处理外部 I&#x2F;O 的 poller；</li>
+<li>可让 poller 继续服务 I&#x2F;O readiness。</li>
+</ul>
+<h3 id="8-3-完整时序"><a href="#8-3-完整时序" class="headerlink" title="8.3 完整时序"></a>8.3 完整时序</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant P as 投递线程</span><br><span class="line">    participant L as ev_loop</span><br><span class="line">    participant W as 条件变量等待线程</span><br><span class="line">    participant R as Poll 等待线程</span><br><span class="line"></span><br><span class="line">    P-&gt;&gt;L: ev_exec_post(task)</span><br><span class="line">    L-&gt;&gt;L: lock + queue push</span><br><span class="line">    alt 存在 waiting context</span><br><span class="line">        L-&gt;&gt;W: cnd_signal(ctx.cond)</span><br><span class="line">        W-&gt;&gt;W: 重新取得 loop.mtx</span><br><span class="line">        W-&gt;&gt;L: 从 queue 取任务</span><br><span class="line">    else 没有 waiting，但存在 polling context</span><br><span class="line">        L-&gt;&gt;R: ev_poll_kill()</span><br><span class="line">        R-&gt;&gt;R: 底层 Poll wait 被中断</span><br><span class="line">        R-&gt;&gt;L: 返回并从 queue 取任务</span><br><span class="line">    end</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="9-ev-poll-wait-的虚函数分派链"><a href="#9-ev-poll-wait-的虚函数分派链" class="headerlink" title="9. ev_poll_wait() 的虚函数分派链"></a>9. <code>ev_poll_wait()</code> 的虚函数分派链</h2><h3 id="9-1-抽象接口分派"><a href="#9-1-抽象接口分派" class="headerlink" title="9.1 抽象接口分派"></a>9.1 抽象接口分派</h3><p><code>ev_poll_t</code> 不是一个固定的 Linux <code>io_poll</code> 类型，而是一个抽象 Poll 接口。它的虚函数表包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">self</span><br><span class="line">wait</span><br><span class="line">kill</span><br></pre></td></tr></table></figure>
+
+<p><code>ev_poll_wait()</code> 做的事情等价于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">调用当前 poll 对象虚函数表中的 wait 指针</span><br></pre></td></tr></table></figure>
+
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ev_poll_wait</span><br><span class="line">不是具体后端函数</span><br><span class="line">而是统一分派入口</span><br></pre></td></tr></table></figure>
+
+<h3 id="9-2-Linux-io-Poll-后端注册"><a href="#9-2-Linux-io-Poll-后端注册" class="headerlink" title="9.2 Linux io::Poll 后端注册"></a>9.2 Linux <code>io::Poll</code> 后端注册</h3><p>Linux <code>io_poll</code> 初始化时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">poll_vptr = io_poll_poll_vtbl</span><br></pre></td></tr></table></figure>
+
+<p>该虚函数表的 <code>wait</code> 成员指向：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_poll_poll_wait</span><br></pre></td></tr></table></figure>
+
+<p><code>io_poll_get_poll()</code> 返回的不是新对象，而是 <code>io_poll</code> 内部 <code>poll_vptr</code> 字段的地址。<code>ev_loop</code> 保存这个抽象接口指针。</p>
+<p>完整对象关系：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[ev_loop.poll] --&gt; B[io_poll.poll_vptr 的地址]</span><br><span class="line">    B --&gt; C[io_poll_poll_vtbl]</span><br><span class="line">    C --&gt; D[self = io_poll_poll_self]</span><br><span class="line">    C --&gt; E[wait = io_poll_poll_wait]</span><br><span class="line">    C --&gt; F[kill = io_poll_poll_kill]</span><br></pre></td></tr></table></figure>
+
+<h3 id="9-3-完整调用链"><a href="#9-3-完整调用链" class="headerlink" title="9.3 完整调用链"></a>9.3 完整调用链</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">ev_loop_ctx_wait_one_until()</span><br><span class="line">  ↓</span><br><span class="line">ev_poll_wait(loop-&gt;poll, msec)</span><br><span class="line">  ↓</span><br><span class="line">(*loop-&gt;poll)-&gt;wait(loop-&gt;poll, msec)</span><br><span class="line">  ↓</span><br><span class="line">io_poll_poll_wait(..., msec)</span><br><span class="line">  ↓</span><br><span class="line">epoll_pwait(epfd, events, maxevents, msec, signal_mask)</span><br></pre></td></tr></table></figure>
+
+<p>因此，在该对象组合下可以确定：</p>
+<blockquote>
+<p>如果 <code>loop-&gt;poll</code> 来自 Linux <code>io_poll_get_poll()</code>，执行的就是 <code>io_poll_poll_wait()</code>。</p>
+</blockquote>
+<p>但要加两个限定：</p>
+<ol>
+<li>它是通过函数指针间接调用，不是 <code>loop.c</code> 对 <code>io_poll_poll_wait()</code> 的直接静态调用；</li>
+<li>换成 Windows Poll 或自定义 <code>ev_poll_t</code> 实现后，会调用对应后端的 <code>wait</code>。</li>
+</ol>
+<h3 id="9-4-与-POSIX-poll-2-的区别"><a href="#9-4-与-POSIX-poll-2-的区别" class="headerlink" title="9.4 与 POSIX poll(2) 的区别"></a>9.4 与 POSIX <code>poll(2)</code> 的区别</h3><p>名称容易产生误导：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ev_poll_wait：Lely 抽象接口</span><br><span class="line">io_poll_poll_wait：Linux io2 后端函数</span><br><span class="line">epoll_pwait：实际 Linux 系统调用</span><br></pre></td></tr></table></figure>
+
+<p>它没有调用传统 POSIX <code>poll()</code>。</p>
+<h3 id="9-5-msec-在两个-wait-函数中的含义"><a href="#9-5-msec-在两个-wait-函数中的含义" class="headerlink" title="9.5 msec 在两个 wait 函数中的含义"></a>9.5 <code>msec</code> 在两个 wait 函数中的含义</h3><table>
+<thead>
+<tr>
+<th>调用场景</th>
+<th align="right"><code>msec</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>无超时 wait，队列为空</td>
+<td align="right"><code>-1</code>，无限阻塞</td>
+</tr>
+<tr>
+<td>无超时 wait，但已有任务</td>
+<td align="right"><code>0</code>，只检查一次 I&#x2F;O</td>
+</tr>
+<tr>
+<td>until，有未来 deadline 且队列为空</td>
+<td align="right">deadline 剩余毫秒</td>
+</tr>
+<tr>
+<td>until，deadline 为 NULL</td>
+<td align="right"><code>0</code>，完全非阻塞</td>
+</tr>
+<tr>
+<td>until，队列已非空</td>
+<td align="right"><code>0</code>，避免阻塞任务执行</td>
+</tr>
+</tbody></table>
+<p>注意：<code>ev_poll_wait()</code> 的返回值表示 Poll 调用成功或失败，并不等于“执行了几个 loop task”。Poll 后端可能在内部处理多个 I&#x2F;O watch 回调，这些回调通常再把任务投递到 loop 队列；loop 下一轮才执行对应 task。</p>
+<hr>
+<h2 id="10-从-Loop-run-到-SocketCAN-事件的完整流程"><a href="#10-从-Loop-run-到-SocketCAN-事件的完整流程" class="headerlink" title="10. 从 Loop::run() 到 SocketCAN 事件的完整流程"></a>10. 从 <code>Loop::run()</code> 到 SocketCAN 事件的完整流程</h2><p>结合前一篇 <code>io_poll</code> 分析，可以把完整运行链路串起来：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">1. C++ 调用 loop.run()</span><br><span class="line">2. loop.hpp 转调 ev_loop_run()</span><br><span class="line">3. ev_loop_run() 转调 ev_loop_wait(loop, NULL)</span><br><span class="line">4. ev_loop_wait() 在外层循环中重复调用 ev_loop_ctx_wait_one()</span><br><span class="line">5. 每次 wait_one 最多主动执行一个真实队列任务；若当前没有任务但 ntasks &gt; 0，loop 不会 stop</span><br><span class="line">6. 若当前线程有 Poll 资格，调用 ev_poll_wait(..., -1)</span><br><span class="line">7. 虚函数分派到 io_poll_poll_wait()</span><br><span class="line">8. io_poll_poll_wait() 在 epoll_pwait() 阻塞</span><br><span class="line">9. SocketCAN fd 可读，epoll 返回</span><br><span class="line">10. io_poll 找到对应 io_poll_watch 并调用 watch 回调</span><br><span class="line">11. CanChannel watch 回调向 executor 投递接收任务</span><br><span class="line">12. 投递使 loop queue 从空变为非空，并中断 Poll wait 或唤醒 cnd waiter</span><br><span class="line">13. ev_loop_ctx_wait_one() 重新检查 queue</span><br><span class="line">14. 弹出并执行 CanChannel 接收任务</span><br><span class="line">15. 读取 CAN 帧，完成异步操作并进入 CanNet/CANopen 上层</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant App as Application</span><br><span class="line">    participant Ev as EventLoop</span><br><span class="line">    participant Vtbl as PollVtable</span><br><span class="line">    participant Io as IoPoll</span><br><span class="line">    participant Kernel as EpollWait</span><br><span class="line">    participant Can as SocketCAN</span><br><span class="line">    participant Exec as ExecutorQueue</span><br><span class="line"></span><br><span class="line">    App-&gt;&gt;Ev: call run</span><br><span class="line">    Ev-&gt;&gt;Ev: queue empty and outstanding work exists</span><br><span class="line">    Ev-&gt;&gt;Vtbl: wait with infinite timeout</span><br><span class="line">    Vtbl-&gt;&gt;Io: call backend wait</span><br><span class="line">    Io-&gt;&gt;Kernel: enter epoll wait</span><br><span class="line">    Can--&gt;&gt;Kernel: file descriptor becomes readable</span><br><span class="line">    Kernel--&gt;&gt;Io: return input event</span><br><span class="line">    Io-&gt;&gt;Exec: callback posts receive task</span><br><span class="line">    Exec-&gt;&gt;Ev: queue changes from empty to nonempty</span><br><span class="line">    Ev-&gt;&gt;Exec: pop one task</span><br><span class="line">    Exec-&gt;&gt;Can: read CAN frame</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="11-npoll-1-的典型多线程运行"><a href="#11-npoll-1-的典型多线程运行" class="headerlink" title="11. npoll = 1 的典型多线程运行"></a>11. <code>npoll = 1</code> 的典型多线程运行</h2><p>假设：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">npoll = 1</span><br><span class="line">线程 A、B 都调用 loop.run()</span><br></pre></td></tr></table></figure>
+
+<p>可能出现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">线程 A：取得 Poll 资格，进入 epoll_pwait()</span><br><span class="line">线程 B：无 Poll 资格，进入 cnd_wait()</span><br></pre></td></tr></table></figure>
+
+<p>此时另一个线程 C 投递一个普通任务：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">线程 C：queue 空→非空</span><br><span class="line">线程 C：优先 signal 线程 B 的 cond</span><br><span class="line">线程 B：醒来并执行任务</span><br><span class="line">线程 A：继续等待 I/O</span><br></pre></td></tr></table></figure>
+
+<p>如果没有 waiting 线程，才会中断 Poll 线程 A：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">线程 C：ev_poll_kill(A 的 poll thread token)</span><br><span class="line">线程 A：epoll_pwait 被信号打断</span><br><span class="line">线程 A：返回 loop，执行新任务</span><br></pre></td></tr></table></figure>
+
+<p>这种设计让：</p>
+<ul>
+<li>Poll 线程尽量持续负责外部 I&#x2F;O；</li>
+<li>非 Poll worker 优先处理内部任务；</li>
+<li>必要时仍能中断 Poll，保证任务投递不会长期等待。</li>
+</ul>
+<hr>
+<h2 id="12-关键对象关系"><a href="#12-关键对象关系" class="headerlink" title="12. 关键对象关系"></a>12. 关键对象关系</h2><table>
+<thead>
+<tr>
+<th>对象&#x2F;字段</th>
+<th>归属</th>
+<th>是否共享</th>
+<th>保护方式</th>
+<th>主要职责</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ev_loop_t</code></td>
+<td>每个 loop</td>
+<td>多线程共享</td>
+<td><code>loop-&gt;mtx</code> + 部分原子</td>
+<td>任务队列、停止状态、poller&#x2F;waiter 管理</td>
+</tr>
+<tr>
+<td><code>loop-&gt;queue</code></td>
+<td>每个 loop</td>
+<td>多线程共享</td>
+<td><code>loop-&gt;mtx</code></td>
+<td>待执行任务队列</td>
+</tr>
+<tr>
+<td><code>loop-&gt;ntasks</code></td>
+<td>每个 loop</td>
+<td>多线程共享</td>
+<td>原子操作</td>
+<td>outstanding work 计数</td>
+</tr>
+<tr>
+<td><code>loop-&gt;stopped</code></td>
+<td>每个 loop</td>
+<td>多线程共享</td>
+<td><code>loop-&gt;mtx</code></td>
+<td>loop 全局停止状态</td>
+</tr>
+<tr>
+<td><code>ev_loop_thrd</code></td>
+<td>每个线程</td>
+<td>不在线程间共享实例</td>
+<td>TLS；其字段跨线程访问时受 <code>loop-&gt;mtx</code> 保护</td>
+<td>线程级中断和嵌套 context 栈顶</td>
+</tr>
+<tr>
+<td><code>ev_loop_ctx</code></td>
+<td>按需创建的一次 wait&#x2F;run context</td>
+<td>可被 future&#x2F;kill 路径访问</td>
+<td><code>loop-&gt;mtx</code> + refcnt</td>
+<td>连接 loop、线程、Poll&#x2F;cond 和可选 future；不是 loop 对象</td>
+</tr>
+<tr>
+<td><code>ctx-&gt;pstopped</code></td>
+<td>context 指向线程 TLS</td>
+<td>指向目标线程实例</td>
+<td><code>loop-&gt;mtx</code></td>
+<td>检查或设置该线程的单次中断标志</td>
+</tr>
+<tr>
+<td><code>ctx-&gt;cond</code></td>
+<td>每个 context</td>
+<td>目标线程等待、其他线程 signal</td>
+<td>条件变量 + <code>loop-&gt;mtx</code></td>
+<td>非 Poll 线程休眠与唤醒</td>
+</tr>
+<tr>
+<td><code>ctx-&gt;thr</code></td>
+<td>每个 context</td>
+<td>保存 Poll 后端线程令牌</td>
+<td>后端定义</td>
+<td>通过 <code>ev_poll_kill()</code> 中断具体 Poll wait</td>
+</tr>
+<tr>
+<td><code>ctx-&gt;future</code></td>
+<td>可选，每个 context</td>
+<td>与 promise 共享异步完成状态</td>
+<td>future mutex&#x2F;atomic state + refcount</td>
+<td>future ready 时投递 <code>ctx-&gt;task</code> 并结束本次 wait</td>
+</tr>
+<tr>
+<td><code>ev_promise_t</code></td>
+<td>每个异步结果生产端</td>
+<td>可跨线程共享</td>
+<td>future mutex&#x2F;atomic state + refcount</td>
+<td>一次性写入结果并发布 ready</td>
+</tr>
+<tr>
+<td><code>loop-&gt;poll</code></td>
+<td>每个 loop</td>
+<td>可共享后端 Poll</td>
+<td><code>ev_poll</code> 接口契约</td>
+<td>对外部事件进行抽象等待</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="13-参考资料"><a href="#13-参考资料" class="headerlink" title="13. 参考资料"></a>13. 参考资料</h2><h3 id="13-1-Lely-官方源码"><a href="#13-1-Lely-官方源码" class="headerlink" title="13.1 Lely 官方源码"></a>13.1 Lely 官方源码</h3><ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/ev/loop.c">Lely <code>src/ev/loop.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/loop.h">Lely <code>include/lely/ev/loop.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/loop.hpp">Lely <code>include/lely/ev/loop.hpp</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/poll.h">Lely <code>include/lely/ev/poll.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/io2/linux/poll.c">Lely Linux <code>src/io2/linux/poll.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/libc/threads-pthread.c">Lely pthread 兼容实现 <code>src/libc/threads-pthread.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/exec.h">Lely executor API <code>include/lely/ev/exec.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/ev/std_exec.c">Lely standard executor <code>src/ev/std_exec.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/future.h">Lely Future API <code>include/lely/ev/future.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/ev/future.c">Lely Future implementation <code>src/ev/future.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/overview/">Lely library overview</a></li>
+</ol>
+<h3 id="13-2-线程与语言规范"><a href="#13-2-线程与语言规范" class="headerlink" title="13.2 线程与语言规范"></a>13.2 线程与语言规范</h3><ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_cond_timedwait.html">The Open Group: <code>pthread_cond_wait()</code> &#x2F; <code>pthread_cond_timedwait()</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_cond_broadcast.html">The Open Group: <code>pthread_cond_signal()</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf">WG14 N1570: C11 draft</a></li>
+</ol>
+<h3 id="13-3-关联文章"><a href="#13-3-关联文章" class="headerlink" title="13.3 关联文章"></a>13.3 关联文章</h3><p>本文的章节结构、结论先行、流程图、状态表和源码索引方式参考了已上传的《Lely canopen <code>io_poll</code> 机制原理与完整运行流程详解》。两篇文章可以连续阅读：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">ev_loop：决定何时执行 task、何时等待、怎样协调多个线程</span><br><span class="line">io_poll：决定怎样等待 Linux fd、怎样分发 epoll readiness</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/3ecba0f7/">https://wdfk-prog.space/posts/3ecba0f7/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/canopen/">canopen</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/01.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Lely CANopen Future Promise 机制原理与源码详解</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen Future&#x2F;Promise 机制原理与源码详解 @[toc] 1. 先给结论：Lely Future 到底是什么Lely 的 Future&#x2F;Promise 不是一个“阻塞等待结果”的线程同步工具，而是一个和 executor、task、event loop 深度结合的一次性异步完成通知与结果共享机制。 可以先记住以下五句话：  ev_promise_t 是异步结果的生产端，负责把共享状态从未完成推进到完成； ev_future_t 是观察端，负责检查结果是否完成、读取结果、登记完成后的任务； Future 本身不会执行 I&#x2F;O，也不会主动运行回调；真正执行回调的是 task 所属的 executor； ev_future_submit() 不阻塞，而是把 task 暂存在 Future 内部队列，Future ready 后再提交给 executor； Promise 和 Future 不是两个独立对象，它们共享同一块内存、同一个引用计数和同一个生命周期。  官方 C 接口头文件直接强调：与 C++11 的 Futur...</div></div></div></a><a class="pagination-related" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Lely canopen`io_poll` 机制原理与完整运行流程详解</div></div><div class="info-2"><div class="info-item-1">   Lely canopenio_poll 机制原理与完整运行流程详解 @[toc] 1. 先给结论Lely 的 io_poll 是一个基于 Linux epoll 的 I&#x2F;O 事件分发器。它不解析 CANopen，也不主动读取 SocketCAN；它只负责：  把需要关注的文件描述符 fd 登记到 Linux epoll； 阻塞等待这些 fd 出现可读、可写、异常或断开事件； 根据内核返回的 fd，在红黑树中找到对应的 io_poll_watch； 调用 watch-&gt;func(watch, events)； 因为所有登记都附加了 EPOLLONESHOT，每次通知后当前一次监听失效； 调用方若要继续接收后续事件，必须再次调用 io_poll_watch() 恢复下一次监听。  最重要的完整周期是： 1234567891011121314151617181920212223创建 Poll  ↓初始化 io_poll_watch  ↓io_poll_watch(events != 0)  ↓首次登记：EPOLL_CTL_ADD  ↓ev_poll_wait() ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen CAN 完整机制学习笔记</div></div><div class="info-2"><div class="info-item-1">   Lely CANopen IO2 CAN 与 SocketCAN 完整机制学习笔记 @[toc]  1. CANopen、liblely-co、io2 与 SocketCAN 的边界Lely CANopen 协议栈本身是被动状态机。它不直接拥有 Linux socket，也不自行创建线程。Linux 上的实际 I&#x2F;O 由 liblely-io2 提供，任务调度由 liblely-ev 提供。 12345678910flowchart TB    APP[业务代码 / CANopen Master] --&gt; CO[liblely-co / coapp]    CO --&gt; NET[CAN network / protocol state machine]    NET --&gt; IO2[liblely-io2 abstract CAN API]    IO2 --&gt; CHAN[Linux CanChannel]    CHAN --&gt; SOCK[SocketCAN raw socket]    SOCK --&gt; KERNEL[Lin...</div></div></div></a><a class="pagination-related" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 &#96;ev_task&#96;、Executor、&#96;std_exec&#96; 到 &#96;ev_loop&#96;、Future 与 Poll"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen 事件调度机制详解：从 &#96;ev_task&#96;、Executor、&#96;std_exec&#96; 到 &#96;ev_loop&#96;、Future 与 Poll</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen 事件调度机制详解：从 ev_task、Executor、std_exec 到 ev_loop、Future 与 Poll @[toc]  0. 阅读前先记住六个结论 ev_task 只是“可执行工作”的载体，不负责排队、线程切换或等待。 ev_exec_t 是抽象 Executor 接口，本质是 C 语言虚函数表。 ev_std_exec 不是另一个事件循环，而是一个适配层：只要求后端实现 post/abort/on_task_init/on_task_fini，它补齐 dispatch/defer/run。 ev_loop 才拥有真正的全局任务队列、等待线程、Poll 线程和 outstanding work 状态。 ev_exec_run() 的关键价值不是简单调用回调，而是建立“当前线程正在这个 Executor 内执行任务”的 TLS 上下文。 Future、I&#x2F;O、定时器最终都不会直接“执行用户逻辑”；它们把 ev_task 投递给 Executor，由 ev_loop 取出并运行。  可以先把整个系统压缩成下面这条链： 1234...</div></div></div></a><a class="pagination-related" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen Future Promise 机制原理与源码详解</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen Future&#x2F;Promise 机制原理与源码详解 @[toc] 1. 先给结论：Lely Future 到底是什么Lely 的 Future&#x2F;Promise 不是一个“阻塞等待结果”的线程同步工具，而是一个和 executor、task、event loop 深度结合的一次性异步完成通知与结果共享机制。 可以先记住以下五句话：  ev_promise_t 是异步结果的生产端，负责把共享状态从未完成推进到完成； ev_future_t 是观察端，负责检查结果是否完成、读取结果、登记完成后的任务； Future 本身不会执行 I&#x2F;O，也不会主动运行回调；真正执行回调的是 task 所属的 executor； ev_future_submit() 不阻塞，而是把 task 暂存在 Future 内部队列，Future ready 后再提交给 executor； Promise 和 Future 不是两个独立对象，它们共享同一块内存、同一个引用计数和同一个生命周期。  官方 C 接口头文件直接强调：与 C++11 的 Futur...</div></div></div></a><a class="pagination-related" href="/posts/12cc1336/" title="Lely canopen&#96;io_poll&#96; 机制原理与完整运行流程详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely canopen&#96;io_poll&#96; 机制原理与完整运行流程详解</div></div><div class="info-2"><div class="info-item-1">   Lely canopenio_poll 机制原理与完整运行流程详解 @[toc] 1. 先给结论Lely 的 io_poll 是一个基于 Linux epoll 的 I&#x2F;O 事件分发器。它不解析 CANopen，也不主动读取 SocketCAN；它只负责：  把需要关注的文件描述符 fd 登记到 Linux epoll； 阻塞等待这些 fd 出现可读、可写、异常或断开事件； 根据内核返回的 fd，在红黑树中找到对应的 io_poll_watch； 调用 watch-&gt;func(watch, events)； 因为所有登记都附加了 EPOLLONESHOT，每次通知后当前一次监听失效； 调用方若要继续接收后续事件，必须再次调用 io_poll_watch() 恢复下一次监听。  最重要的完整周期是： 1234567891011121314151617181920212223创建 Poll  ↓初始化 io_poll_watch  ↓io_poll_watch(events != 0)  ↓首次登记：EPOLL_CTL_ADD  ↓ev_poll_wait() ...</div></div></div></a><a class="pagination-related" href="/posts/9a4ae0f9/" title="Lely CANopen ：IO 服务 io_ctx"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">Lely CANopen ：IO 服务 io_ctx</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen ：I&#x2F;O 服务 io_ctx @[toc] 摘要在 Lely CANopen 应用中，lely::io::Context 往往是最先创建、最后销毁的对象之一。它看起来只是一个很薄的 C++ 包装类，但其底层 io_ctx_t 承担了一个关键职责：  维护一组已注册的 Lely I&#x2F;O 服务，并在进程 fork() 或系统退出时，按确定顺序向这些服务分发维护事件。  ctx.c 本身并不执行 CANopen 协议，也不负责运行事件循环。它更像一个轻量级的“服务生命周期协调器”：  通过双向链表登记 Timer、CAN 网络接口及其他底层 I&#x2F;O 服务； 通过服务虚表调用各组件自己的 notify_fork 和 shutdown 回调； 在 fork() 前后按不同方向遍历服务； 在 shutdown 时按注册顺序的逆序关闭服务； 通过服务内部的 _shutdown 标志保证每个服务最多关闭一次； 通过 C++ 的 move-only 包装实现单个底层 Context 的唯一所有权； 允许同一进程创建多个彼此独立的 Cont...</div></div></div></a><a class="pagination-related" href="/posts/cb8be560/" title="Lely CANopen Timer 的实现原理与运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">Lely CANopen Timer 的实现原理与运行流程</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen: Timer 的实现原理与运行流程 @[toc] 一句话结论Lely 的 lely::io::Timer 不是一个独立线程，也不是一个直接执行回调的传统软件定时器。它本质上是一个异步事件适配器： 123456789Linux timerfd 负责计时        ↓io_poll 负责监听 timerfd 的可读事件        ↓内部 wait_task 负责读取到期计数        ↓ev_exec 负责调度完成任务        ↓io_timer_wait 对应的回调最终被执行  创建 Timer、设置到期时间和提交等待操作是三个不同动作： 123创建 Timer：建立 timerfd 并注册到 io_poll设置时间：调用 timerfd_settime()，决定何时到期提交等待：把 io_timer_wait 放入 wait_queue，决定到期后通知谁  从 CANopen 主站视角看，还要再增加两层调度： 123456789BasicMaster / Node        ↓ 传入专用 io::TimerBase&amp;io...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">549</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Lely-CANopen-ev-loop-%E8%AF%A6%E8%A7%A3"><span class="toc-number">1.</span> <span class="toc-text">Lely CANopen ev_loop 详解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%85%88%E5%8C%BA%E5%88%86%E4%B8%89%E4%B8%AA%E5%AE%B9%E6%98%93%E6%B7%B7%E6%B7%86%E7%9A%84%E2%80%9C%E5%81%9C%E6%AD%A2%E2%80%9D%E7%8A%B6%E6%80%81"><span class="toc-number">1.1.</span> <span class="toc-text">1. 先区分三个容易混淆的“停止”状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-ntasks%EF%BC%9Aoutstanding-work-%E8%AE%A1%E6%95%B0"><span class="toc-number">1.2.</span> <span class="toc-text">2. ntasks：outstanding work 计数</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E7%BB%9F%E8%AE%A1%E8%BE%B9%E7%95%8C%EF%BC%9A%E4%B8%8D%E7%AD%89%E4%BA%8E%E4%BB%BB%E5%8A%A1%E9%93%BE%E8%A1%A8%E9%95%BF%E5%BA%A6"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 统计边界：不等于任务链表长度</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E9%98%9F%E5%88%97%E4%B8%BA%E7%A9%BA%E4%B8%8D%E4%BB%A3%E8%A1%A8%E5%BC%82%E6%AD%A5%E5%B7%A5%E4%BD%9C%E5%B7%B2%E7%BB%8F%E7%BB%93%E6%9D%9F"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 队列为空不代表异步工作已经结束</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-ntasks-%E7%9A%84%E7%8A%B6%E6%80%81%E5%8F%98%E5%8C%96"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 ntasks 的状态变化</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-ntasks-%E7%9A%84%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E4%B8%8E%E5%8E%9F%E5%AD%90%E5%86%85%E5%AD%98%E5%BA%8F"><span class="toc-number">1.3.</span> <span class="toc-text">3. ntasks 的线程安全与原子内存序</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E8%B7%A8%E7%BA%BF%E7%A8%8B%E5%B9%B6%E5%8F%91%E6%9B%B4%E6%96%B0%E6%98%AF%E5%8E%9F%E5%AD%90%E5%8C%96%E7%9A%84%E6%A0%B9%E6%9C%AC%E5%8E%9F%E5%9B%A0"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 跨线程并发更新是原子化的根本原因</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E9%9D%9E%E5%8E%9F%E5%AD%90%E6%93%8D%E4%BD%9C%E4%BC%9A%E5%87%BA%E7%8E%B0%E4%B8%A2%E5%A4%B1%E6%9B%B4%E6%96%B0"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 非原子操作会出现丢失更新</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E6%9C%AA%E7%BB%9F%E4%B8%80%E4%BD%BF%E7%94%A8-loop-mtx-%E7%9A%84%E5%8E%9F%E5%9B%A0"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 未统一使用 loop-&gt;mtx 的原因</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E5%8A%A0%E4%B8%80-relaxed%E3%80%81%E5%87%8F%E4%B8%80-release-%E5%92%8C%E5%BD%92%E9%9B%B6-acquire-fence"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 加一 relaxed、减一 release 和归零 acquire fence</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E4%B8%8D%E5%90%8C%E6%9E%84%E5%BB%BA%E9%85%8D%E7%BD%AE%E4%B8%8B%E7%9A%84%E8%AE%A1%E6%95%B0%E7%B1%BB%E5%9E%8B"><span class="toc-number">1.3.5.</span> <span class="toc-text">3.5 不同构建配置下的计数类型</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E7%BA%BF%E7%A8%8B%E5%B1%80%E9%83%A8-ev-loop-thrd-%E4%B8%8E-context-%E6%A0%88"><span class="toc-number">1.4.</span> <span class="toc-text">4. 线程局部 ev_loop_thrd 与 context 栈</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-TLS-%E5%AE%9E%E4%BE%8B%E6%8C%89%E7%BA%BF%E7%A8%8B%E7%8B%AC%E7%AB%8B"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 TLS 实例按线程独立</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E7%BA%BF%E7%A8%8B%E7%8A%B6%E6%80%81%E4%B8%8E-loop-%E7%8A%B6%E6%80%81%E7%9B%B8%E4%BA%92%E7%8B%AC%E7%AB%8B"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 线程状态与 loop 状态相互独立</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E4%B8%A4%E4%B8%AA%E5%AD%97%E6%AE%B5%E7%9A%84%E8%81%8C%E8%B4%A3"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 两个字段的职责</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-ctx-%E6%9E%84%E6%88%90%E5%B5%8C%E5%A5%97%E8%B0%83%E7%94%A8%E6%A0%88"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 ctx 构成嵌套调用栈</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-ev-loop-ctx-%E4%B8%8D%E6%98%AF-ev-loop-t"><span class="toc-number">1.4.5.</span> <span class="toc-text">4.5 ev_loop_ctx 不是 ev_loop_t</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-6-context-%E6%98%AF%E6%8C%89%E9%9C%80%E5%88%9B%E5%BB%BA%E7%9A%84"><span class="toc-number">1.4.6.</span> <span class="toc-text">4.6 context 是按需创建的</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-pstopped%EF%BC%9Acontext-%E5%88%B0%E7%BA%BF%E7%A8%8B%E4%B8%AD%E6%96%AD%E6%A0%87%E5%BF%97%E7%9A%84%E5%BC%95%E7%94%A8"><span class="toc-number">1.5.</span> <span class="toc-text">5. pstopped：context 到线程中断标志的引用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E6%8C%87%E5%90%91%E5%BD%93%E5%89%8D%E7%BA%BF%E7%A8%8B-TLS-%E4%B8%AD%E7%9A%84-stopped"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 指向当前线程 TLS 中的 stopped</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-context-%E4%BF%9D%E5%AD%98%E8%AF%A5%E6%8C%87%E9%92%88%E7%9A%84%E7%94%A8%E9%80%94"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 context 保存该指针的用途</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E7%BA%BF%E7%A8%8B%E7%BA%A7%E5%81%9C%E6%AD%A2%E6%A0%87%E5%BF%97%E4%BC%98%E4%BA%8E-context-%E7%A7%81%E6%9C%89%E6%A0%87%E5%BF%97"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 线程级停止标志优于 context 私有标志</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-pstopped-%E7%9A%84%E5%90%8C%E6%AD%A5%E4%BF%9D%E6%8A%A4"><span class="toc-number">1.5.4.</span> <span class="toc-text">5.4 pstopped 的同步保护</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-%E5%8D%95%E6%AC%A1%E4%B8%AD%E6%96%AD%E7%BB%93%E6%9D%9F%E5%90%8E%E7%9A%84%E8%87%AA%E5%8A%A8%E6%B8%85%E9%9B%B6"><span class="toc-number">1.5.5.</span> <span class="toc-text">5.5 单次中断结束后的自动清零</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-6-loop-%E7%BA%A7%E5%81%9C%E6%AD%A2%E4%B8%8E%E7%BA%BF%E7%A8%8B%E5%AE%9A%E5%90%91%E4%B8%AD%E6%96%AD"><span class="toc-number">1.5.6.</span> <span class="toc-text">5.6 loop 级停止与线程定向中断</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-cnd%EF%BC%9A%E9%9D%9E-Poll-%E7%BA%BF%E7%A8%8B%E7%9A%84%E4%BC%91%E7%9C%A0%E4%B8%8E%E5%94%A4%E9%86%92"><span class="toc-number">1.6.</span> <span class="toc-text">6. cnd：非 Poll 线程的休眠与唤醒</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E6%AF%8F%E4%B8%AA-context-%E7%8B%AC%E7%AB%8B%E6%8C%81%E6%9C%89%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8F"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 每个 context 独立持有条件变量</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E8%BF%9B%E5%85%A5%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8F%E7%AD%89%E5%BE%85%E7%9A%84%E6%9D%A1%E4%BB%B6"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 进入条件变量等待的条件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-Poll-%E5%B9%B6%E5%8F%91%E6%95%B0%E9%87%8F%E9%99%90%E5%88%B6"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 Poll 并发数量限制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-cnd-wait-%E7%9A%84%E5%8E%9F%E5%AD%90%E8%A7%A3%E9%94%81%E4%B8%8E%E9%87%8D%E6%96%B0%E5%8A%A0%E9%94%81"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 cnd_wait() 的原子解锁与重新加锁</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8F%E7%9A%84%E5%94%A4%E9%86%92%E6%9D%A5%E6%BA%90"><span class="toc-number">1.6.5.</span> <span class="toc-text">6.5 条件变量的唤醒来源</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-6-%E6%AF%8F%E4%B8%AA-context-%E7%8B%AC%E7%AB%8B%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8F%E7%9A%84%E4%BB%B7%E5%80%BC"><span class="toc-number">1.6.6.</span> <span class="toc-text">6.6 每个 context 独立条件变量的价值</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-7-%E8%99%9A%E5%81%87%E5%94%A4%E9%86%92%E4%B8%8E%E5%BE%AA%E7%8E%AF%E5%A4%8D%E6%A0%B8"><span class="toc-number">1.6.7.</span> <span class="toc-text">6.7 虚假唤醒与循环复核</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-8-%E6%9D%A1%E4%BB%B6%E5%8F%98%E9%87%8F%E4%B8%8E-Poll-%E7%9A%84%E8%81%8C%E8%B4%A3%E8%BE%B9%E7%95%8C"><span class="toc-number">1.6.8.</span> <span class="toc-text">6.8 条件变量与 Poll 的职责边界</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-Future-Promise%EF%BC%9A%E4%B8%80%E6%AC%A1%E6%80%A7%E5%BC%82%E6%AD%A5%E7%BB%93%E6%9E%9C%E4%B8%8E-event-loop-%E7%9A%84%E8%BF%9E%E6%8E%A5%E7%82%B9"><span class="toc-number">1.7.</span> <span class="toc-text">7. Future&#x2F;Promise：一次性异步结果与 event loop 的连接点</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-Future-%E4%B8%8D%E6%98%AF%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97"><span class="toc-number">1.7.1.</span> <span class="toc-text">7.1 Future 不是消息队列</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-Promise%E3%80%81Future%E3%80%81%E5%BC%82%E6%AD%A5%E6%93%8D%E4%BD%9C%E5%92%8C-Loop-%E7%9A%84%E8%A7%92%E8%89%B2"><span class="toc-number">1.7.2.</span> <span class="toc-text">7.2 Promise、Future、异步操作和 Loop 的角色</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-Promise-%E4%B8%8E-Future-%E5%85%B1%E4%BA%AB%E4%B8%80%E6%AC%A1%E6%80%A7%E7%BB%93%E6%9E%9C%E7%8A%B6%E6%80%81"><span class="toc-number">1.7.3.</span> <span class="toc-text">7.3 Promise 与 Future 共享一次性结果状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-ev-loop-wait-loop-future-%E5%A6%82%E4%BD%95%E6%8E%A5%E5%85%A5-Future"><span class="toc-number">1.7.4.</span> <span class="toc-text">7.4 ev_loop_wait(loop, future) 如何接入 Future</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-5-%E7%AD%89%E5%BE%85-Future-%E6%97%B6%E4%BB%8D%E8%A6%81%E6%8C%81%E7%BB%AD%E9%A9%B1%E5%8A%A8-Loop"><span class="toc-number">1.7.5.</span> <span class="toc-text">7.5 等待 Future 时仍要持续驱动 Loop</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-6-%E6%9B%B4%E5%87%86%E7%A1%AE%E7%9A%84%E5%AE%8C%E6%95%B4%E6%B5%81%E7%A8%8B"><span class="toc-number">1.7.6.</span> <span class="toc-text">7.6 更准确的完整流程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-7-run-%E4%B8%8E-wait-future-%E7%9A%84%E5%8C%BA%E5%88%AB"><span class="toc-number">1.7.7.</span> <span class="toc-text">7.7 run() 与 wait(future) 的区别</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E4%BB%BB%E5%8A%A1%E6%8A%95%E9%80%92%E5%90%8E%E7%9A%84-Poll-cnd-%E5%94%A4%E9%86%92%E8%B7%AF%E5%BE%84"><span class="toc-number">1.8.</span> <span class="toc-text">8. 任务投递后的 Poll&#x2F;cnd 唤醒路径</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E4%BB%BB%E5%8A%A1%E6%8A%95%E9%80%92%E8%B7%AF%E5%BE%84"><span class="toc-number">1.8.1.</span> <span class="toc-text">8.1 任务投递路径</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-waiting-context-%E7%9A%84%E4%BC%98%E5%85%88%E7%BA%A7"><span class="toc-number">1.8.2.</span> <span class="toc-text">8.2 waiting context 的优先级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-3-%E5%AE%8C%E6%95%B4%E6%97%B6%E5%BA%8F"><span class="toc-number">1.8.3.</span> <span class="toc-text">8.3 完整时序</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-ev-poll-wait-%E7%9A%84%E8%99%9A%E5%87%BD%E6%95%B0%E5%88%86%E6%B4%BE%E9%93%BE"><span class="toc-number">1.9.</span> <span class="toc-text">9. ev_poll_wait() 的虚函数分派链</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#9-1-%E6%8A%BD%E8%B1%A1%E6%8E%A5%E5%8F%A3%E5%88%86%E6%B4%BE"><span class="toc-number">1.9.1.</span> <span class="toc-text">9.1 抽象接口分派</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-2-Linux-io-Poll-%E5%90%8E%E7%AB%AF%E6%B3%A8%E5%86%8C"><span class="toc-number">1.9.2.</span> <span class="toc-text">9.2 Linux io::Poll 后端注册</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-3-%E5%AE%8C%E6%95%B4%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-number">1.9.3.</span> <span class="toc-text">9.3 完整调用链</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-4-%E4%B8%8E-POSIX-poll-2-%E7%9A%84%E5%8C%BA%E5%88%AB"><span class="toc-number">1.9.4.</span> <span class="toc-text">9.4 与 POSIX poll(2) 的区别</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-5-msec-%E5%9C%A8%E4%B8%A4%E4%B8%AA-wait-%E5%87%BD%E6%95%B0%E4%B8%AD%E7%9A%84%E5%90%AB%E4%B9%89"><span class="toc-number">1.9.5.</span> <span class="toc-text">9.5 msec 在两个 wait 函数中的含义</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E4%BB%8E-Loop-run-%E5%88%B0-SocketCAN-%E4%BA%8B%E4%BB%B6%E7%9A%84%E5%AE%8C%E6%95%B4%E6%B5%81%E7%A8%8B"><span class="toc-number">1.10.</span> <span class="toc-text">10. 从 Loop::run() 到 SocketCAN 事件的完整流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-npoll-1-%E7%9A%84%E5%85%B8%E5%9E%8B%E5%A4%9A%E7%BA%BF%E7%A8%8B%E8%BF%90%E8%A1%8C"><span class="toc-number">1.11.</span> <span class="toc-text">11. npoll &#x3D; 1 的典型多线程运行</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E5%85%B3%E9%94%AE%E5%AF%B9%E8%B1%A1%E5%85%B3%E7%B3%BB"><span class="toc-number">1.12.</span> <span class="toc-text">12. 关键对象关系</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.13.</span> <span class="toc-text">13. 参考资料</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#13-1-Lely-%E5%AE%98%E6%96%B9%E6%BA%90%E7%A0%81"><span class="toc-number">1.13.1.</span> <span class="toc-text">13.1 Lely 官方源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-2-%E7%BA%BF%E7%A8%8B%E4%B8%8E%E8%AF%AD%E8%A8%80%E8%A7%84%E8%8C%83"><span class="toc-number">1.13.2.</span> <span class="toc-text">13.2 线程与语言规范</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-3-%E5%85%B3%E8%81%94%E6%96%87%E7%AB%A0"><span class="toc-number">1.13.3.</span> <span class="toc-text">13.3 关联文章</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen CAN 完整机制学习笔记"/></a><div class="content"><a class="title" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记">Lely CANopen CAN 完整机制学习笔记</a><time datetime="2026-07-29T01:33:58.679Z" title="更新于 2026-07-29 09:33:58">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely canopen`io_poll` 机制原理与完整运行流程详解"/></a><div class="content"><a class="title" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解">Lely canopen`io_poll` 机制原理与完整运行流程详解</a><time datetime="2026-07-29T01:33:31.806Z" title="更新于 2026-07-29 09:33:31">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"/></a><div class="content"><a class="title" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll">Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll</a><time datetime="2026-07-28T08:14:18.460Z" title="更新于 2026-07-28 16:14:18">2026-07-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen Future Promise 机制原理与源码详解"/></a><div class="content"><a class="title" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解">Lely CANopen Future Promise 机制原理与源码详解</a><time datetime="2026-07-28T07:24:33.136Z" title="更新于 2026-07-28 15:24:33">2026-07-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3ecba0f7/" title="Lely CANopen `ev_loop` 详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen `ev_loop` 详解"/></a><div class="content"><a class="title" href="/posts/3ecba0f7/" title="Lely CANopen `ev_loop` 详解">Lely CANopen `ev_loop` 详解</a><time datetime="2026-07-28T06:14:35.716Z" title="更新于 2026-07-28 14:14:35">2026-07-28</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/01.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'f784980a2e9526775d64aaf5af1169e4'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",1]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9,5,2,21,30],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"canopen","children":[],"count":25,"path":"canopen"},{"name":"杂谈","children":[],"count":35,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":17,"path":"嵌入式面试真题"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":266,"path":"linux"},{"name":"MCU","children":[],"count":38,"path":"MCU"},{"name":"git","children":[],"count":12,"path":"git"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>

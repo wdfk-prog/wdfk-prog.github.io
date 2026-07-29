@@ -1,0 +1,1710 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Lely CANopen Future Promise 机制原理与源码详解 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Lely CANopen Future&#x2F;Promise 机制原理与源码详解 @[toc] 1. 先给结论：Lely Future 到底是什么Lely 的 Future&#x2F;Promise 不是一个“阻塞等待结果”的线程同步工具，而是一个和 executor、task、event loop 深度结合的一次性异步完成通知与结果共享机制。 可以先记住以下五句话：  ev_promis">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Lely CANopen Future Promise 机制原理与源码详解">
+<meta property="og:url" content="https://wdfk-prog.space/posts/ea3bda78/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Lely CANopen Future&#x2F;Promise 机制原理与源码详解 @[toc] 1. 先给结论：Lely Future 到底是什么Lely 的 Future&#x2F;Promise 不是一个“阻塞等待结果”的线程同步工具，而是一个和 executor、task、event loop 深度结合的一次性异步完成通知与结果共享机制。 可以先记住以下五句话：  ev_promis">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/05.jpg">
+<meta property="article:published_time" content="2026-07-28T07:23:11.000Z">
+<meta property="article:modified_time" content="2026-07-28T07:24:33.136Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="canopen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/05.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lely CANopen Future Promise 机制原理与源码详解",
+  "url": "https://wdfk-prog.space/posts/ea3bda78/",
+  "image": "https://wdfk-prog.space/images/covers/05.jpg",
+  "datePublished": "2026-07-28T07:23:11.000Z",
+  "dateModified": "2026-07-28T07:24:33.136Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/ea3bda78/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Lely CANopen Future Promise 机制原理与源码详解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">549</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/05.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">Lely CANopen Future Promise 机制原理与源码详解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Lely CANopen Future Promise 机制原理与源码详解<a class="post-edit-link" href="null_posts/canopen/Lely CANopen Future Promise 机制原理与源码详解.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-28T07:23:11.000Z" title="发表于 2026-07-28 15:23:11">2026-07-28</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-28T07:24:33.136Z" title="更新于 2026-07-28 15:24:33">2026-07-28</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/canopen/">canopen</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">7.1k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>27分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/ea3bda78/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-28 15:24:33&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Lely-CANopen-Future-Promise-机制原理与源码详解"><a href="#Lely-CANopen-Future-Promise-机制原理与源码详解" class="headerlink" title="Lely CANopen Future&#x2F;Promise 机制原理与源码详解"></a>Lely CANopen Future&#x2F;Promise 机制原理与源码详解</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/95cd41d396604b1b9779661c74a739cd.png" alt="在这里插入图片描述"></p>
+<p>@[toc]</p>
+<h2 id="1-先给结论：Lely-Future-到底是什么"><a href="#1-先给结论：Lely-Future-到底是什么" class="headerlink" title="1. 先给结论：Lely Future 到底是什么"></a>1. 先给结论：Lely Future 到底是什么</h2><p>Lely 的 Future&#x2F;Promise 不是一个“阻塞等待结果”的线程同步工具，而是一个和 executor、task、event loop 深度结合的<strong>一次性异步完成通知与结果共享机制</strong>。</p>
+<p>可以先记住以下五句话：</p>
+<ol>
+<li><code>ev_promise_t</code> 是异步结果的生产端，负责把共享状态从未完成推进到完成；</li>
+<li><code>ev_future_t</code> 是观察端，负责检查结果是否完成、读取结果、登记完成后的任务；</li>
+<li>Future 本身不会执行 I&#x2F;O，也不会主动运行回调；真正执行回调的是 task 所属的 executor；</li>
+<li><code>ev_future_submit()</code> 不阻塞，而是把 task 暂存在 Future 内部队列，Future ready 后再提交给 executor；</li>
+<li>Promise 和 Future 不是两个独立对象，它们共享同一块内存、同一个引用计数和同一个生命周期。</li>
+</ol>
+<p>官方 C 接口头文件直接强调：与 C++11 的 Future&#x2F;Promise 不同，Lely 提供非阻塞语义；用户不是等待 Future，而是提交一个在 Future ready 后执行的 task。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">异步操作发起</span><br><span class="line">    ↓</span><br><span class="line">返回 Future 给调用方</span><br><span class="line">    ↓</span><br><span class="line">操作完成方通过 Promise 写入结果</span><br><span class="line">    ↓</span><br><span class="line">Future 变为 ready</span><br><span class="line">    ↓</span><br><span class="line">Future 中登记的 task 被提交到 executor</span><br><span class="line">    ↓</span><br><span class="line">executor/event loop 执行 task</span><br><span class="line">    ↓</span><br><span class="line">调用方读取结果或继续异步链</span><br></pre></td></tr></table></figure>
+
+<p>因此，理解 Lely Future 的关键不是“谁在等待”，而是：</p>
+<blockquote>
+<p>谁持有 Promise、谁持有 Future、结果存在哪里、Future ready 后哪个 task 被投递到哪个 executor。</p>
+</blockquote>
+<hr>
+<h2 id="2-三个源码文件各自负责什么"><a href="#2-三个源码文件各自负责什么" class="headerlink" title="2. 三个源码文件各自负责什么"></a>2. 三个源码文件各自负责什么</h2><table>
+<thead>
+<tr>
+<th>文件</th>
+<th>层次</th>
+<th>主要职责</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>future.h</code></td>
+<td>C 公共接口</td>
+<td>定义 Promise&#x2F;Future 的外部语义、引用计数接口、结果发布、task 提交、取消、组合 Future。</td>
+</tr>
+<tr>
+<td><code>future.c</code></td>
+<td>C 底层实现</td>
+<td>定义实际内存结构、状态机、原子同步、等待 task 队列、生命周期和 <code>when_all/when_any</code>。</td>
+</tr>
+<tr>
+<td><code>future.hpp</code></td>
+<td>C++ 类型封装</td>
+<td>提供 RAII、模板化结果、异常捕获、continuation、implicit unwrapping 和辅助函数。</td>
+</tr>
+</tbody></table>
+<p>推荐阅读顺序：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">future.h</span><br><span class="line">  ↓ 先理解对外契约</span><br><span class="line">future.c</span><br><span class="line">  ↓ 再理解状态、内存和并发实现</span><br><span class="line">future.hpp</span><br><span class="line">  ↓ 最后理解 C++ 如何组合这些底层机制</span><br></pre></td></tr></table></figure>
+
+<p>不要一开始就从 <code>future.hpp</code> 的模板代码往下钻，否则很容易被 <code>AsyncTask</code>、类型萃取和 <code>Result&lt;T, E&gt;</code> 淹没，而没有建立共享状态的核心模型。</p>
+<hr>
+<h2 id="3-四个核心角色"><a href="#3-四个核心角色" class="headerlink" title="3. 四个核心角色"></a>3. 四个核心角色</h2><h3 id="3-1-Promise：结果生产端"><a href="#3-1-Promise：结果生产端" class="headerlink" title="3.1 Promise：结果生产端"></a>3.1 Promise：结果生产端</h3><p><code>ev_promise_t</code> 用于完成一次异步操作。它的典型持有者包括：</p>
+<ul>
+<li>异步 CAN 读写操作；</li>
+<li>异步 SDO 请求对象；</li>
+<li>定时器等待操作；</li>
+<li>C++ <code>AsyncTask</code>；</li>
+<li><code>when_all()</code>、<code>when_any()</code> 的内部聚合对象。</li>
+</ul>
+<p>Promise 的核心动作只有一次：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">ev_promise_set</span><span class="params">(<span class="type">ev_promise_t</span> *promise, <span class="type">void</span> *value)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>成功完成后，Promise 对应的 Future 永久进入 ready 状态，不能重新复位后再次使用。</p>
+<p>所以 Promise 更接近：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">一次性完成开关 + 结果发布端</span><br></pre></td></tr></table></figure>
+
+<p>而不是可重复发送消息的队列。</p>
+<h3 id="3-2-Future：结果观察端"><a href="#3-2-Future：结果观察端" class="headerlink" title="3.2 Future：结果观察端"></a>3.2 Future：结果观察端</h3><p><code>ev_future_t</code> 主要提供三种能力：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">ev_future_is_ready</span><span class="params">(<span class="type">const</span> <span class="type">ev_future_t</span> *<span class="built_in">future</span>)</span>;</span><br><span class="line"><span class="type">void</span> *<span class="title function_">ev_future_get</span><span class="params">(<span class="type">const</span> <span class="type">ev_future_t</span> *<span class="built_in">future</span>)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">ev_future_submit</span><span class="params">(<span class="type">ev_future_t</span> *<span class="built_in">future</span>, <span class="keyword">struct</span> ev_task *task)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>它不负责完成结果，只负责观察状态和登记后续任务。</p>
+<h3 id="3-3-Task：Future-ready-后要执行的动作"><a href="#3-3-Task：Future-ready-后要执行的动作" class="headerlink" title="3.3 Task：Future ready 后要执行的动作"></a>3.3 Task：Future ready 后要执行的动作</h3><p>Future 不直接保存 C 函数指针列表，而是保存 <code>ev_task</code> 队列。<code>ev_task</code> 至少包含：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> &#123;</span></span><br><span class="line">    <span class="type">ev_exec_t</span> *exec;</span><br><span class="line">    <span class="type">ev_task_func_t</span> *func;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">slnode</span> _<span class="title">node</span>;</span></span><br><span class="line">    <span class="type">void</span> *_data;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>这意味着每一个等待 Future 的动作都明确指定：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Future ready 后</span><br><span class="line">    在哪个 executor 上</span><br><span class="line">    执行哪个 task function</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-4-Executor：真正执行-task-的对象"><a href="#3-4-Executor：真正执行-task-的对象" class="headerlink" title="3.4 Executor：真正执行 task 的对象"></a>3.4 Executor：真正执行 task 的对象</h3><p>Future 只决定 task 何时具备提交条件，executor 决定 task 在哪里、何时运行。</p>
+<p>在典型 Lely CANopen 程序中，executor 往往来自 <code>ev_loop_t</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Future</span><br><span class="line">  └─ 等待 task</span><br><span class="line">       └─ task.exec</span><br><span class="line">            └─ ev_loop 的 executor</span><br><span class="line">                 └─ event loop 线程执行 task.func</span><br></pre></td></tr></table></figure>
+
+<p>因此，Future 与 event loop 的关系是：</p>
+<blockquote>
+<p>Future 负责完成依赖，event loop 负责调度执行。</p>
+</blockquote>
+<hr>
+<h2 id="4-最重要的内存布局：Promise-内嵌-Future"><a href="#4-最重要的内存布局：Promise-内嵌-Future" class="headerlink" title="4. 最重要的内存布局：Promise 内嵌 Future"></a>4. 最重要的内存布局：Promise 内嵌 Future</h2><p><code>future.c</code> 中的两个核心结构如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ev_future</span> &#123;</span></span><br><span class="line">    <span class="type">atomic_int</span> state;</span><br><span class="line">    <span class="type">void</span> *value;</span><br><span class="line">    <span class="type">mtx_t</span> mtx;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">sllist</span> <span class="title">queue</span>;</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ev_promise</span> &#123;</span></span><br><span class="line">    <span class="type">atomic_size_t</span> refcnt;</span><br><span class="line">    <span class="type">ev_promise_dtor_t</span> *dtor;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">ev_future</span> <span class="title">future</span>;</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>实际代码会根据单线程、Windows、C11 原子等构建条件选择不同字段类型，但逻辑结构不变。</p>
+<p>对象关系不是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Promise ──指针──&gt; Future</span><br></pre></td></tr></table></figure>
+
+<p>而是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">一整块分配内存</span><br><span class="line">┌────────────────────────────┐</span><br><span class="line">│ ev_promise_t               │</span><br><span class="line">│  ├─ refcnt                 │</span><br><span class="line">│  ├─ dtor                   │</span><br><span class="line">│  └─ ev_future_t future     │</span><br><span class="line">│      ├─ state              │</span><br><span class="line">│      ├─ value              │</span><br><span class="line">│      ├─ mtx                │</span><br><span class="line">│      └─ queue              │</span><br><span class="line">├────────────────────────────┤</span><br><span class="line">│ 用户共享数据区 size bytes  │</span><br><span class="line">└────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<p><code>ev_promise_create(size, dtor)</code> 实际分配：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">calloc</span>(<span class="number">1</span>, EV_PROMISE_SIZE + size);</span><br></pre></td></tr></table></figure>
+
+<p>而 <code>ev_promise_data()</code> 返回 Promise 结构后方的尾随数据区：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> (<span class="type">char</span> *)promise + EV_PROMISE_SIZE;</span><br></pre></td></tr></table></figure>
+
+<p>这套布局有三个直接效果。</p>
+<h3 id="4-1-Promise-和-Future-共用生命周期"><a href="#4-1-Promise-和-Future-共用生命周期" class="headerlink" title="4.1 Promise 和 Future 共用生命周期"></a>4.1 Promise 和 Future 共用生命周期</h3><p><code>ev_future_acquire()</code> 并不是增加 Future 自己的引用计数，而是先通过 <code>structof()</code> 从内嵌 Future 找回外层 Promise，然后增加 Promise 的 <code>refcnt</code>。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">ev_future_t *</span><br><span class="line">    ↓ structof</span><br><span class="line">对应的 ev_promise_t</span><br><span class="line">    ↓</span><br><span class="line">共享 refcnt</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>refcnt</code> 的真实语义是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">所有 Promise 引用数量</span><br><span class="line">+</span><br><span class="line">所有 Future 引用数量</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-2-结果对象可以和控制块一次分配"><a href="#4-2-结果对象可以和控制块一次分配" class="headerlink" title="4.2 结果对象可以和控制块一次分配"></a>4.2 结果对象可以和控制块一次分配</h3><p>C 接口可用尾随数据区存放任意共享状态；C++ <code>Promise&lt;T, E&gt;</code> 则直接在该区域 placement-new 一个：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">util::Result&lt;T, E&gt;</span><br></pre></td></tr></table></figure>
+
+<p>这样控制块、Future 状态和结果对象可以在一次分配中完成。</p>
+<h3 id="4-3-Future-指针不是独立分配的对象"><a href="#4-3-Future-指针不是独立分配的对象" class="headerlink" title="4.3 Future 指针不是独立分配的对象"></a>4.3 Future 指针不是独立分配的对象</h3><p><code>ev_promise_get_future()</code> 返回的是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&amp;promise-&gt;<span class="built_in">future</span></span><br></pre></td></tr></table></figure>
+
+<p>外加一次引用计数增加。</p>
+<p>所以不能单独 <code>free(future)</code>，也不能假设 Future 的地址来自独立分配。</p>
+<hr>
+<h2 id="5-Future-状态机：WAITING、SETTING、READY"><a href="#5-Future-状态机：WAITING、SETTING、READY" class="headerlink" title="5. Future 状态机：WAITING、SETTING、READY"></a>5. Future 状态机：WAITING、SETTING、READY</h2><p><code>future.c</code> 定义了三个状态：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">enum</span> <span class="title">ev_future_state</span> &#123;</span></span><br><span class="line">    EV_FUTURE_WAITING,</span><br><span class="line">    EV_FUTURE_SETTING,</span><br><span class="line">    EV_FUTURE_READY</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>状态变化只能单向进行：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">stateDiagram-v2</span><br><span class="line">    [*] --&gt; WAITING</span><br><span class="line">    WAITING --&gt; SETTING: ev_promise_set_acquire() 成功</span><br><span class="line">    SETTING --&gt; READY: ev_promise_set_release()</span><br><span class="line">    READY --&gt; READY: 后续 set 请求失败</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-1-WAITING"><a href="#5-1-WAITING" class="headerlink" title="5.1 WAITING"></a>5.1 WAITING</h3><p>含义：</p>
+<ul>
+<li>Promise 尚未被任何完成者占有；</li>
+<li>Future 尚未 ready；</li>
+<li>task 可以继续通过 <code>ev_future_submit()</code> 加入等待队列。</li>
+</ul>
+<h3 id="5-2-SETTING"><a href="#5-2-SETTING" class="headerlink" title="5.2 SETTING"></a>5.2 SETTING</h3><p>含义：</p>
+<ul>
+<li>某一个线程已经获得完成权；</li>
+<li>其他线程不能再完成同一个 Promise；</li>
+<li>结果可能还在构造或写入中；</li>
+<li>Future 对外仍不应被视为 ready。</li>
+</ul>
+<h3 id="5-3-READY"><a href="#5-3-READY" class="headerlink" title="5.3 READY"></a>5.3 READY</h3><p>含义：</p>
+<ul>
+<li><code>value</code> 已经写入；</li>
+<li>结果数据已经发布；</li>
+<li>原先等待的 task 已从 Future 队列移出并提交给 executor；</li>
+<li>后续新提交的 task 不再排队，会直接提交给 executor。</li>
+</ul>
+<hr>
+<h2 id="6-为什么完成-Promise-要拆成-acquire-和-release-两步"><a href="#6-为什么完成-Promise-要拆成-acquire-和-release-两步" class="headerlink" title="6. 为什么完成 Promise 要拆成 acquire 和 release 两步"></a>6. 为什么完成 Promise 要拆成 acquire 和 release 两步</h2><p>简单接口是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">ev_promise_set</span><span class="params">(<span class="type">ev_promise_t</span> *promise, <span class="type">void</span> *value)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>内部等价于：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> result = ev_promise_set_acquire(promise);</span><br><span class="line"><span class="keyword">if</span> (result)</span><br><span class="line">    ev_promise_set_release(promise, value);</span><br><span class="line"><span class="keyword">return</span> result;</span><br></pre></td></tr></table></figure>
+
+<p>两阶段设计不是多余封装，而是为了把“抢占完成权”和“构造结果”分开。</p>
+<h3 id="6-1-第一步：抢占唯一完成权"><a href="#6-1-第一步：抢占唯一完成权" class="headerlink" title="6.1 第一步：抢占唯一完成权"></a>6.1 第一步：抢占唯一完成权</h3><p>多线程下，<code>ev_promise_set_acquire()</code> 使用原子 compare-exchange：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">期望状态：WAITING</span><br><span class="line">目标状态：SETTING</span><br></pre></td></tr></table></figure>
+
+<p>只有一个线程能成功完成这个状态转换。</p>
+<p>假设两个完成路径同时到达：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">线程 A：WAITING → SETTING，成功</span><br><span class="line">线程 B：发现状态已不是 WAITING，失败</span><br></pre></td></tr></table></figure>
+
+<p>因此，一次性语义由状态机保证，而不是靠调用者约定。</p>
+<h3 id="6-2-第二步：构造并发布结果"><a href="#6-2-第二步：构造并发布结果" class="headerlink" title="6.2 第二步：构造并发布结果"></a>6.2 第二步：构造并发布结果</h3><p>获得完成权后，调用者可以：</p>
+<ul>
+<li>填充尾随共享数据区；</li>
+<li>构造 C++ <code>Result&lt;T, E&gt;</code>；</li>
+<li>保存错误码；</li>
+<li>保存异常；</li>
+<li>决定最终传给 <code>ev_future_get()</code> 的地址。</li>
+</ul>
+<p>完成后再调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">ev_promise_set_release</span><span class="params">(<span class="type">ev_promise_t</span> *promise, <span class="type">void</span> *value)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>它执行以下关键步骤：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">1. future-&gt;value = value</span><br><span class="line">2. 获取 future-&gt;mtx</span><br><span class="line">3. 把 future-&gt;queue 整体转移到局部队列</span><br><span class="line">4. release-store state = READY</span><br><span class="line">5. 释放 future-&gt;mtx</span><br><span class="line">6. 将局部队列中的 task 提交到各自 executor</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-3-为什么不在持锁状态下执行-executor-post"><a href="#6-3-为什么不在持锁状态下执行-executor-post" class="headerlink" title="6.3 为什么不在持锁状态下执行 executor post"></a>6.3 为什么不在持锁状态下执行 executor post</h3><p>Future 内部互斥锁只用于保护：</p>
+<ul>
+<li>ready 检查与 task 入队之间的原子关系；</li>
+<li>Future 等待队列的转移和移除。</li>
+</ul>
+<p>它不应该覆盖 executor 的调度过程。否则 executor 可能：</p>
+<ul>
+<li>立即运行 task；</li>
+<li>再次访问同一个 Future；</li>
+<li>引发锁嵌套或死锁；</li>
+<li>造成不必要的长临界区。</li>
+</ul>
+<p>因此，源码先把等待队列整体转移到局部变量，解锁后再提交 task。</p>
+<hr>
+<h2 id="7-ev-future-submit-如何避免丢失完成通知"><a href="#7-ev-future-submit-如何避免丢失完成通知" class="headerlink" title="7. ev_future_submit() 如何避免丢失完成通知"></a>7. <code>ev_future_submit()</code> 如何避免丢失完成通知</h2><p>这是整套实现中最值得学习的并发细节之一。</p>
+<p>表面上存在一个经典竞态：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">线程 A：检查 Future 还没 ready</span><br><span class="line">线程 B：把 Future 设为 ready，并唤醒当前等待者</span><br><span class="line">线程 A：此后才把 task 放入等待队列</span><br></pre></td></tr></table></figure>
+
+<p>如果实现不正确，线程 A 的 task 将永久留在队列里，再也不会被提交。</p>
+<p>Lely 用同一把 <code>future-&gt;mtx</code> 消除了这个窗口。</p>
+<p><code>ev_future_submit()</code> 的核心逻辑是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">ev_exec_on_task_init(exec);</span><br><span class="line">mtx_lock(&amp;<span class="built_in">future</span>-&gt;mtx);</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (ev_future_is_ready(<span class="built_in">future</span>)) &#123;</span><br><span class="line">    mtx_unlock(&amp;<span class="built_in">future</span>-&gt;mtx);</span><br><span class="line">    ev_exec_post(exec, task);</span><br><span class="line">    ev_exec_on_task_fini(exec);</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    sllist_push_back(&amp;<span class="built_in">future</span>-&gt;<span class="built_in">queue</span>, &amp;task-&gt;_node);</span><br><span class="line">    mtx_unlock(&amp;<span class="built_in">future</span>-&gt;mtx);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>而 <code>ev_promise_set_release()</code> 也在同一把锁下：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">转移全部等待 task</span><br><span class="line">设置 READY</span><br></pre></td></tr></table></figure>
+
+<p>因此只会出现两种情况。</p>
+<h3 id="情况-A：submit-先获得锁"><a href="#情况-A：submit-先获得锁" class="headerlink" title="情况 A：submit 先获得锁"></a>情况 A：submit 先获得锁</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">submit：看到未 ready</span><br><span class="line">submit：task 入队</span><br><span class="line">submit：解锁</span><br><span class="line">set_release：获得锁</span><br><span class="line">set_release：取走该 task</span><br><span class="line">set_release：设置 ready</span><br><span class="line">set_release：解锁并提交 task</span><br></pre></td></tr></table></figure>
+
+<h3 id="情况-B：set-release-先获得锁"><a href="#情况-B：set-release-先获得锁" class="headerlink" title="情况 B：set_release 先获得锁"></a>情况 B：set_release 先获得锁</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">set_release：取走原等待队列</span><br><span class="line">set_release：设置 ready</span><br><span class="line">set_release：解锁</span><br><span class="line">submit：获得锁</span><br><span class="line">submit：看到 ready</span><br><span class="line">submit：直接提交 task</span><br></pre></td></tr></table></figure>
+
+<p>不存在第三种“既没入队，也没直接提交”的状态。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant S as submit线程</span><br><span class="line">    participant F as Future</span><br><span class="line">    participant P as Promise完成线程</span><br><span class="line">    participant E as Executor</span><br><span class="line"></span><br><span class="line">    S-&gt;&gt;F: lock(mtx)</span><br><span class="line">    alt Future 尚未 ready</span><br><span class="line">        S-&gt;&gt;F: task 加入 queue</span><br><span class="line">        S-&gt;&gt;F: unlock(mtx)</span><br><span class="line">        P-&gt;&gt;F: lock(mtx)</span><br><span class="line">        P-&gt;&gt;F: 取走 queue + state=READY</span><br><span class="line">        P-&gt;&gt;F: unlock(mtx)</span><br><span class="line">        P-&gt;&gt;E: post(task)</span><br><span class="line">    else Future 已 ready</span><br><span class="line">        S-&gt;&gt;F: unlock(mtx)</span><br><span class="line">        S-&gt;&gt;E: post(task)</span><br><span class="line">    end</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="8-Future-task-与-outstanding-work-的闭环"><a href="#8-Future-task-与-outstanding-work-的闭环" class="headerlink" title="8. Future task 与 outstanding work 的闭环"></a>8. Future task 与 outstanding work 的闭环</h2><p><code>ev_future_submit()</code> 在 task 真正进入 executor 队列之前，先调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_exec_on_task_init(exec);</span><br></pre></td></tr></table></figure>
+
+<p>它的含义是：</p>
+<blockquote>
+<p>这份 task 现在还不能执行，但未来会提交，请不要让 executor&#x2F;event loop 因当前队列为空而提前退出。</p>
+</blockquote>
+<p>随后会在三个出口之一调用 <code>ev_exec_on_task_fini()</code>：</p>
+<table>
+<thead>
+<tr>
+<th>出口</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Future ready，task 被 post</td>
+<td><code>ev_exec_post()</code> 后 <code>on_task_fini()</code></td>
+</tr>
+<tr>
+<td>Future cancel，task 仍被 post</td>
+<td><code>ev_task_queue_post()</code> 内调用 <code>on_task_fini()</code></td>
+</tr>
+<tr>
+<td>Future abort，task 不执行</td>
+<td><code>ev_task_queue_abort()</code> 内调用 <code>on_task_fini()</code></td>
+</tr>
+</tbody></table>
+<p>这构成严格闭环：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">submit Future waiter</span><br><span class="line">    ↓</span><br><span class="line">on_task_init：登记未来工作</span><br><span class="line">    ↓</span><br><span class="line">等待 Future 完成、取消或中止</span><br><span class="line">    ↓</span><br><span class="line">on_task_fini：撤销未来工作登记</span><br></pre></td></tr></table></figure>
+
+<p>对 <code>ev_loop</code> 而言，这份等待 Future 的 task 会计入 <code>ntasks</code>，即使它尚未进入 event loop 的真实执行队列。</p>
+<p>这正是为什么：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">loop queue 暂时为空</span><br></pre></td></tr></table></figure>
+
+<p>不等于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">系统已经没有异步工作</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="9-ev-future-get-不会等待"><a href="#9-ev-future-get-不会等待" class="headerlink" title="9. ev_future_get() 不会等待"></a>9. <code>ev_future_get()</code> 不会等待</h2><p>C 接口：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> *<span class="title function_">ev_future_get</span><span class="params">(<span class="type">const</span> <span class="type">ev_future_t</span> *<span class="built_in">future</span>)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>它内部只做：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">assert(ev_future_is_ready(<span class="built_in">future</span>));</span><br><span class="line"><span class="keyword">return</span> <span class="built_in">future</span>-&gt;value;</span><br></pre></td></tr></table></figure>
+
+<p>它没有条件变量，没有 sleep，没有 Poll，也不会帮调用者推进 event loop。</p>
+<p>所以正确用法是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ev_future_is_ready(<span class="built_in">future</span>)) &#123;</span><br><span class="line">    <span class="type">void</span> *value = ev_future_get(<span class="built_in">future</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>或者先通过 <code>ev_future_submit()</code> 登记完成 task。</p>
+<p>错误理解是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_future_get() 会一直阻塞，直到结果完成</span><br></pre></td></tr></table></figure>
+
+<p>正确理解是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_future_get() 只是读取一个已经发布的结果</span><br></pre></td></tr></table></figure>
+
+<p>C++ <code>Future&lt;T, E&gt;::get()</code> 做了更友好的检查：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!*<span class="keyword">this</span> || !<span class="built_in">is_ready</span>())</span><br><span class="line">    <span class="keyword">throw</span> <span class="built_in">future_not_ready</span>(<span class="string">&quot;get&quot;</span>);</span><br></pre></td></tr></table></figure>
+
+<p>但它同样不会阻塞。</p>
+<hr>
+<h2 id="10-release-acquire-内存序解决了什么"><a href="#10-release-acquire-内存序解决了什么" class="headerlink" title="10. release&#x2F;acquire 内存序解决了什么"></a>10. release&#x2F;acquire 内存序解决了什么</h2><p>多线程实现中，结果发布路径采用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">写入 result/value</span><br><span class="line">    ↓</span><br><span class="line">release-store READY</span><br></pre></td></tr></table></figure>
+
+<p>观察路径采用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">acquire-load state</span><br><span class="line">    ↓</span><br><span class="line">确认 READY</span><br><span class="line">    ↓</span><br><span class="line">读取 value/result</span><br></pre></td></tr></table></figure>
+
+<p>其目标是建立以下可见性关系：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Promise 完成线程在 READY 之前写入的结果</span><br><span class="line">happens-before</span><br><span class="line">Future 观察线程在 acquire 读取 READY 后访问结果</span><br></pre></td></tr></table></figure>
+
+<p>因此，观察者只要通过 acquire 语义确认 Future 已 ready，就能看到完成者在发布 ready 之前写入的数据。</p>
+<p>需要区分两类同步：</p>
+<table>
+<thead>
+<tr>
+<th>同步对象</th>
+<th>保护内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>原子 <code>state</code></td>
+<td>完成状态和结果发布可见性。</td>
+</tr>
+<tr>
+<td><code>future-&gt;mtx</code></td>
+<td>等待 task 队列，以及 ready 检查与入队之间的竞态。</td>
+</tr>
+<tr>
+<td>原子 <code>refcnt</code></td>
+<td>Promise&#x2F;Future 共享控制块的生命周期。</td>
+</tr>
+</tbody></table>
+<p>互斥锁不能替代引用计数；引用计数也不能替代等待队列锁。三者职责不同。</p>
+<hr>
+<h2 id="11-Promise-Future-引用计数和销毁顺序"><a href="#11-Promise-Future-引用计数和销毁顺序" class="headerlink" title="11. Promise&#x2F;Future 引用计数和销毁顺序"></a>11. Promise&#x2F;Future 引用计数和销毁顺序</h2><h3 id="11-1-初始引用"><a href="#11-1-初始引用" class="headerlink" title="11.1 初始引用"></a>11.1 初始引用</h3><p><code>ev_promise_create()</code> 初始化：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">refcnt = 1</span><br></pre></td></tr></table></figure>
+
+<p>这一个引用属于返回给调用者的 Promise。</p>
+<h3 id="11-2-获取-Future-会增加引用"><a href="#11-2-获取-Future-会增加引用" class="headerlink" title="11.2 获取 Future 会增加引用"></a>11.2 获取 Future 会增加引用</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">ev_future_t</span> *<span class="built_in">future</span> = ev_promise_get_future(promise);</span><br></pre></td></tr></table></figure>
+
+<p>内部会增加同一个 <code>refcnt</code>。</p>
+<p>典型状态：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Promise 引用：1</span><br><span class="line">Future 引用：1</span><br><span class="line">总 refcnt：2</span><br></pre></td></tr></table></figure>
+
+<h3 id="11-3-Promise-和-Future-的-acquire-release-都操作同一计数"><a href="#11-3-Promise-和-Future-的-acquire-release-都操作同一计数" class="headerlink" title="11.3 Promise 和 Future 的 acquire&#x2F;release 都操作同一计数"></a>11.3 Promise 和 Future 的 acquire&#x2F;release 都操作同一计数</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">ev_promise_acquire/release</span><br><span class="line">    └─ 直接修改 promise-&gt;refcnt</span><br><span class="line"></span><br><span class="line">ev_future_acquire/release</span><br><span class="line">    └─ 先从 future 找到外层 promise</span><br><span class="line">       再修改 promise-&gt;refcnt</span><br></pre></td></tr></table></figure>
+
+<h3 id="11-4-最后一个引用释放时的顺序"><a href="#11-4-最后一个引用释放时的顺序" class="headerlink" title="11.4 最后一个引用释放时的顺序"></a>11.4 最后一个引用释放时的顺序</h3><p>当 <code>refcnt</code> 从 1 变为 0：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">1. 调用用户注册的共享数据析构函数 dtor</span><br><span class="line">2. 调用 ev_future_fini()</span><br><span class="line">3. 销毁 future mutex</span><br><span class="line">4. 释放整个 Promise 控制块</span><br></pre></td></tr></table></figure>
+
+<p>引用计数减一使用 release 语义，最后一个释放者再执行 acquire fence，这是典型的“最后引用负责销毁”模式。</p>
+<hr>
+<h2 id="12-一个容易忽略的设计：Future-被遗弃时仍会调度等待-task"><a href="#12-一个容易忽略的设计：Future-被遗弃时仍会调度等待-task" class="headerlink" title="12. 一个容易忽略的设计：Future 被遗弃时仍会调度等待 task"></a>12. 一个容易忽略的设计：Future 被遗弃时仍会调度等待 task</h2><p><code>ev_future_fini()</code> 的行为不是直接丢弃等待队列，而是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_task_queue_post(&amp;<span class="built_in">future</span>-&gt;<span class="built_in">queue</span>);</span><br></pre></td></tr></table></figure>
+
+<p>也就是说，如果 Promise&#x2F;Future 的最后一个引用被释放，而 Future 仍未 ready，之前通过 <code>ev_future_submit()</code> 登记的 task 仍会被提交到 executor。</p>
+<p>这看起来反直觉，但它是为了让等待者能够观察到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">我被唤醒了</span><br><span class="line">但 Future 并没有 ready</span><br></pre></td></tr></table></figure>
+
+<p>从而识别共享状态已被遗弃。</p>
+<p>因此，一个通用 Future 完成 task 不应无条件调用 <code>ev_future_get()</code>，而应先判断：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ev_future_is_ready(<span class="built_in">future</span>)) &#123;</span><br><span class="line">    <span class="comment">// 正常完成</span></span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    <span class="comment">// Future 被取消、遗弃或以非 ready 路径唤醒</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这也是组合 Future 可以处理“输入 Future 在 ready 前被遗弃”的基础。</p>
+<hr>
+<h2 id="13-cancel-和-abort-的区别"><a href="#13-cancel-和-abort-的区别" class="headerlink" title="13. cancel() 和 abort() 的区别"></a>13. <code>cancel()</code> 和 <code>abort()</code> 的区别</h2><p>两者都会从 Future 的等待队列中移除尚未调度的 task，但后续处理不同。</p>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>task 是否执行</th>
+<th>outstanding work 是否结束</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ev_future_cancel()</code></td>
+<td>是，仍提交到 task 的 executor</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>ev_future_abort()</code></td>
+<td>否，直接终止</td>
+<td>是</td>
+</tr>
+</tbody></table>
+<h3 id="13-1-cancel"><a href="#13-1-cancel" class="headerlink" title="13.1 cancel"></a>13.1 cancel</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">从 Future queue 移除 task</span><br><span class="line">    ↓</span><br><span class="line">post 到 executor</span><br><span class="line">    ↓</span><br><span class="line">task function 仍会运行</span><br></pre></td></tr></table></figure>
+
+<p>所以 cancel 的语义不是“保证回调不执行”，而是：</p>
+<blockquote>
+<p>不再等待 Future，尽快调度 task，由 task 自己处理取消状态。</p>
+</blockquote>
+<h3 id="13-2-abort"><a href="#13-2-abort" class="headerlink" title="13.2 abort"></a>13.2 abort</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">从 Future queue 移除 task</span><br><span class="line">    ↓</span><br><span class="line">不提交 executor</span><br><span class="line">    ↓</span><br><span class="line">只结束 outstanding work</span><br></pre></td></tr></table></figure>
+
+<p>这才是“该 task 不再执行”。</p>
+<h3 id="13-3-工程风险"><a href="#13-3-工程风险" class="headerlink" title="13.3 工程风险"></a>13.3 工程风险</h3><p>如果 task 内部持有需要在回调中释放的资源，则直接 abort 可能绕过该清理逻辑。资源所有权必须由外围对象或析构函数保证，不能默认依赖 task function 一定会运行。</p>
+<p>官方还特别提示：<code>when_all()</code> 和 <code>when_any()</code> 内部提交的 task 不应由调用者 abort，否则可能导致资源泄漏。</p>
+<hr>
+<h2 id="14-when-all-的实现思路"><a href="#14-when-all-的实现思路" class="headerlink" title="14. when_all() 的实现思路"></a>14. <code>when_all()</code> 的实现思路</h2><p><code>ev_future_when_all_n()</code> 创建一个新的 Promise&#x2F;Future，用于表示多个输入 Future 的聚合完成状态。</p>
+<p>内部共享数据大致为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ev_future_when_all</span> &#123;</span></span><br><span class="line">    <span class="type">size_t</span> idx;</span><br><span class="line">    <span class="type">ev_promise_t</span> *promise;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> <span class="title">task</span>;</span></span><br><span class="line">    <span class="type">size_t</span> n;</span><br><span class="line">    <span class="type">ev_future_t</span> *futures[];</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>它没有为每个输入 Future 创建一个 task，而是使用同一个 task 按顺序等待：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">等待 futures[0]</span><br><span class="line">    ↓</span><br><span class="line">完成后复用同一个 task 等待 futures[1]</span><br><span class="line">    ↓</span><br><span class="line">完成后等待 futures[2]</span><br><span class="line">    ↓</span><br><span class="line">...</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    F0[Future 0] --&gt; T[同一个 when_all task]</span><br><span class="line">    T --&gt; F1[Future 1]</span><br><span class="line">    F1 --&gt; T</span><br><span class="line">    T --&gt; F2[Future 2]</span><br><span class="line">    F2 --&gt; T</span><br><span class="line">    T --&gt; R[完成聚合 Promise]</span><br></pre></td></tr></table></figure>
+
+<p>这种设计的优势是：</p>
+<ul>
+<li>只需要一个 <code>ev_task</code>；</li>
+<li>组合逻辑简单；</li>
+<li>不需要额外的原子完成计数器；</li>
+<li>适合 event-loop 串行推进模型。</li>
+</ul>
+<p>其代价是：</p>
+<ul>
+<li>它按顺序观察输入 Future；</li>
+<li>后面的 Future 即使已经 ready，也要等前面的检查流程推进到它；</li>
+<li>精确行为还受到输入 Future 是否被遗弃以及引用唯一性检查影响。</li>
+</ul>
+<p>对外契约是：</p>
+<ul>
+<li>全部输入 ready 时，结果表示 ready 的数量；</li>
+<li>某个输入在 ready 前被遗弃时，结果表示对应索引；</li>
+<li>输入数量为 0 时，立即返回 ready Future，结果指针为空。</li>
+</ul>
+<p>工程上不要把 <code>when_all()</code> 的结果简单当作业务数据，它是一个聚合状态索引&#x2F;计数。</p>
+<hr>
+<h2 id="15-when-any-的实现思路"><a href="#15-when-any-的实现思路" class="headerlink" title="15. when_any() 的实现思路"></a>15. <code>when_any()</code> 的实现思路</h2><p><code>ev_future_when_any_n()</code> 为每一个输入 Future 创建一个独立等待项：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ev_future_when_any</span> &#123;</span></span><br><span class="line">    <span class="type">size_t</span> idx;</span><br><span class="line">    <span class="type">ev_promise_t</span> *promise;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> <span class="title">task</span>;</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Future 0 → waiter[0] ┐</span><br><span class="line">Future 1 → waiter[1] ├→ 竞争完成同一个聚合 Promise</span><br><span class="line">Future 2 → waiter[2] ┘</span><br></pre></td></tr></table></figure>
+
+<p>每个 waiter 被唤醒后都会尝试：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ev_promise_set(when-&gt;promise, &amp;when-&gt;idx);</span><br></pre></td></tr></table></figure>
+
+<p>由于 Promise 是一次性的，只有第一个执行 <code>WAITING → SETTING</code> 的 waiter 能成功。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant F0 as Future0 waiter</span><br><span class="line">    participant F1 as Future1 waiter</span><br><span class="line">    participant P as 聚合 Promise</span><br><span class="line"></span><br><span class="line">    F1-&gt;&gt;P: set(index=1)</span><br><span class="line">    P--&gt;&gt;F1: 成功，WAITING→SETTING→READY</span><br><span class="line">    F0-&gt;&gt;P: set(index=0)</span><br><span class="line">    P--&gt;&gt;F0: 失败，Promise 已完成</span><br></pre></td></tr></table></figure>
+
+<p>因此，<code>when_any()</code> 的本质是：</p>
+<blockquote>
+<p>多个 task 竞争完成同一个 Promise，原子状态机决定唯一赢家。</p>
+</blockquote>
+<p>对外结果为第一个 ready 或被遗弃的输入 Future 索引。</p>
+<p>剩余 waiter 即使后来运行，也无法再次改变聚合结果；它们只需释放自己持有的 Promise 引用。</p>
+<hr>
+<h2 id="16-C-Promise-做了什么"><a href="#16-C-Promise-做了什么" class="headerlink" title="16. C++ Promise&lt;T, E&gt; 做了什么"></a>16. C++ <code>Promise&lt;T, E&gt;</code> 做了什么</h2><p>C++ 层把 C 的无类型 <code>void *</code> 结果包装为：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">util::Result&lt;T, E&gt;</span><br></pre></td></tr></table></figure>
+
+<h3 id="16-1-构造"><a href="#16-1-构造" class="headerlink" title="16.1 构造"></a>16.1 构造</h3><p><code>Promise&lt;T, E&gt;</code> 创建足够大的共享数据区：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">ev_promise_create</span>(<span class="built_in">sizeof</span>(result_type), dtor)</span><br></pre></td></tr></table></figure>
+
+<p>然后在尾随数据区 placement-new：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">new</span> (<span class="built_in">ev_promise_data</span>(promise_)) <span class="built_in">result_type</span>();</span><br></pre></td></tr></table></figure>
+
+<h3 id="16-2-析构"><a href="#16-2-析构" class="headerlink" title="16.2 析构"></a>16.2 析构</h3><p>C 层最后释放共享状态时调用注册的 <code>dtor</code>，显式析构 <code>Result&lt;T, E&gt;</code>。</p>
+<h3 id="16-3-set"><a href="#16-3-set" class="headerlink" title="16.3 set"></a>16.3 set</h3><p>C++ <code>set()</code> 仍遵循底层两阶段完成协议：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">set_acquire</span><br><span class="line">    ↓</span><br><span class="line">给 Result&lt;T, E&gt; 赋值</span><br><span class="line">    ↓</span><br><span class="line">set_release(result 地址)</span><br></pre></td></tr></table></figure>
+
+<p>如果结果赋值抛出异常，源码仍调用 <code>set_release(..., nullptr)</code> 结束 Promise，然后重新抛出异常。</p>
+<p>这意味着完成权一旦被当前调用者取得，就不能把状态退回 WAITING。</p>
+<h3 id="16-4-RAII"><a href="#16-4-RAII" class="headerlink" title="16.4 RAII"></a>16.4 RAII</h3><p>复制 Promise&#x2F;Future 会 acquire 引用；析构会 release；移动操作转移裸指针并清空源对象。</p>
+<p>所以 C++ 层解决的是：</p>
+<ul>
+<li>引用计数自动管理；</li>
+<li>结果类型安全；</li>
+<li>错误值统一封装；</li>
+<li>异常安全；</li>
+<li>continuation 组合。</li>
+</ul>
+<p>它没有改变底层状态机。</p>
+<hr>
+<h2 id="17-C-Future-做了什么"><a href="#17-C-Future-做了什么" class="headerlink" title="17. C++ Future&lt;T, E&gt; 做了什么"></a>17. C++ <code>Future&lt;T, E&gt;</code> 做了什么</h2><p>C++ Future 主要是薄封装：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">Future</span> &#123;</span><br><span class="line">    <span class="type">ev_future_t</span> *future_&#123;<span class="literal">nullptr</span>&#125;;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>对应关系如下：</p>
+<table>
+<thead>
+<tr>
+<th>C++ 接口</th>
+<th>C 接口</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>is_ready()</code></td>
+<td><code>ev_future_is_ready()</code></td>
+</tr>
+<tr>
+<td><code>get()</code></td>
+<td><code>ev_future_get()</code></td>
+</tr>
+<tr>
+<td><code>submit()</code></td>
+<td><code>ev_future_submit()</code></td>
+</tr>
+<tr>
+<td><code>cancel()</code></td>
+<td><code>ev_future_cancel()</code></td>
+</tr>
+<tr>
+<td><code>abort()</code></td>
+<td><code>ev_future_abort()</code></td>
+</tr>
+<tr>
+<td>拷贝构造</td>
+<td><code>ev_future_acquire()</code></td>
+</tr>
+<tr>
+<td>析构</td>
+<td><code>ev_future_release()</code></td>
+</tr>
+</tbody></table>
+<p><code>get()</code> 返回的是共享状态中 <code>Result&lt;T, E&gt;</code> 的引用，不是复制一份结果。</p>
+<p>因此结果对象的有效期受共享状态生命周期约束：只要调用方仍在使用该引用，就必须保证至少有一个 Promise&#x2F;Future 引用继续持有共享状态。</p>
+<hr>
+<h2 id="18-AsyncTask：把函数执行结果转成-Future"><a href="#18-AsyncTask：把函数执行结果转成-Future" class="headerlink" title="18. AsyncTask：把函数执行结果转成 Future"></a>18. <code>AsyncTask</code>：把函数执行结果转成 Future</h2><p><code>make_async_task()</code> 会把以下内容放在 Promise 的尾随共享数据区：</p>
+<ul>
+<li>一个继承自 <code>ev_task</code> 的 <code>AsyncTask</code>；</li>
+<li>Promise 包装对象；</li>
+<li>callable 和参数；</li>
+<li>最终结果；</li>
+<li>必要时保存 inner Future。</li>
+</ul>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">Promise 控制块</span><br><span class="line">┌───────────────────────────┐</span><br><span class="line">│ refcnt / dtor / Future    │</span><br><span class="line">├───────────────────────────┤</span><br><span class="line">│ AsyncTask                 │</span><br><span class="line">│  ├─ ev_task               │</span><br><span class="line">│  ├─ Promise               │</span><br><span class="line">│  ├─ Invoker               │</span><br><span class="line">│  ├─ inner Future（可选）   │</span><br><span class="line">│  └─ Result                │</span><br><span class="line">└───────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="18-1-callable-返回普通值"><a href="#18-1-callable-返回普通值" class="headerlink" title="18.1 callable 返回普通值"></a>18.1 callable 返回普通值</h3><p>执行 task 时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">调用 callable</span><br><span class="line">    ↓</span><br><span class="line">成功：Result 保存返回值</span><br><span class="line">失败：Result 保存 exception_ptr</span><br><span class="line">    ↓</span><br><span class="line">完成 Promise</span><br></pre></td></tr></table></figure>
+
+<p><code>catch_result()</code> 同时处理普通返回值和 <code>void</code> 返回值。</p>
+<h3 id="18-2-callable-返回-Future"><a href="#18-2-callable-返回-Future" class="headerlink" title="18.2 callable 返回 Future"></a>18.2 callable 返回 Future</h3><p>这时使用另一套 <code>AsyncTask</code> 特化，实现 implicit unwrapping。</p>
+<p>第一次运行 task：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">执行 callable</span><br><span class="line">    ↓</span><br><span class="line">得到 inner Future</span><br><span class="line">    ↓</span><br><span class="line">把同一个 task 重新 submit 到 inner Future</span><br></pre></td></tr></table></figure>
+
+<p>第二次由 inner Future 唤醒 task：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">读取 inner Future 的 Result</span><br><span class="line">    ↓</span><br><span class="line">提取 value()</span><br><span class="line">    ↓</span><br><span class="line">完成外层 Promise</span><br></pre></td></tr></table></figure>
+
+<p>所以：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Future&lt;A&gt;.<span class="built_in">then</span>(... -&gt; Future&lt;B&gt;)</span><br></pre></td></tr></table></figure>
+
+<p>最终得到的是：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Future&lt;B&gt;</span><br></pre></td></tr></table></figure>
+
+<p>而不是：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Future&lt;Future&lt;B&gt;&gt;</span><br></pre></td></tr></table></figure>
+
+<p>这就是源码注释所称的 implicit unwrapping。</p>
+<hr>
+<h2 id="19-then-如何构造-continuation"><a href="#19-then-如何构造-continuation" class="headerlink" title="19. then() 如何构造 continuation"></a>19. <code>then()</code> 如何构造 continuation</h2><p><code>Future::then()</code> 的流程是：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">auto</span> task = <span class="built_in">make_async_task</span>(exec, continuation, *<span class="keyword">this</span>);</span><br><span class="line"><span class="keyword">auto</span> future = task-&gt;<span class="built_in">get_future</span>();</span><br><span class="line"><span class="built_in">submit</span>(*task);</span><br><span class="line"><span class="keyword">return</span> future;</span><br></pre></td></tr></table></figure>
+
+<p>完整链路：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">原 Future A</span><br><span class="line">    ↓ submit continuation task</span><br><span class="line">A ready</span><br><span class="line">    ↓</span><br><span class="line">executor 执行 continuation(A)</span><br><span class="line">    ↓</span><br><span class="line">结果写入 Promise B</span><br><span class="line">    ↓</span><br><span class="line">Future B ready</span><br></pre></td></tr></table></figure>
+
+<p>源码特意先取得返回 Future，再把 task 提交给原 Future：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">先 get_future()</span><br><span class="line">再 submit(task)</span><br></pre></td></tr></table></figure>
+
+<p>原因是 executor 允许 task 在 <code>submit()</code> 返回前开始执行。如果先 submit，task 可能立即运行并释放其内部状态，随后调用者再取 Future 就可能发生竞态。</p>
+<p>这是一条非常通用的异步编程经验：</p>
+<blockquote>
+<p>在提交可能立即执行的异步任务前，先取得调用方后续需要的所有引用和句柄。</p>
+</blockquote>
+<hr>
+<h2 id="20-async-如何工作"><a href="#20-async-如何工作" class="headerlink" title="20. async() 如何工作"></a>20. <code>async()</code> 如何工作</h2><p><code>async(exec, f, args...)</code> 是 <code>make_async_task()</code> 加 executor submit 的便利封装：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">创建 AsyncTask 和 Promise</span><br><span class="line">    ↓</span><br><span class="line">先取得返回 Future</span><br><span class="line">    ↓</span><br><span class="line">把 AsyncTask 提交到 executor</span><br><span class="line">    ↓</span><br><span class="line">executor 执行 callable</span><br><span class="line">    ↓</span><br><span class="line">完成 Promise</span><br><span class="line">    ↓</span><br><span class="line">返回 Future ready</span><br></pre></td></tr></table></figure>
+
+<p>它不是创建一个新线程。callable 在传入的 executor 上执行。</p>
+<p>如果 executor 属于 <code>ev_loop</code>，那么 callable 通常就在运行该 loop 的线程中执行。</p>
+<hr>
+<h2 id="21-Future-与-ev-loop-wait-的关系"><a href="#21-Future-与-ev-loop-wait-的关系" class="headerlink" title="21. Future 与 ev_loop_wait() 的关系"></a>21. Future 与 <code>ev_loop_wait()</code> 的关系</h2><p>虽然 Lely Future 本身不阻塞，但 <code>ev_loop_wait(loop, future)</code> 可以把 Future 作为 event loop 本次运行的结束条件。</p>
+<p>其内部不是阻塞在 Future 条件变量上，而是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">向 Future 提交一个内部唤醒 task</span><br><span class="line">    ↓</span><br><span class="line">继续运行 event loop</span><br><span class="line">    ├─ 执行普通 task</span><br><span class="line">    ├─ Poll I/O</span><br><span class="line">    └─ 等待内部唤醒</span><br><span class="line">    ↓</span><br><span class="line">异步操作完成 Promise</span><br><span class="line">    ↓</span><br><span class="line">Future 内部唤醒 task 被提交到 loop</span><br><span class="line">    ↓</span><br><span class="line">loop 执行该 task，标记等待 context ready</span><br><span class="line">    ↓</span><br><span class="line">ev_loop_wait() 返回</span><br></pre></td></tr></table></figure>
+
+<p>这解决了 CANopen 异步操作中的关键问题：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Future 的完成本身依赖 event loop 继续处理 SocketCAN、定时器和协议状态机。</span><br></pre></td></tr></table></figure>
+
+<p>如果只让线程同步睡眠，而没有其他线程运行 event loop，异步 SDO Future 可能永远不会 ready。</p>
+<hr>
+<h2 id="22-放到异步-CANopen-场景中理解"><a href="#22-放到异步-CANopen-场景中理解" class="headerlink" title="22. 放到异步 CANopen 场景中理解"></a>22. 放到异步 CANopen 场景中理解</h2><p>以异步 SDO 上传为例：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant App as 应用层</span><br><span class="line">    participant SDO as SDO异步操作</span><br><span class="line">    participant EvLoop as ev_loop</span><br><span class="line">    participant IO as SocketCAN/Poll</span><br><span class="line">    participant P as Promise</span><br><span class="line">    participant F as Future</span><br><span class="line"></span><br><span class="line">    App-&gt;&gt;SDO: 发起异步 SDO 上传</span><br><span class="line">    SDO-&gt;&gt;P: 创建并持有 Promise</span><br><span class="line">    SDO--&gt;&gt;App: 返回 Future</span><br><span class="line">    App-&gt;&gt;EvLoop: wait(Future) 或注册 then()</span><br><span class="line">    EvLoop-&gt;&gt;IO: 等待 CAN 响应或超时</span><br><span class="line">    IO--&gt;&gt;EvLoop: CAN 帧可读</span><br><span class="line">    EvLoop-&gt;&gt;SDO: 执行接收与状态机 task</span><br><span class="line">    SDO-&gt;&gt;P: set(result)</span><br><span class="line">    P-&gt;&gt;F: state = READY</span><br><span class="line">    F-&gt;&gt;EvLoop: 提交等待 task</span><br><span class="line">    EvLoop--&gt;&gt;App: wait 返回或执行 continuation</span><br></pre></td></tr></table></figure>
+
+<p>角色不要混淆：</p>
+<table>
+<thead>
+<tr>
+<th>角色</th>
+<th>在 SDO 场景中的对象</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>异步操作生产端</td>
+<td>SDO 客户端状态机及其 Promise。</td>
+</tr>
+<tr>
+<td>结果观察端</td>
+<td>应用层持有的 Future。</td>
+</tr>
+<tr>
+<td>I&#x2F;O 驱动</td>
+<td>SocketCAN + Poll。</td>
+</tr>
+<tr>
+<td>调度器</td>
+<td><code>ev_loop</code> executor。</td>
+</tr>
+<tr>
+<td>结果内容</td>
+<td>SDO 结果、错误码或相关数据。</td>
+</tr>
+</tbody></table>
+<p>Future 不传输 CAN 帧，也不实现 SDO 协议。它只负责把“SDO 操作已经完成”这一事实及结果传给观察者。</p>
+<hr>
+<h2 id="23-常见错误理解"><a href="#23-常见错误理解" class="headerlink" title="23. 常见错误理解"></a>23. 常见错误理解</h2><h3 id="23-1-把-Future-当消息队列"><a href="#23-1-把-Future-当消息队列" class="headerlink" title="23.1 把 Future 当消息队列"></a>23.1 把 Future 当消息队列</h3><p>错误：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Promise 可以不断写结果，Future 可以不断取消息</span><br></pre></td></tr></table></figure>
+
+<p>正确：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">一个 Promise 只能成功完成一次</span><br><span class="line">一个 Future 只观察这一次完成</span><br></pre></td></tr></table></figure>
+
+<h3 id="23-2-认为-get-会阻塞"><a href="#23-2-认为-get-会阻塞" class="headerlink" title="23.2 认为 get() 会阻塞"></a>23.2 认为 <code>get()</code> 会阻塞</h3><p>错误：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">直接 get，没完成就等</span><br></pre></td></tr></table></figure>
+
+<p>正确：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">C 版要求调用前已经 ready</span><br><span class="line">C++ 版未 ready 会抛 future_not_ready</span><br></pre></td></tr></table></figure>
+
+<h3 id="23-3-认为-Promise-和-Future-有两个引用计数"><a href="#23-3-认为-Promise-和-Future-有两个引用计数" class="headerlink" title="23.3 认为 Promise 和 Future 有两个引用计数"></a>23.3 认为 Promise 和 Future 有两个引用计数</h3><p>错误：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Promise 管 Promise，Future 管 Future</span><br></pre></td></tr></table></figure>
+
+<p>正确：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">二者共享外层 Promise 控制块中的一个 refcnt</span><br></pre></td></tr></table></figure>
+
+<h3 id="23-4-认为-cancel-后-task-不会执行"><a href="#23-4-认为-cancel-后-task-不会执行" class="headerlink" title="23.4 认为 cancel 后 task 不会执行"></a>23.4 认为 cancel 后 task 不会执行</h3><p>错误：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">cancel == 丢弃 task</span><br></pre></td></tr></table></figure>
+
+<p>正确：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">cancel 会把 task 提交到 executor</span><br><span class="line">abort 才不会执行 task</span><br></pre></td></tr></table></figure>
+
+<h3 id="23-5-认为-Future-ready-后回调在完成线程直接执行"><a href="#23-5-认为-Future-ready-后回调在完成线程直接执行" class="headerlink" title="23.5 认为 Future ready 后回调在完成线程直接执行"></a>23.5 认为 Future ready 后回调在完成线程直接执行</h3><p>不一定。</p>
+<p>Promise 完成线程只负责把 task 提交到 task 指定的 executor。task 实际在哪个线程运行，由 executor 的实现和当前运行环境决定。</p>
+<h3 id="23-6-认为-async-一定创建线程"><a href="#23-6-认为-async-一定创建线程" class="headerlink" title="23.6 认为 async() 一定创建线程"></a>23.6 认为 <code>async()</code> 一定创建线程</h3><p>错误。</p>
+<p>Lely <code>async()</code> 只是把 callable 包成 task 并提交给指定 executor。executor 可以是 event loop，也可以是其他实现。</p>
+<hr>
+<h2 id="24-调试-Future-问题时建议观察的变量"><a href="#24-调试-Future-问题时建议观察的变量" class="headerlink" title="24. 调试 Future 问题时建议观察的变量"></a>24. 调试 Future 问题时建议观察的变量</h2><h3 id="24-1-future-state"><a href="#24-1-future-state" class="headerlink" title="24.1 future-&gt;state"></a>24.1 <code>future-&gt;state</code></h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">WAITING：尚无人完成</span><br><span class="line">SETTING：某个线程正在构造/发布结果</span><br><span class="line">READY：结果已发布</span><br></pre></td></tr></table></figure>
+
+<p>如果长期停在 SETTING，通常说明某条路径成功调用了 <code>set_acquire()</code>，却没有调用 <code>set_release()</code>。</p>
+<h3 id="24-2-promise-refcnt"><a href="#24-2-promise-refcnt" class="headerlink" title="24.2 promise-&gt;refcnt"></a>24.2 <code>promise-&gt;refcnt</code></h3><p>用于定位：</p>
+<ul>
+<li>提前释放；</li>
+<li>Future 永不销毁；</li>
+<li>continuation 引用环；</li>
+<li>聚合 Future 内部引用未释放。</li>
+</ul>
+<p>不要仅凭某一瞬间的 refcnt 在多线程环境中做严格逻辑判断，但可以用于断点和生命周期分析。</p>
+<h3 id="24-3-future-queue"><a href="#24-3-future-queue" class="headerlink" title="24.3 future-&gt;queue"></a>24.3 <code>future-&gt;queue</code></h3><p>如果 Future 已 ready，但 queue 中仍残留 task，需要检查：</p>
+<ul>
+<li>实际是否执行到 <code>set_release()</code>；</li>
+<li>是否使用了不同的 Future 对象；</li>
+<li>task 是否被重复挂入链表；</li>
+<li>是否有内存破坏。</li>
+</ul>
+<h3 id="24-4-future-value"><a href="#24-4-future-value" class="headerlink" title="24.4 future-&gt;value"></a>24.4 <code>future-&gt;value</code></h3><p>READY 时应指向有效结果，除非调用路径明确使用 <code>NULL</code> 表示空结果或结果构造失败。</p>
+<h3 id="24-5-task-的-exec-和-func"><a href="#24-5-task-的-exec-和-func" class="headerlink" title="24.5 task 的 exec 和 func"></a>24.5 task 的 <code>exec</code> 和 <code>func</code></h3><p>Future 只负责提交。如果 task 不执行，还要继续检查：</p>
+<ul>
+<li>executor 是否仍在运行；</li>
+<li>event loop 是否 stopped；</li>
+<li>task 是否被 executor abort；</li>
+<li><code>func</code> 是否为空或对象生命周期已结束。</li>
+</ul>
+<h3 id="24-6-event-loop-的-ntasks"><a href="#24-6-event-loop-的-ntasks" class="headerlink" title="24.6 event loop 的 ntasks"></a>24.6 event loop 的 <code>ntasks</code></h3><p>Future waiter 已调用 <code>on_task_init()</code> 后，即使尚未进入 loop queue，也应作为 outstanding work 存在。</p>
+<p>如果 <code>ntasks</code> 提前归零，检查 Future task 的 init&#x2F;fini 是否配对。</p>
+<hr>
+<h2 id="25-建议的源码单步顺序"><a href="#25-建议的源码单步顺序" class="headerlink" title="25. 建议的源码单步顺序"></a>25. 建议的源码单步顺序</h2><p>第一次调试时，不建议直接从完整 CANopen 主站流程开始。可以按以下顺序建立断点。</p>
+<h3 id="25-1-最小-Promise-Future"><a href="#25-1-最小-Promise-Future" class="headerlink" title="25.1 最小 Promise&#x2F;Future"></a>25.1 最小 Promise&#x2F;Future</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">ev_promise_create</span><br><span class="line">    ↓</span><br><span class="line">ev_promise_get_future</span><br><span class="line">    ↓</span><br><span class="line">ev_future_submit</span><br><span class="line">    ↓</span><br><span class="line">ev_promise_set_acquire</span><br><span class="line">    ↓</span><br><span class="line">ev_promise_set_release</span><br><span class="line">    ↓</span><br><span class="line">ev_task_queue_post</span><br><span class="line">    ↓</span><br><span class="line">task.func</span><br></pre></td></tr></table></figure>
+
+<h3 id="25-2-引用计数"><a href="#25-2-引用计数" class="headerlink" title="25.2 引用计数"></a>25.2 引用计数</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">ev_promise_acquire/release</span><br><span class="line">ev_future_acquire/release</span><br><span class="line">ev_promise_fini</span><br><span class="line">ev_future_fini</span><br></pre></td></tr></table></figure>
+
+<h3 id="25-3-组合-Future"><a href="#25-3-组合-Future" class="headerlink" title="25.3 组合 Future"></a>25.3 组合 Future</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">ev_future_when_all_n</span><br><span class="line">ev_future_when_all_func</span><br><span class="line"></span><br><span class="line">ev_future_when_any_n</span><br><span class="line">ev_future_when_any_func</span><br></pre></td></tr></table></figure>
+
+<h3 id="25-4-C-continuation"><a href="#25-4-C-continuation" class="headerlink" title="25.4 C++ continuation"></a>25.4 C++ continuation</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Promise&lt;T,E&gt;::set</span><br><span class="line">Future&lt;T,E&gt;::then</span><br><span class="line">make_async_task</span><br><span class="line">AsyncTask::task function</span><br><span class="line">Future&lt;T,E&gt;::get</span><br></pre></td></tr></table></figure>
+
+<h3 id="25-5-接入-CANopen"><a href="#25-5-接入-CANopen" class="headerlink" title="25.5 接入 CANopen"></a>25.5 接入 CANopen</h3><p>最后再从具体异步 SDO&#x2F;PDO&#x2F;定时器 API 返回的 Future 开始，追踪是谁持有 Promise，以及在哪条完成或错误路径调用 set。</p>
+<hr>
+<h2 id="26-最小-C-接口示例"><a href="#26-最小-C-接口示例" class="headerlink" title="26. 最小 C 接口示例"></a>26. 最小 C 接口示例</h2><p>下面的示例只展示对象关系，executor 创建过程需按实际平台补充。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;lely/ev/future.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;lely/ev/task.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;lely/util/util.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stdio.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stdlib.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">result_data</span> &#123;</span></span><br><span class="line">    <span class="type">int</span> value;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">wait_task</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">ev_task</span> <span class="title">task</span>;</span></span><br><span class="line">    <span class="type">ev_future_t</span> *<span class="built_in">future</span>;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">on_ready</span><span class="params">(<span class="keyword">struct</span> ev_task *task)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">wait_task</span> *<span class="title">wait</span> =</span> structof(task, <span class="keyword">struct</span> wait_task, task);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (ev_future_is_ready(wait-&gt;<span class="built_in">future</span>)) &#123;</span><br><span class="line">        <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">result_data</span> *<span class="title">result</span> =</span> ev_future_get(wait-&gt;<span class="built_in">future</span>);</span><br><span class="line">        <span class="built_in">printf</span>(<span class="string">&quot;result = %d\n&quot;</span>, result-&gt;value);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="built_in">puts</span>(<span class="string">&quot;future was canceled or abandoned&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    ev_future_release(wait-&gt;<span class="built_in">future</span>);</span><br><span class="line">    <span class="built_in">free</span>(wait);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">int</span></span><br><span class="line"><span class="title function_">start_example</span><span class="params">(<span class="type">ev_exec_t</span> *exec)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">ev_promise_t</span> *promise = ev_promise_create(<span class="keyword">sizeof</span>(<span class="keyword">struct</span> result_data), <span class="literal">NULL</span>);</span><br><span class="line">    <span class="keyword">if</span> (!promise)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">wait_task</span> *<span class="title">wait</span> =</span> <span class="built_in">malloc</span>(<span class="keyword">sizeof</span>(*wait));</span><br><span class="line">    <span class="keyword">if</span> (!wait) &#123;</span><br><span class="line">        ev_promise_release(promise);</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    wait-&gt;task = (<span class="keyword">struct</span> ev_task)EV_TASK_INIT(exec, &amp;on_ready);</span><br><span class="line">    wait-&gt;<span class="built_in">future</span> = ev_promise_get_future(promise);</span><br><span class="line">    ev_future_submit(wait-&gt;<span class="built_in">future</span>, &amp;wait-&gt;task);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (ev_promise_set_acquire(promise)) &#123;</span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">result_data</span> *<span class="title">result</span> =</span> ev_promise_data(promise);</span><br><span class="line">        result-&gt;value = <span class="number">42</span>;</span><br><span class="line">        ev_promise_set_release(promise, result);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    ev_promise_release(promise);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>示例把等待 task 放在堆上，并由 task function 在执行后释放，以保证对象生命周期覆盖 executor 的异步调度。生产代码还应结合具体异步操作处理分配失败、取消和 executor 关闭流程。</p>
+<hr>
+<h2 id="27-最小-C-接口示例"><a href="#27-最小-C-接口示例" class="headerlink" title="27. 最小 C++ 接口示例"></a>27. 最小 C++ 接口示例</h2><figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;lely/ev/future.hpp&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="keyword">using</span> lely::ev::Future;</span><br><span class="line"><span class="keyword">using</span> lely::ev::Promise;</span><br><span class="line"></span><br><span class="line"><span class="function">Future&lt;<span class="type">int</span>&gt; <span class="title">start_operation</span><span class="params">()</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    Promise&lt;<span class="type">int</span>&gt; promise;</span><br><span class="line">    <span class="keyword">auto</span> future = promise.<span class="built_in">get_future</span>();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 实际程序应把 promise 移交给异步操作对象。</span></span><br><span class="line">    promise.<span class="built_in">set</span>(lely::util::<span class="built_in">success</span>(<span class="number">42</span>));</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> future;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>使用 continuation：</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">auto</span> future = <span class="built_in">start_operation</span>();</span><br><span class="line"></span><br><span class="line"><span class="keyword">auto</span> next = future.<span class="built_in">then</span>(exec, [](Future&lt;<span class="type">int</span>&gt; completed) &#123;</span><br><span class="line">    <span class="keyword">return</span> completed.<span class="built_in">get</span>().<span class="built_in">value</span>() * <span class="number">2</span>;</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>这里 <code>next</code> 的类型是保存 continuation 返回值的 Future；continuation 中的异常会被捕获为 <code>std::exception_ptr</code> 错误结果。</p>
+<hr>
+<h2 id="28-一张总图串起全部机制"><a href="#28-一张总图串起全部机制" class="headerlink" title="28. 一张总图串起全部机制"></a>28. 一张总图串起全部机制</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[异步操作创建 Promise] --&gt; B[Promise 内嵌 Future]</span><br><span class="line">    B --&gt; C[调用方取得 Future 引用]</span><br><span class="line">    C --&gt; D[ev_future_submit 登记 task]</span><br><span class="line">    D --&gt; E[on_task_init 增加 outstanding work]</span><br><span class="line">    E --&gt; F&#123;Promise 是否完成&#125;</span><br><span class="line">    F -- 否 --&gt; G[task 保存在 Future queue]</span><br><span class="line">    F -- 是 --&gt; H[task 直接 post 到 executor]</span><br><span class="line">    G --&gt; I[完成方 set_acquire 抢到完成权]</span><br><span class="line">    I --&gt; J[写共享结果]</span><br><span class="line">    J --&gt; K[set_release 发布 READY]</span><br><span class="line">    K --&gt; L[转移 Future queue]</span><br><span class="line">    L --&gt; H</span><br><span class="line">    H --&gt; M[on_task_fini 撤销 outstanding work]</span><br><span class="line">    M --&gt; N[executor/event loop 执行 task]</span><br><span class="line">    N --&gt; O[检查 ready 并读取 Result]</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="29-最终理解框架"><a href="#29-最终理解框架" class="headerlink" title="29. 最终理解框架"></a>29. 最终理解框架</h2><p>学完这三个文件后，应该能回答以下问题：</p>
+<ol>
+<li>为什么 Lely Future 是非阻塞的？</li>
+<li>Promise 和 Future 为什么共享同一个引用计数？</li>
+<li><code>WAITING → SETTING → READY</code> 为什么需要三个状态，而不是布尔值？</li>
+<li><code>ev_future_submit()</code> 如何避免 task 丢失？</li>
+<li>为什么等待 Future 的 task 要先调用 <code>on_task_init()</code>？</li>
+<li>Future 被遗弃时，为什么仍要提交等待 task？</li>
+<li>cancel 和 abort 为什么语义不同？</li>
+<li><code>when_any()</code> 如何用一次性 Promise 决定唯一赢家？</li>
+<li>C++ <code>then()</code> 如何把 continuation 变成新的 Future？</li>
+<li>continuation 返回 Future 时，为什么不会得到嵌套 Future？</li>
+<li>Future、executor、event loop 和 SocketCAN 各自负责哪一部分？</li>
+</ol>
+<p>如果这些问题都能从对象关系、状态机和 task 调度路径解释清楚，就已经掌握了 Lely Future&#x2F;Promise 的核心设计。</p>
+<hr>
+<h2 id="30-官方源码与参考资料"><a href="#30-官方源码与参考资料" class="headerlink" title="30. 官方源码与参考资料"></a>30. 官方源码与参考资料</h2><h3 id="30-1-本文核心源码"><a href="#30-1-本文核心源码" class="headerlink" title="30.1 本文核心源码"></a>30.1 本文核心源码</h3><ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/ev/future.c">Lely <code>src/ev/future.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/future.h">Lely <code>include/lely/ev/future.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/future.hpp">Lely <code>include/lely/ev/future.hpp</code></a></li>
+</ol>
+<h3 id="30-2-关联源码"><a href="#30-2-关联源码" class="headerlink" title="30.2 关联源码"></a>30.2 关联源码</h3><ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/task.h">Lely <code>include/lely/ev/task.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/ev/task.c">Lely <code>src/ev/task.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/include/lely/ev/exec.h">Lely <code>include/lely/ev/exec.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/master/src/ev/loop.c">Lely <code>src/ev/loop.c</code></a></li>
+</ol>
+<h3 id="30-3-官方说明"><a href="#30-3-官方说明" class="headerlink" title="30.3 官方说明"></a>30.3 官方说明</h3><ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/overview/">Lely CANopen Library overview</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/configuration/">Lely CANopen Build configuration</a></li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/ea3bda78/">https://wdfk-prog.space/posts/ea3bda78/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/canopen/">canopen</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/05.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen 事件调度机制详解：从 ev_task、Executor、std_exec 到 ev_loop、Future 与 Poll @[toc]  0. 阅读前先记住六个结论 ev_task 只是“可执行工作”的载体，不负责排队、线程切换或等待。 ev_exec_t 是抽象 Executor 接口，本质是 C 语言虚函数表。 ev_std_exec 不是另一个事件循环，而是一个适配层：只要求后端实现 post/abort/on_task_init/on_task_fini，它补齐 dispatch/defer/run。 ev_loop 才拥有真正的全局任务队列、等待线程、Poll 线程和 outstanding work 状态。 ev_exec_run() 的关键价值不是简单调用回调，而是建立“当前线程正在这个 Executor 内执行任务”的 TLS 上下文。 Future、I&#x2F;O、定时器最终都不会直接“执行用户逻辑”；它们把 ev_task 投递给 Executor，由 ev_loop 取出并运行。  可以先把整个系统压缩成下面这条链： 1234...</div></div></div></a><a class="pagination-related" href="/posts/3ecba0f7/" title="Lely CANopen `ev_loop` 详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Lely CANopen `ev_loop` 详解</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen ev_loop 详解 @[toc] 1. 先区分三个容易混淆的“停止”状态loop.c 中至少存在三类停止或完成状态：    状态 所属范围 作用    loop-&gt;stopped 每个 ev_loop_t 整个事件循环是否处于 stopped 状态；ev_loop_stop() 会影响所有正在运行该 loop 的线程。   ev_loop_thrd.stopped 每个线程 中断该线程当前最内层的一次 run/wait 调用；返回后通常会清零，以便下次重新运行。   ctx-&gt;ready 每个等待 context 表示正在等待的 future 已经 ready，应结束本次等待。   不能把它们当作同一个状态： 12345678loop-&gt;stopped= loop 级停止thread-local stopped= 线程级、单次运行中断ctx-&gt;ready= 本次等待目标已经完成  ev_loop_ctx_wait_one() 的主循环实际同时检查这些条件： 12345loop 没有全局停止并且当前线程没有被 kill并且fu...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen CAN 完整机制学习笔记</div></div><div class="info-2"><div class="info-item-1">   Lely CANopen IO2 CAN 与 SocketCAN 完整机制学习笔记 @[toc]  1. CANopen、liblely-co、io2 与 SocketCAN 的边界Lely CANopen 协议栈本身是被动状态机。它不直接拥有 Linux socket，也不自行创建线程。Linux 上的实际 I&#x2F;O 由 liblely-io2 提供，任务调度由 liblely-ev 提供。 12345678910flowchart TB    APP[业务代码 / CANopen Master] --&gt; CO[liblely-co / coapp]    CO --&gt; NET[CAN network / protocol state machine]    NET --&gt; IO2[liblely-io2 abstract CAN API]    IO2 --&gt; CHAN[Linux CanChannel]    CHAN --&gt; SOCK[SocketCAN raw socket]    SOCK --&gt; KERNEL[Lin...</div></div></div></a><a class="pagination-related" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 &#96;ev_task&#96;、Executor、&#96;std_exec&#96; 到 &#96;ev_loop&#96;、Future 与 Poll"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen 事件调度机制详解：从 &#96;ev_task&#96;、Executor、&#96;std_exec&#96; 到 &#96;ev_loop&#96;、Future 与 Poll</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen 事件调度机制详解：从 ev_task、Executor、std_exec 到 ev_loop、Future 与 Poll @[toc]  0. 阅读前先记住六个结论 ev_task 只是“可执行工作”的载体，不负责排队、线程切换或等待。 ev_exec_t 是抽象 Executor 接口，本质是 C 语言虚函数表。 ev_std_exec 不是另一个事件循环，而是一个适配层：只要求后端实现 post/abort/on_task_init/on_task_fini，它补齐 dispatch/defer/run。 ev_loop 才拥有真正的全局任务队列、等待线程、Poll 线程和 outstanding work 状态。 ev_exec_run() 的关键价值不是简单调用回调，而是建立“当前线程正在这个 Executor 内执行任务”的 TLS 上下文。 Future、I&#x2F;O、定时器最终都不会直接“执行用户逻辑”；它们把 ev_task 投递给 Executor，由 ev_loop 取出并运行。  可以先把整个系统压缩成下面这条链： 1234...</div></div></div></a><a class="pagination-related" href="/posts/3ecba0f7/" title="Lely CANopen &#96;ev_loop&#96; 详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely CANopen &#96;ev_loop&#96; 详解</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen ev_loop 详解 @[toc] 1. 先区分三个容易混淆的“停止”状态loop.c 中至少存在三类停止或完成状态：    状态 所属范围 作用    loop-&gt;stopped 每个 ev_loop_t 整个事件循环是否处于 stopped 状态；ev_loop_stop() 会影响所有正在运行该 loop 的线程。   ev_loop_thrd.stopped 每个线程 中断该线程当前最内层的一次 run/wait 调用；返回后通常会清零，以便下次重新运行。   ctx-&gt;ready 每个等待 context 表示正在等待的 future 已经 ready，应结束本次等待。   不能把它们当作同一个状态： 12345678loop-&gt;stopped= loop 级停止thread-local stopped= 线程级、单次运行中断ctx-&gt;ready= 本次等待目标已经完成  ev_loop_ctx_wait_one() 的主循环实际同时检查这些条件： 12345loop 没有全局停止并且当前线程没有被 kill并且fu...</div></div></div></a><a class="pagination-related" href="/posts/12cc1336/" title="Lely canopen&#96;io_poll&#96; 机制原理与完整运行流程详解"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-28</div><div class="info-item-2">Lely canopen&#96;io_poll&#96; 机制原理与完整运行流程详解</div></div><div class="info-2"><div class="info-item-1">   Lely canopenio_poll 机制原理与完整运行流程详解 @[toc] 1. 先给结论Lely 的 io_poll 是一个基于 Linux epoll 的 I&#x2F;O 事件分发器。它不解析 CANopen，也不主动读取 SocketCAN；它只负责：  把需要关注的文件描述符 fd 登记到 Linux epoll； 阻塞等待这些 fd 出现可读、可写、异常或断开事件； 根据内核返回的 fd，在红黑树中找到对应的 io_poll_watch； 调用 watch-&gt;func(watch, events)； 因为所有登记都附加了 EPOLLONESHOT，每次通知后当前一次监听失效； 调用方若要继续接收后续事件，必须再次调用 io_poll_watch() 恢复下一次监听。  最重要的完整周期是： 1234567891011121314151617181920212223创建 Poll  ↓初始化 io_poll_watch  ↓io_poll_watch(events != 0)  ↓首次登记：EPOLL_CTL_ADD  ↓ev_poll_wait() ...</div></div></div></a><a class="pagination-related" href="/posts/9a4ae0f9/" title="Lely CANopen ：IO 服务 io_ctx"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">Lely CANopen ：IO 服务 io_ctx</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen ：I&#x2F;O 服务 io_ctx @[toc] 摘要在 Lely CANopen 应用中，lely::io::Context 往往是最先创建、最后销毁的对象之一。它看起来只是一个很薄的 C++ 包装类，但其底层 io_ctx_t 承担了一个关键职责：  维护一组已注册的 Lely I&#x2F;O 服务，并在进程 fork() 或系统退出时，按确定顺序向这些服务分发维护事件。  ctx.c 本身并不执行 CANopen 协议，也不负责运行事件循环。它更像一个轻量级的“服务生命周期协调器”：  通过双向链表登记 Timer、CAN 网络接口及其他底层 I&#x2F;O 服务； 通过服务虚表调用各组件自己的 notify_fork 和 shutdown 回调； 在 fork() 前后按不同方向遍历服务； 在 shutdown 时按注册顺序的逆序关闭服务； 通过服务内部的 _shutdown 标志保证每个服务最多关闭一次； 通过 C++ 的 move-only 包装实现单个底层 Context 的唯一所有权； 允许同一进程创建多个彼此独立的 Cont...</div></div></div></a><a class="pagination-related" href="/posts/cb8be560/" title="Lely CANopen Timer 的实现原理与运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-27</div><div class="info-item-2">Lely CANopen Timer 的实现原理与运行流程</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen: Timer 的实现原理与运行流程 @[toc] 一句话结论Lely 的 lely::io::Timer 不是一个独立线程，也不是一个直接执行回调的传统软件定时器。它本质上是一个异步事件适配器： 123456789Linux timerfd 负责计时        ↓io_poll 负责监听 timerfd 的可读事件        ↓内部 wait_task 负责读取到期计数        ↓ev_exec 负责调度完成任务        ↓io_timer_wait 对应的回调最终被执行  创建 Timer、设置到期时间和提交等待操作是三个不同动作： 123创建 Timer：建立 timerfd 并注册到 io_poll设置时间：调用 timerfd_settime()，决定何时到期提交等待：把 io_timer_wait 放入 wait_queue，决定到期后通知谁  从 CANopen 主站视角看，还要再增加两层调度： 123456789BasicMaster / Node        ↓ 传入专用 io::TimerBase&amp;io...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">549</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Lely-CANopen-Future-Promise-%E6%9C%BA%E5%88%B6%E5%8E%9F%E7%90%86%E4%B8%8E%E6%BA%90%E7%A0%81%E8%AF%A6%E8%A7%A3"><span class="toc-number">1.</span> <span class="toc-text">Lely CANopen Future&#x2F;Promise 机制原理与源码详解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%85%88%E7%BB%99%E7%BB%93%E8%AE%BA%EF%BC%9ALely-Future-%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.1.</span> <span class="toc-text">1. 先给结论：Lely Future 到底是什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E4%B8%89%E4%B8%AA%E6%BA%90%E7%A0%81%E6%96%87%E4%BB%B6%E5%90%84%E8%87%AA%E8%B4%9F%E8%B4%A3%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.</span> <span class="toc-text">2. 三个源码文件各自负责什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E5%9B%9B%E4%B8%AA%E6%A0%B8%E5%BF%83%E8%A7%92%E8%89%B2"><span class="toc-number">1.3.</span> <span class="toc-text">3. 四个核心角色</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-Promise%EF%BC%9A%E7%BB%93%E6%9E%9C%E7%94%9F%E4%BA%A7%E7%AB%AF"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 Promise：结果生产端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-Future%EF%BC%9A%E7%BB%93%E6%9E%9C%E8%A7%82%E5%AF%9F%E7%AB%AF"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 Future：结果观察端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-Task%EF%BC%9AFuture-ready-%E5%90%8E%E8%A6%81%E6%89%A7%E8%A1%8C%E7%9A%84%E5%8A%A8%E4%BD%9C"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 Task：Future ready 后要执行的动作</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-Executor%EF%BC%9A%E7%9C%9F%E6%AD%A3%E6%89%A7%E8%A1%8C-task-%E7%9A%84%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 Executor：真正执行 task 的对象</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E6%9C%80%E9%87%8D%E8%A6%81%E7%9A%84%E5%86%85%E5%AD%98%E5%B8%83%E5%B1%80%EF%BC%9APromise-%E5%86%85%E5%B5%8C-Future"><span class="toc-number">1.4.</span> <span class="toc-text">4. 最重要的内存布局：Promise 内嵌 Future</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-Promise-%E5%92%8C-Future-%E5%85%B1%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 Promise 和 Future 共用生命周期</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E7%BB%93%E6%9E%9C%E5%AF%B9%E8%B1%A1%E5%8F%AF%E4%BB%A5%E5%92%8C%E6%8E%A7%E5%88%B6%E5%9D%97%E4%B8%80%E6%AC%A1%E5%88%86%E9%85%8D"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 结果对象可以和控制块一次分配</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-Future-%E6%8C%87%E9%92%88%E4%B8%8D%E6%98%AF%E7%8B%AC%E7%AB%8B%E5%88%86%E9%85%8D%E7%9A%84%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 Future 指针不是独立分配的对象</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-Future-%E7%8A%B6%E6%80%81%E6%9C%BA%EF%BC%9AWAITING%E3%80%81SETTING%E3%80%81READY"><span class="toc-number">1.5.</span> <span class="toc-text">5. Future 状态机：WAITING、SETTING、READY</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-WAITING"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 WAITING</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-SETTING"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 SETTING</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-READY"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 READY</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AE%8C%E6%88%90-Promise-%E8%A6%81%E6%8B%86%E6%88%90-acquire-%E5%92%8C-release-%E4%B8%A4%E6%AD%A5"><span class="toc-number">1.6.</span> <span class="toc-text">6. 为什么完成 Promise 要拆成 acquire 和 release 两步</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%9A%E6%8A%A2%E5%8D%A0%E5%94%AF%E4%B8%80%E5%AE%8C%E6%88%90%E6%9D%83"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 第一步：抢占唯一完成权</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E7%AC%AC%E4%BA%8C%E6%AD%A5%EF%BC%9A%E6%9E%84%E9%80%A0%E5%B9%B6%E5%8F%91%E5%B8%83%E7%BB%93%E6%9E%9C"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 第二步：构造并发布结果</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E5%9C%A8%E6%8C%81%E9%94%81%E7%8A%B6%E6%80%81%E4%B8%8B%E6%89%A7%E8%A1%8C-executor-post"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 为什么不在持锁状态下执行 executor post</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-ev-future-submit-%E5%A6%82%E4%BD%95%E9%81%BF%E5%85%8D%E4%B8%A2%E5%A4%B1%E5%AE%8C%E6%88%90%E9%80%9A%E7%9F%A5"><span class="toc-number">1.7.</span> <span class="toc-text">7. ev_future_submit() 如何避免丢失完成通知</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%83%85%E5%86%B5-A%EF%BC%9Asubmit-%E5%85%88%E8%8E%B7%E5%BE%97%E9%94%81"><span class="toc-number">1.7.1.</span> <span class="toc-text">情况 A：submit 先获得锁</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%83%85%E5%86%B5-B%EF%BC%9Aset-release-%E5%85%88%E8%8E%B7%E5%BE%97%E9%94%81"><span class="toc-number">1.7.2.</span> <span class="toc-text">情况 B：set_release 先获得锁</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-Future-task-%E4%B8%8E-outstanding-work-%E7%9A%84%E9%97%AD%E7%8E%AF"><span class="toc-number">1.8.</span> <span class="toc-text">8. Future task 与 outstanding work 的闭环</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-ev-future-get-%E4%B8%8D%E4%BC%9A%E7%AD%89%E5%BE%85"><span class="toc-number">1.9.</span> <span class="toc-text">9. ev_future_get() 不会等待</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-release-acquire-%E5%86%85%E5%AD%98%E5%BA%8F%E8%A7%A3%E5%86%B3%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.10.</span> <span class="toc-text">10. release&#x2F;acquire 内存序解决了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-Promise-Future-%E5%BC%95%E7%94%A8%E8%AE%A1%E6%95%B0%E5%92%8C%E9%94%80%E6%AF%81%E9%A1%BA%E5%BA%8F"><span class="toc-number">1.11.</span> <span class="toc-text">11. Promise&#x2F;Future 引用计数和销毁顺序</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-1-%E5%88%9D%E5%A7%8B%E5%BC%95%E7%94%A8"><span class="toc-number">1.11.1.</span> <span class="toc-text">11.1 初始引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-%E8%8E%B7%E5%8F%96-Future-%E4%BC%9A%E5%A2%9E%E5%8A%A0%E5%BC%95%E7%94%A8"><span class="toc-number">1.11.2.</span> <span class="toc-text">11.2 获取 Future 会增加引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-3-Promise-%E5%92%8C-Future-%E7%9A%84-acquire-release-%E9%83%BD%E6%93%8D%E4%BD%9C%E5%90%8C%E4%B8%80%E8%AE%A1%E6%95%B0"><span class="toc-number">1.11.3.</span> <span class="toc-text">11.3 Promise 和 Future 的 acquire&#x2F;release 都操作同一计数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-4-%E6%9C%80%E5%90%8E%E4%B8%80%E4%B8%AA%E5%BC%95%E7%94%A8%E9%87%8A%E6%94%BE%E6%97%B6%E7%9A%84%E9%A1%BA%E5%BA%8F"><span class="toc-number">1.11.4.</span> <span class="toc-text">11.4 最后一个引用释放时的顺序</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E4%B8%80%E4%B8%AA%E5%AE%B9%E6%98%93%E5%BF%BD%E7%95%A5%E7%9A%84%E8%AE%BE%E8%AE%A1%EF%BC%9AFuture-%E8%A2%AB%E9%81%97%E5%BC%83%E6%97%B6%E4%BB%8D%E4%BC%9A%E8%B0%83%E5%BA%A6%E7%AD%89%E5%BE%85-task"><span class="toc-number">1.12.</span> <span class="toc-text">12. 一个容易忽略的设计：Future 被遗弃时仍会调度等待 task</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-cancel-%E5%92%8C-abort-%E7%9A%84%E5%8C%BA%E5%88%AB"><span class="toc-number">1.13.</span> <span class="toc-text">13. cancel() 和 abort() 的区别</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#13-1-cancel"><span class="toc-number">1.13.1.</span> <span class="toc-text">13.1 cancel</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-2-abort"><span class="toc-number">1.13.2.</span> <span class="toc-text">13.2 abort</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-3-%E5%B7%A5%E7%A8%8B%E9%A3%8E%E9%99%A9"><span class="toc-number">1.13.3.</span> <span class="toc-text">13.3 工程风险</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-when-all-%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%80%9D%E8%B7%AF"><span class="toc-number">1.14.</span> <span class="toc-text">14. when_all() 的实现思路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-when-any-%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%80%9D%E8%B7%AF"><span class="toc-number">1.15.</span> <span class="toc-text">15. when_any() 的实现思路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-C-Promise-%E5%81%9A%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.16.</span> <span class="toc-text">16. C++ Promise&lt;T, E&gt; 做了什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#16-1-%E6%9E%84%E9%80%A0"><span class="toc-number">1.16.1.</span> <span class="toc-text">16.1 构造</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#16-2-%E6%9E%90%E6%9E%84"><span class="toc-number">1.16.2.</span> <span class="toc-text">16.2 析构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#16-3-set"><span class="toc-number">1.16.3.</span> <span class="toc-text">16.3 set</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#16-4-RAII"><span class="toc-number">1.16.4.</span> <span class="toc-text">16.4 RAII</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-C-Future-%E5%81%9A%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.17.</span> <span class="toc-text">17. C++ Future&lt;T, E&gt; 做了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-AsyncTask%EF%BC%9A%E6%8A%8A%E5%87%BD%E6%95%B0%E6%89%A7%E8%A1%8C%E7%BB%93%E6%9E%9C%E8%BD%AC%E6%88%90-Future"><span class="toc-number">1.18.</span> <span class="toc-text">18. AsyncTask：把函数执行结果转成 Future</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#18-1-callable-%E8%BF%94%E5%9B%9E%E6%99%AE%E9%80%9A%E5%80%BC"><span class="toc-number">1.18.1.</span> <span class="toc-text">18.1 callable 返回普通值</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#18-2-callable-%E8%BF%94%E5%9B%9E-Future"><span class="toc-number">1.18.2.</span> <span class="toc-text">18.2 callable 返回 Future</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#19-then-%E5%A6%82%E4%BD%95%E6%9E%84%E9%80%A0-continuation"><span class="toc-number">1.19.</span> <span class="toc-text">19. then() 如何构造 continuation</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#20-async-%E5%A6%82%E4%BD%95%E5%B7%A5%E4%BD%9C"><span class="toc-number">1.20.</span> <span class="toc-text">20. async() 如何工作</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#21-Future-%E4%B8%8E-ev-loop-wait-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.21.</span> <span class="toc-text">21. Future 与 ev_loop_wait() 的关系</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-%E6%94%BE%E5%88%B0%E5%BC%82%E6%AD%A5-CANopen-%E5%9C%BA%E6%99%AF%E4%B8%AD%E7%90%86%E8%A7%A3"><span class="toc-number">1.22.</span> <span class="toc-text">22. 放到异步 CANopen 场景中理解</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#23-%E5%B8%B8%E8%A7%81%E9%94%99%E8%AF%AF%E7%90%86%E8%A7%A3"><span class="toc-number">1.23.</span> <span class="toc-text">23. 常见错误理解</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#23-1-%E6%8A%8A-Future-%E5%BD%93%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97"><span class="toc-number">1.23.1.</span> <span class="toc-text">23.1 把 Future 当消息队列</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#23-2-%E8%AE%A4%E4%B8%BA-get-%E4%BC%9A%E9%98%BB%E5%A1%9E"><span class="toc-number">1.23.2.</span> <span class="toc-text">23.2 认为 get() 会阻塞</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#23-3-%E8%AE%A4%E4%B8%BA-Promise-%E5%92%8C-Future-%E6%9C%89%E4%B8%A4%E4%B8%AA%E5%BC%95%E7%94%A8%E8%AE%A1%E6%95%B0"><span class="toc-number">1.23.3.</span> <span class="toc-text">23.3 认为 Promise 和 Future 有两个引用计数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#23-4-%E8%AE%A4%E4%B8%BA-cancel-%E5%90%8E-task-%E4%B8%8D%E4%BC%9A%E6%89%A7%E8%A1%8C"><span class="toc-number">1.23.4.</span> <span class="toc-text">23.4 认为 cancel 后 task 不会执行</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#23-5-%E8%AE%A4%E4%B8%BA-Future-ready-%E5%90%8E%E5%9B%9E%E8%B0%83%E5%9C%A8%E5%AE%8C%E6%88%90%E7%BA%BF%E7%A8%8B%E7%9B%B4%E6%8E%A5%E6%89%A7%E8%A1%8C"><span class="toc-number">1.23.5.</span> <span class="toc-text">23.5 认为 Future ready 后回调在完成线程直接执行</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#23-6-%E8%AE%A4%E4%B8%BA-async-%E4%B8%80%E5%AE%9A%E5%88%9B%E5%BB%BA%E7%BA%BF%E7%A8%8B"><span class="toc-number">1.23.6.</span> <span class="toc-text">23.6 认为 async() 一定创建线程</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#24-%E8%B0%83%E8%AF%95-Future-%E9%97%AE%E9%A2%98%E6%97%B6%E5%BB%BA%E8%AE%AE%E8%A7%82%E5%AF%9F%E7%9A%84%E5%8F%98%E9%87%8F"><span class="toc-number">1.24.</span> <span class="toc-text">24. 调试 Future 问题时建议观察的变量</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#24-1-future-state"><span class="toc-number">1.24.1.</span> <span class="toc-text">24.1 future-&gt;state</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-2-promise-refcnt"><span class="toc-number">1.24.2.</span> <span class="toc-text">24.2 promise-&gt;refcnt</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-3-future-queue"><span class="toc-number">1.24.3.</span> <span class="toc-text">24.3 future-&gt;queue</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-4-future-value"><span class="toc-number">1.24.4.</span> <span class="toc-text">24.4 future-&gt;value</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-5-task-%E7%9A%84-exec-%E5%92%8C-func"><span class="toc-number">1.24.5.</span> <span class="toc-text">24.5 task 的 exec 和 func</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-6-event-loop-%E7%9A%84-ntasks"><span class="toc-number">1.24.6.</span> <span class="toc-text">24.6 event loop 的 ntasks</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#25-%E5%BB%BA%E8%AE%AE%E7%9A%84%E6%BA%90%E7%A0%81%E5%8D%95%E6%AD%A5%E9%A1%BA%E5%BA%8F"><span class="toc-number">1.25.</span> <span class="toc-text">25. 建议的源码单步顺序</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#25-1-%E6%9C%80%E5%B0%8F-Promise-Future"><span class="toc-number">1.25.1.</span> <span class="toc-text">25.1 最小 Promise&#x2F;Future</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#25-2-%E5%BC%95%E7%94%A8%E8%AE%A1%E6%95%B0"><span class="toc-number">1.25.2.</span> <span class="toc-text">25.2 引用计数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#25-3-%E7%BB%84%E5%90%88-Future"><span class="toc-number">1.25.3.</span> <span class="toc-text">25.3 组合 Future</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#25-4-C-continuation"><span class="toc-number">1.25.4.</span> <span class="toc-text">25.4 C++ continuation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#25-5-%E6%8E%A5%E5%85%A5-CANopen"><span class="toc-number">1.25.5.</span> <span class="toc-text">25.5 接入 CANopen</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#26-%E6%9C%80%E5%B0%8F-C-%E6%8E%A5%E5%8F%A3%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.26.</span> <span class="toc-text">26. 最小 C 接口示例</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#27-%E6%9C%80%E5%B0%8F-C-%E6%8E%A5%E5%8F%A3%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.27.</span> <span class="toc-text">27. 最小 C++ 接口示例</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#28-%E4%B8%80%E5%BC%A0%E6%80%BB%E5%9B%BE%E4%B8%B2%E8%B5%B7%E5%85%A8%E9%83%A8%E6%9C%BA%E5%88%B6"><span class="toc-number">1.28.</span> <span class="toc-text">28. 一张总图串起全部机制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#29-%E6%9C%80%E7%BB%88%E7%90%86%E8%A7%A3%E6%A1%86%E6%9E%B6"><span class="toc-number">1.29.</span> <span class="toc-text">29. 最终理解框架</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#30-%E5%AE%98%E6%96%B9%E6%BA%90%E7%A0%81%E4%B8%8E%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.30.</span> <span class="toc-text">30. 官方源码与参考资料</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#30-1-%E6%9C%AC%E6%96%87%E6%A0%B8%E5%BF%83%E6%BA%90%E7%A0%81"><span class="toc-number">1.30.1.</span> <span class="toc-text">30.1 本文核心源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#30-2-%E5%85%B3%E8%81%94%E6%BA%90%E7%A0%81"><span class="toc-number">1.30.2.</span> <span class="toc-text">30.2 关联源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#30-3-%E5%AE%98%E6%96%B9%E8%AF%B4%E6%98%8E"><span class="toc-number">1.30.3.</span> <span class="toc-text">30.3 官方说明</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen CAN 完整机制学习笔记"/></a><div class="content"><a class="title" href="/posts/a04ed79b/" title="Lely CANopen CAN 完整机制学习笔记">Lely CANopen CAN 完整机制学习笔记</a><time datetime="2026-07-29T01:33:58.679Z" title="更新于 2026-07-29 09:33:58">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely canopen`io_poll` 机制原理与完整运行流程详解"/></a><div class="content"><a class="title" href="/posts/12cc1336/" title="Lely canopen`io_poll` 机制原理与完整运行流程详解">Lely canopen`io_poll` 机制原理与完整运行流程详解</a><time datetime="2026-07-29T01:33:31.806Z" title="更新于 2026-07-29 09:33:31">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll"/></a><div class="content"><a class="title" href="/posts/873e530e/" title="Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll">Lely CANopen 事件调度机制详解：从 `ev_task`、Executor、`std_exec` 到 `ev_loop`、Future 与 Poll</a><time datetime="2026-07-28T08:14:18.460Z" title="更新于 2026-07-28 16:14:18">2026-07-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen Future Promise 机制原理与源码详解"/></a><div class="content"><a class="title" href="/posts/ea3bda78/" title="Lely CANopen Future Promise 机制原理与源码详解">Lely CANopen Future Promise 机制原理与源码详解</a><time datetime="2026-07-28T07:24:33.136Z" title="更新于 2026-07-28 15:24:33">2026-07-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3ecba0f7/" title="Lely CANopen `ev_loop` 详解"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen `ev_loop` 详解"/></a><div class="content"><a class="title" href="/posts/3ecba0f7/" title="Lely CANopen `ev_loop` 详解">Lely CANopen `ev_loop` 详解</a><time datetime="2026-07-28T06:14:35.716Z" title="更新于 2026-07-28 14:14:35">2026-07-28</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/05.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'da54d3739e10288659fa3fc2c776420f'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",1]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9,5,2,21,30],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"canopen","children":[],"count":25,"path":"canopen"},{"name":"杂谈","children":[],"count":35,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":17,"path":"嵌入式面试真题"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":266,"path":"linux"},{"name":"MCU","children":[],"count":38,"path":"MCU"},{"name":"git","children":[],"count":12,"path":"git"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>
