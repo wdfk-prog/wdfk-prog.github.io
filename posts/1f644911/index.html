@@ -1,0 +1,1603 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Lely CANopen：can_net、io_can_net设计原理 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Lely CANopen：can_net、io_can_net 与 CAN channel 的分层关系，以及 TX&#x2F;RX Ring 的设计原理@[toc] 一句话结论Lely 中容易混淆的几个对象，实际处于不同层次：  can_net_t 是纯内存中的 CAN 逻辑调度核心，负责协议定时器、CAN-ID 接收分发和发送回调；它不知道 SocketCAN、文件描述符、poll、exec">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Lely CANopen：can_net、io_can_net设计原理">
+<meta property="og:url" content="https://wdfk-prog.space/posts/1f644911/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Lely CANopen：can_net、io_can_net 与 CAN channel 的分层关系，以及 TX&#x2F;RX Ring 的设计原理@[toc] 一句话结论Lely 中容易混淆的几个对象，实际处于不同层次：  can_net_t 是纯内存中的 CAN 逻辑调度核心，负责协议定时器、CAN-ID 接收分发和发送回调；它不知道 SocketCAN、文件描述符、poll、exec">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/07.jpg">
+<meta property="article:published_time" content="2026-07-29T06:18:52.000Z">
+<meta property="article:modified_time" content="2026-07-29T06:20:17.738Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="canopen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/07.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lely CANopen：can_net、io_can_net设计原理",
+  "url": "https://wdfk-prog.space/posts/1f644911/",
+  "image": "https://wdfk-prog.space/images/covers/07.jpg",
+  "datePublished": "2026-07-29T06:18:52.000Z",
+  "dateModified": "2026-07-29T06:20:17.738Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/1f644911/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Lely CANopen：can_net、io_can_net设计原理',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">556</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/07.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">Lely CANopen：can_net、io_can_net设计原理</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Lely CANopen：can_net、io_can_net设计原理<a class="post-edit-link" href="null_posts/canopen/Lely CANopen：can_net、io_can_net设计原理.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-29T06:18:52.000Z" title="发表于 2026-07-29 14:18:52">2026-07-29</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-29T06:20:17.738Z" title="更新于 2026-07-29 14:20:17">2026-07-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/canopen/">canopen</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">5.5k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>21分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/1f644911/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-29 14:20:17&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Lely-CANopen：can-net、io-can-net-与-CAN-channel-的分层关系，以及-TX-RX-Ring-的设计原理"><a href="#Lely-CANopen：can-net、io-can-net-与-CAN-channel-的分层关系，以及-TX-RX-Ring-的设计原理" class="headerlink" title="Lely CANopen：can_net、io_can_net 与 CAN channel 的分层关系，以及 TX&#x2F;RX Ring 的设计原理"></a>Lely CANopen：can_net、io_can_net 与 CAN channel 的分层关系，以及 TX&#x2F;RX Ring 的设计原理</h1><p>@[toc]</p>
+<h2 id="一句话结论"><a href="#一句话结论" class="headerlink" title="一句话结论"></a>一句话结论</h2><p>Lely 中容易混淆的几个对象，实际处于不同层次：</p>
+<ul>
+<li><code>can_net_t</code> 是<strong>纯内存中的 CAN 逻辑调度核心</strong>，负责协议定时器、CAN-ID 接收分发和发送回调；它不知道 SocketCAN、文件描述符、<code>poll</code>、executor 或真实 CAN 控制器。</li>
+<li><code>io_can_chan_t</code> 是<strong>抽象 CAN 通道接口</strong>；<code>src/io2/linux/can_chan.c</code> 是它在 Linux SocketCAN 上的具体后端，负责文件描述符、收发操作、I&#x2F;O 就绪事件和写确认。</li>
+<li><code>io_can_net_t</code> 是<strong>桥接层</strong>，把 <code>can_net_t</code>、<code>io_timer_t</code>、<code>io_tqueue_t</code> 和 <code>io_can_chan_t</code> 连接起来，使同步的协议核心能够运行在异步 I&#x2F;O 框架上。</li>
+<li><code>lely::io::CanNet</code> 只是 <code>io_can_net_t*</code> 的 C++ RAII 包装，不是另一套独立实现；核心机制仍然由 C 文件 <code>src/io2/can_net.c</code> 和 <code>src/can/net.c</code> 完成。</li>
+</ul>
+<p><code>tx_ring</code> 和 <code>rxring</code> 放在不同层，并不是不对称设计，而是由数据来源和所有权决定的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">协议对象产生发送帧</span><br><span class="line">    ↓</span><br><span class="line">can_net_send()</span><br><span class="line">    ↓</span><br><span class="line">io_can_net.tx_ring</span><br><span class="line">    ↓ 解决协议突发、保存帧副本、串行提交写操作</span><br><span class="line">io_can_chan_submit_write()</span><br><span class="line">    ↓</span><br><span class="line">Linux SocketCAN</span><br><span class="line"></span><br><span class="line">Linux SocketCAN 收到帧</span><br><span class="line">    ↓</span><br><span class="line">Linux can_chan 后端</span><br><span class="line">    ↓</span><br><span class="line">io_can_chan_impl.rxring</span><br><span class="line">    ↓ 解决 fd 就绪与异步 read 请求之间的速率差</span><br><span class="line">io_can_net 的 read completion</span><br><span class="line">    ↓</span><br><span class="line">can_net_recv()</span><br><span class="line">    ↓</span><br><span class="line">CANopen 协议接收器</span><br></pre></td></tr></table></figure>
+
+<p>最关键的区别是：</p>
+<blockquote>
+<p><code>io_can_net.tx_ring</code> 缓存的是“等待发送的 CAN 帧副本”；Linux <code>can_chan</code> 内的 <code>write_queue</code> 缓存的是“等待执行的异步写操作”。两者不是同一种队列，也不能互相替代。</p>
+</blockquote>
+<hr>
+<h2 id="1-先澄清：这些名称不是同一个-net"><a href="#1-先澄清：这些名称不是同一个-net" class="headerlink" title="1. 先澄清：这些名称不是同一个 net"></a>1. 先澄清：这些名称不是同一个 <code>net</code></h2><h3 id="1-1-名称与实际对象对照"><a href="#1-1-名称与实际对象对照" class="headerlink" title="1.1 名称与实际对象对照"></a>1.1 名称与实际对象对照</h3><table>
+<thead>
+<tr>
+<th>名称</th>
+<th>实际类型</th>
+<th>所在层</th>
+<th>核心职责</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>can_net_t</code></td>
+<td><code>struct __can_net</code></td>
+<td><code>can</code> 逻辑核心层</td>
+<td>定时器调度、CAN-ID 接收分发、发送回调</td>
+</tr>
+<tr>
+<td><code>io_can_net_t</code></td>
+<td><code>struct io_can_net</code></td>
+<td><code>io2</code> 桥接层</td>
+<td>把逻辑核心接到 Timer、executor 和 CAN channel</td>
+</tr>
+<tr>
+<td><code>lely::io::CanNet</code></td>
+<td>C++ 类</td>
+<td>C++ 包装层</td>
+<td>RAII 生命周期、虚函数错误回调、类型转换</td>
+</tr>
+<tr>
+<td><code>io_can_chan_t</code></td>
+<td>抽象接口，实际为 vtable 指针</td>
+<td><code>io2</code> 抽象设备层</td>
+<td>定义同步&#x2F;异步 CAN read、write 操作</td>
+</tr>
+<tr>
+<td><code>io_can_chan_impl</code></td>
+<td>Linux 后端私有结构体</td>
+<td>Linux SocketCAN 后端</td>
+<td><code>fd</code>、<code>poll</code>、<code>rxring</code>、操作队列、写确认</td>
+</tr>
+<tr>
+<td><code>net</code></td>
+<td>参数名或成员名</td>
+<td>取决于上下文</td>
+<td>仅是变量名称，必须看其声明类型</td>
+</tr>
+</tbody></table>
+<p>例如，<code>src/io2/can_net.c</code> 中有两层 <code>net</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">函数参数 net</span><br><span class="line">    类型：io_can_net_t *</span><br><span class="line"></span><br><span class="line">net-&gt;net</span><br><span class="line">    类型：can_net_t *</span><br></pre></td></tr></table></figure>
+
+<p>因此看到下面的表达式时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">can_net_recv(net-&gt;net, &amp;net-&gt;read_msg)</span><br></pre></td></tr></table></figure>
+
+<p>应当读成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">把 io_can_net 对象中保存的 read_msg</span><br><span class="line">交给其内部的 can_net_t 逻辑核心处理</span><br></pre></td></tr></table></figure>
+
+<p>而不是“net 调用另一个同名 net”。</p>
+<h3 id="1-2-CiA-301-与-Lely-实现边界"><a href="#1-2-CiA-301-与-Lely-实现边界" class="headerlink" title="1.2 CiA 301 与 Lely 实现边界"></a>1.2 CiA 301 与 Lely 实现边界</h3><p>CiA 301 定义 CANopen 应用层、通信对象、对象字典和网络管理协议，并规定这些协议通过 CAN 数据链路层交换数据。</p>
+<p>但以下名称不是 CiA 301 的标准对象名称：</p>
+<ul>
+<li><code>can_net_t</code>；</li>
+<li><code>io_can_net_t</code>；</li>
+<li><code>io_can_chan_t</code>；</li>
+<li><code>io_tqueue_t</code>；</li>
+<li><code>spscring</code>。</li>
+</ul>
+<p>它们是 Lely 为了实现协议栈、异步 I&#x2F;O 和平台适配而设计的软件抽象。</p>
+<hr>
+<h2 id="2-相关文件分别负责什么"><a href="#2-相关文件分别负责什么" class="headerlink" title="2. 相关文件分别负责什么"></a>2. 相关文件分别负责什么</h2><p>用户列出的文件可以分成四组。</p>
+<h3 id="2-1-CAN-逻辑核心"><a href="#2-1-CAN-逻辑核心" class="headerlink" title="2.1 CAN 逻辑核心"></a>2.1 CAN 逻辑核心</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">include/lely/can/net.h</span><br><span class="line">src/can/net.c</span><br></pre></td></tr></table></figure>
+
+<p>这组文件定义并实现：</p>
+<ul>
+<li><code>can_net_t</code>；</li>
+<li><code>can_timer_t</code>；</li>
+<li><code>can_recv_t</code>；</li>
+<li><code>can_net_set_time()</code>；</li>
+<li><code>can_net_recv()</code>；</li>
+<li><code>can_net_send()</code>；</li>
+<li><code>can_net_set_next_func()</code>；</li>
+<li><code>can_net_set_send_func()</code>。</li>
+</ul>
+<p>它只处理：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">时间</span><br><span class="line">CAN 消息</span><br><span class="line">回调函数</span><br><span class="line">内存数据结构</span><br></pre></td></tr></table></figure>
+
+<p>它不直接执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">read(fd)</span><br><span class="line">write(fd)</span><br><span class="line">poll/epoll</span><br><span class="line">timerfd</span><br><span class="line">线程阻塞</span><br><span class="line">硬件驱动调用</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-抽象-CAN-通道"><a href="#2-2-抽象-CAN-通道" class="headerlink" title="2.2 抽象 CAN 通道"></a>2.2 抽象 CAN 通道</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">include/lely/io2/can.h</span><br></pre></td></tr></table></figure>
+
+<p>该文件定义 <code>io_can_chan_t</code> 的统一接口，包括：</p>
+<ul>
+<li>同步 <code>read()</code> &#x2F; <code>write()</code>；</li>
+<li>异步 <code>submit_read()</code> &#x2F; <code>submit_write()</code>；</li>
+<li>取消和中止操作；</li>
+<li><code>io_can_chan_read</code> 与 <code>io_can_chan_write</code> 操作对象；</li>
+<li>每个操作完成后执行的 <code>ev_task</code>。</li>
+</ul>
+<p>其本质是一个 vtable 接口：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">io_can_chan_t</span><br><span class="line">    ↓</span><br><span class="line">struct io_can_chan_vtbl</span><br><span class="line">    ├── get_dev</span><br><span class="line">    ├── get_flags</span><br><span class="line">    ├── read</span><br><span class="line">    ├── submit_read</span><br><span class="line">    ├── write</span><br><span class="line">    └── submit_write</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-3-CAN-网络桥接层"><a href="#2-3-CAN-网络桥接层" class="headerlink" title="2.3 CAN 网络桥接层"></a>2.3 CAN 网络桥接层</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">include/lely/io2/can_net.h</span><br><span class="line">src/io2/can_net.c</span><br></pre></td></tr></table></figure>
+
+<p>该层把下面四部分连接起来：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">can_net_t       协议逻辑核心</span><br><span class="line">io_can_chan_t   实际 CAN 通道</span><br><span class="line">io_timer_t      系统定时器</span><br><span class="line">executor        异步任务执行器</span><br></pre></td></tr></table></figure>
+
+<p>其公开接口明确说明：发送帧会先进入用户态发送队列，再提交给底层 CAN channel。</p>
+<h3 id="2-4-C-包装层"><a href="#2-4-C-包装层" class="headerlink" title="2.4 C++ 包装层"></a>2.4 C++ 包装层</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">include/lely/io2/can_net.hpp</span><br></pre></td></tr></table></figure>
+
+<p><code>lely::io::CanNet</code> 的构造函数调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_create(...)</span><br></pre></td></tr></table></figure>
+
+<p>析构函数调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_destroy(...)</span><br></pre></td></tr></table></figure>
+
+<p>它还把 C 回调转换为可重写的 C++ 虚函数：</p>
+<ul>
+<li><code>on_read_error()</code>；</li>
+<li><code>on_queue_error()</code>；</li>
+<li><code>on_write_error()</code>；</li>
+<li><code>on_can_state()</code>；</li>
+<li><code>on_can_error()</code>。</li>
+</ul>
+<p>所以答案很明确：</p>
+<blockquote>
+<p>有完整的 C 实现。<code>can_net.hpp</code> 只是 C API 的封装层，不负责底层运行机制。</p>
+</blockquote>
+<hr>
+<h2 id="3-总体对象关系"><a href="#3-总体对象关系" class="headerlink" title="3. 总体对象关系"></a>3. 总体对象关系</h2><h3 id="3-1-静态对象图"><a href="#3-1-静态对象图" class="headerlink" title="3.1 静态对象图"></a>3.1 静态对象图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    CPP[&quot;lely::io::CanNet&lt;br/&gt;C++ RAII wrapper&quot;] --&gt; IONET[&quot;io_can_net_t&lt;br/&gt;I/O bridge&quot;]</span><br><span class="line"></span><br><span class="line">    IONET --&gt; CORE[&quot;can_net_t&lt;br/&gt;logical CAN core&quot;]</span><br><span class="line">    IONET --&gt; TQ[&quot;io_tqueue_t&lt;br/&gt;timer wait multiplexer&quot;]</span><br><span class="line">    IONET --&gt; CHAN[&quot;io_can_chan_t&lt;br/&gt;abstract CAN channel&quot;]</span><br><span class="line">    IONET --&gt; EXEC[&quot;ev_exec_t&lt;br/&gt;executor&quot;]</span><br><span class="line"></span><br><span class="line">    TQ --&gt; TIMER[&quot;io_timer_t&lt;br/&gt;system timer abstraction&quot;]</span><br><span class="line">    CHAN --&gt; LINUX[&quot;io_can_chan_impl&lt;br/&gt;Linux SocketCAN backend&quot;]</span><br><span class="line"></span><br><span class="line">    LINUX --&gt; FD[&quot;SocketCAN fd&quot;]</span><br><span class="line">    LINUX --&gt; POLL[&quot;io_poll watch&quot;]</span><br><span class="line">    LINUX --&gt; RXRING[&quot;rxring + rxbuf&quot;]</span><br><span class="line">    LINUX --&gt; OPQ[&quot;read/write/confirm operation queues&quot;]</span><br><span class="line"></span><br><span class="line">    CORE --&gt; THEAP[&quot;timer_heap&lt;br/&gt;pheap&quot;]</span><br><span class="line">    CORE --&gt; RTREE[&quot;recv_tree&lt;br/&gt;rbtree&quot;]</span><br><span class="line">    CORE --&gt; SENDFUNC[&quot;send_func callback&quot;]</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-2-io-can-net-t-是整个连接点"><a href="#3-2-io-can-net-t-是整个连接点" class="headerlink" title="3.2 io_can_net_t 是整个连接点"></a>3.2 <code>io_can_net_t</code> 是整个连接点</h3><p><code>struct io_can_net</code> 内部同时保存：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">io_timer_t *timer</span><br><span class="line">io_tqueue_t *tq</span><br><span class="line">io_can_chan_t *chan</span><br><span class="line">can_net_t *net</span><br></pre></td></tr></table></figure>
+
+<p>并额外保存：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">read operation</span><br><span class="line">write operation</span><br><span class="line">tx_ring + tx_buf</span><br><span class="line">wait_next</span><br><span class="line">wait_confirm</span><br><span class="line">错误统计与回调</span><br><span class="line">运行状态标志</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>io_can_net_t</code> 不是 CANopen 协议状态机本身，也不是 Linux CAN 驱动，而是：</p>
+<blockquote>
+<p>将“同步回调式逻辑核心”适配到“异步 Timer + CAN channel + executor”的运行时对象。</p>
+</blockquote>
+<hr>
+<h2 id="4-can-net-t-到底是什么"><a href="#4-can-net-t-到底是什么" class="headerlink" title="4. can_net_t 到底是什么"></a>4. <code>can_net_t</code> 到底是什么</h2><h3 id="4-1-内部只有三类核心资源"><a href="#4-1-内部只有三类核心资源" class="headerlink" title="4.1 内部只有三类核心资源"></a>4.1 内部只有三类核心资源</h3><p><code>struct __can_net</code> 可以概括为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">1. timer_heap</span><br><span class="line">   管理所有 can_timer_t</span><br><span class="line"></span><br><span class="line">2. recv_tree</span><br><span class="line">   管理所有 can_recv_t</span><br><span class="line"></span><br><span class="line">3. send_func</span><br><span class="line">   把发送请求交给外部实现</span><br></pre></td></tr></table></figure>
+
+<p>再加上：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">time</span><br><span class="line">next</span><br><span class="line">next_func</span><br></pre></td></tr></table></figure>
+
+<p>用于维护逻辑时钟和最早定时器。</p>
+<h3 id="4-2-它不是设备驱动"><a href="#4-2-它不是设备驱动" class="headerlink" title="4.2 它不是设备驱动"></a>4.2 它不是设备驱动</h3><p><code>can_net_t</code> 不知道一帧 CAN 消息来自：</p>
+<ul>
+<li>Linux SocketCAN；</li>
+<li>Windows；</li>
+<li>RTOS CAN 驱动；</li>
+<li>裸机中断；</li>
+<li>测试桩；</li>
+<li>仿真总线。</li>
+</ul>
+<p>外部只要在收到消息时调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">can_net_recv(core, msg)</span><br></pre></td></tr></table></figure>
+
+<p>并为发送注册：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">can_net_set_send_func(core, send_func, data)</span><br></pre></td></tr></table></figure>
+
+<p>逻辑核心就可以工作。</p>
+<h3 id="4-3-接收方向：recv-tree"><a href="#4-3-接收方向：recv-tree" class="headerlink" title="4.3 接收方向：recv_tree"></a>4.3 接收方向：<code>recv_tree</code></h3><p>CANopen 协议对象会创建 <code>can_recv_t</code>，并按 CAN-ID 和 flags 注册到 <code>can_net_t</code>。</p>
+<p>收到帧后：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">can_net_recv()</span><br><span class="line">    ↓</span><br><span class="line">根据 CAN-ID + flags 生成 key</span><br><span class="line">    ↓</span><br><span class="line">rbtree_find()</span><br><span class="line">    ↓</span><br><span class="line">遍历相同 key 下的 receiver list</span><br><span class="line">    ↓</span><br><span class="line">调用对应 can_recv_func_t</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>can_net_t</code> 在接收方向是一个：</p>
+<blockquote>
+<p>CAN-ID 到协议回调的同步分发器。</p>
+</blockquote>
+<h3 id="4-4-发送方向：只调用回调"><a href="#4-4-发送方向：只调用回调" class="headerlink" title="4.4 发送方向：只调用回调"></a>4.4 发送方向：只调用回调</h3><p><code>can_net_send()</code> 不直接发送到硬件。</p>
+<p>它只做：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">检查 send_func 是否存在</span><br><span class="line">    ↓</span><br><span class="line">调用 send_func(msg, send_data)</span><br><span class="line">    ↓</span><br><span class="line">返回该回调的结果</span><br></pre></td></tr></table></figure>
+
+<p>这意味着 <code>can_net_t</code> 对发送端的唯一要求是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">外部提供一个“接收发送请求”的函数</span><br></pre></td></tr></table></figure>
+
+<p>在 <code>io_can_net_t</code> 中，这个函数就是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_send_func()</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-5-定时方向：timer-heap"><a href="#4-5-定时方向：timer-heap" class="headerlink" title="4.5 定时方向：timer_heap"></a>4.5 定时方向：<code>timer_heap</code></h3><p><code>can_timer_t</code> 通过 <code>pnode</code> 插入 <code>can_net.timer_heap</code>。</p>
+<p><code>can_net_set_time()</code> 每次推进逻辑时间时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">查看 timer_heap 的 root</span><br><span class="line">    ↓</span><br><span class="line">如果 timer.start &lt;= current time</span><br><span class="line">    ↓</span><br><span class="line">移除该 timer</span><br><span class="line">    ↓</span><br><span class="line">周期 timer 重新计算 start 并入堆</span><br><span class="line">    ↓</span><br><span class="line">调用 timer callback</span><br><span class="line">    ↓</span><br><span class="line">继续处理新的 root</span><br></pre></td></tr></table></figure>
+
+<p>处理完成后，<code>can_net_set_next()</code> 取新的最早 timer，并通过 <code>next_func</code> 通知 <code>io_can_net_t</code>。</p>
+<p>这正是前一篇 <code>io_tqueue + pheap</code> 学习笔记中“两级最早截止时间压缩”的第一层。</p>
+<hr>
+<h2 id="5-io-can-chan-t-与-Linux-can-chan-c"><a href="#5-io-can-chan-t-与-Linux-can-chan-c" class="headerlink" title="5. io_can_chan_t 与 Linux can_chan.c"></a>5. <code>io_can_chan_t</code> 与 Linux <code>can_chan.c</code></h2><h3 id="5-1-io-can-chan-t-是接口，不是完整对象布局"><a href="#5-1-io-can-chan-t-是接口，不是完整对象布局" class="headerlink" title="5.1 io_can_chan_t 是接口，不是完整对象布局"></a>5.1 <code>io_can_chan_t</code> 是接口，不是完整对象布局</h3><p><code>io_can_chan_t</code> 通过 vtable 调用后端实现。</p>
+<p>调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_chan_submit_read(chan, read)</span><br></pre></td></tr></table></figure>
+
+<p>最终会跳转到当前后端的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_chan_impl_submit_read()</span><br></pre></td></tr></table></figure>
+
+<p>调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_chan_submit_write(chan, write)</span><br></pre></td></tr></table></figure>
+
+<p>最终会跳转到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_chan_impl_submit_write()</span><br></pre></td></tr></table></figure>
+
+<p>Linux、POSIX、Windows 或其他后端可以使用不同实现，但上层 <code>io_can_net_t</code> 不需要知道差异。</p>
+<h3 id="5-2-Linux-后端维护的资源"><a href="#5-2-Linux-后端维护的资源" class="headerlink" title="5.2 Linux 后端维护的资源"></a>5.2 Linux 后端维护的资源</h3><p><code>src/io2/linux/can_chan.c</code> 中的 <code>io_can_chan_impl</code> 主要包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">SocketCAN fd</span><br><span class="line">io_poll_watch</span><br><span class="line">rxbuf_task</span><br><span class="line">read_task</span><br><span class="line">write_task</span><br><span class="line">rxring + rxbuf</span><br><span class="line">read_queue</span><br><span class="line">write_queue</span><br><span class="line">confirm_queue</span><br><span class="line">current_write</span><br><span class="line">flags / state / mutex</span><br></pre></td></tr></table></figure>
+
+<p>其中：</p>
+<ul>
+<li><code>rxbuf_task</code>：从 SocketCAN 读取数据并填充接收环形缓冲区；</li>
+<li><code>read_task</code>：用缓冲区中的帧完成上层 read operation；</li>
+<li><code>write_task</code>：执行等待中的 write operation；</li>
+<li><code>confirm_queue</code>：在启用 <code>MSG_CONFIRM</code> 时等待发送确认。</li>
+</ul>
+<hr>
+<h2 id="6-io-can-net-t-初始化时做了什么"><a href="#6-io-can-net-t-初始化时做了什么" class="headerlink" title="6. io_can_net_t 初始化时做了什么"></a>6. <code>io_can_net_t</code> 初始化时做了什么</h2><p><code>io_can_net_init()</code> 的核心步骤可压缩为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;保存 executor、timer、channel&quot;] --&gt; B[&quot;创建 io_tqueue&quot;]</span><br><span class="line">    B --&gt; C[&quot;初始化 wait_next 和 wait_confirm&quot;]</span><br><span class="line">    C --&gt; D[&quot;初始化异步 read/write operation&quot;]</span><br><span class="line">    D --&gt; E[&quot;初始化 tx_ring 并分配 tx_buf&quot;]</span><br><span class="line">    E --&gt; F[&quot;创建内部 can_net_t&quot;]</span><br><span class="line">    F --&gt; G[&quot;读取系统时间并调用 can_net_set_time&quot;]</span><br><span class="line">    G --&gt; H[&quot;注册 can_net next_func&quot;]</span><br><span class="line">    H --&gt; I[&quot;注册 can_net send_func&quot;]</span><br><span class="line">    I --&gt; J[&quot;注册到 io_ctx&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>两个关键注册动作是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">can_net_set_next_func(core, io_can_net_next_func, io_net)</span><br><span class="line">can_net_set_send_func(core, io_can_net_send_func, io_net)</span><br></pre></td></tr></table></figure>
+
+<p>这两个回调分别完成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">协议 timer_heap → I/O Timer</span><br><span class="line">协议发送请求   → 异步 CAN channel</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-1-io-can-net-start"><a href="#6-1-io-can-net-start" class="headerlink" title="6.1 io_can_net_start()"></a>6.1 <code>io_can_net_start()</code></h3><p>启动后主要做两件事：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">1. 等待 tx_ring 中出现待发送帧</span><br><span class="line">2. 向 CAN channel 提交一个异步 read operation</span><br></pre></td></tr></table></figure>
+
+<p>read operation 完成后会再次提交，因此形成持续接收循环。</p>
+<hr>
+<h2 id="7-完整接收流程"><a href="#7-完整接收流程" class="headerlink" title="7. 完整接收流程"></a>7. 完整接收流程</h2><h3 id="7-1-从-SocketCAN-到-CANopen-协议对象"><a href="#7-1-从-SocketCAN-到-CANopen-协议对象" class="headerlink" title="7.1 从 SocketCAN 到 CANopen 协议对象"></a>7.1 从 SocketCAN 到 CANopen 协议对象</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant K as SocketCAN</span><br><span class="line">    participant P as io_poll</span><br><span class="line">    participant RXB as rxbuf_task</span><br><span class="line">    participant R as rxring</span><br><span class="line">    participant RT as read_task</span><br><span class="line">    participant ION as io_can_net</span><br><span class="line">    participant CORE as can_net_t</span><br><span class="line">    participant CO as CANopen receiver</span><br><span class="line"></span><br><span class="line">    K-&gt;&gt;P: fd readable</span><br><span class="line">    P-&gt;&gt;RXB: post rxbuf_task</span><br><span class="line">    RXB-&gt;&gt;K: read CAN frame</span><br><span class="line">    RXB-&gt;&gt;R: store frame and timestamp</span><br><span class="line">    R-&gt;&gt;RT: signal frame available</span><br><span class="line">    RT-&gt;&gt;ION: complete io_can_chan_read</span><br><span class="line">    ION-&gt;&gt;ION: update logical time</span><br><span class="line">    ION-&gt;&gt;CORE: can_net_recv(msg)</span><br><span class="line">    CORE-&gt;&gt;CO: dispatch matching receiver callback</span><br><span class="line">    ION-&gt;&gt;RT: submit next read operation</span><br></pre></td></tr></table></figure>
+
+<h3 id="7-2-Linux-后端为什么先放入-rxring"><a href="#7-2-Linux-后端为什么先放入-rxring" class="headerlink" title="7.2 Linux 后端为什么先放入 rxring"></a>7.2 Linux 后端为什么先放入 <code>rxring</code></h3><p>文件描述符“可读”与上层 read operation 的执行时机不是同一件事：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">SocketCAN 已经有数据</span><br><span class="line">    ≠</span><br><span class="line">executor 现在立刻执行上层 completion task</span><br></pre></td></tr></table></figure>
+
+<p>Linux 后端需要把：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">fd readiness</span><br><span class="line">系统调用读取</span><br><span class="line">原始 CAN/CAN FD 帧</span><br><span class="line">接收时间戳</span><br><span class="line">MSG_CONFIRM 标志</span><br><span class="line">异步 read operation</span><br></pre></td></tr></table></figure>
+
+<p>连接起来。</p>
+<p>因此 <code>rxring</code> 是 I&#x2F;O 后端内部的数据缓冲区，而不是协议队列。</p>
+<h3 id="7-3-rxring-中保存的不是单纯-can-msg"><a href="#7-3-rxring-中保存的不是单纯-can-msg" class="headerlink" title="7.3 rxring 中保存的不是单纯 can_msg"></a>7.3 <code>rxring</code> 中保存的不是单纯 <code>can_msg</code></h3><p>Linux 后端的接收缓冲元素还包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">SocketCAN can_frame 或 canfd_frame</span><br><span class="line">实际字节数 nbytes</span><br><span class="line">接收时间戳 timespec</span><br></pre></td></tr></table></figure>
+
+<p>这些信息与 Linux SocketCAN 的读取过程直接相关，所以放在 Linux channel 后端最合理。</p>
+<h3 id="7-4-写确认也必须在接收后端处理"><a href="#7-4-写确认也必须在接收后端处理" class="headerlink" title="7.4 写确认也必须在接收后端处理"></a>7.4 写确认也必须在接收后端处理</h3><p>启用 <code>txwait</code> 后，SocketCAN 的发送确认以接收路径中的 <code>MSG_CONFIRM</code> 返回。</p>
+<p>后端读取帧后必须先判断：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">普通接收帧</span><br><span class="line">    → 进入 rxring</span><br><span class="line"></span><br><span class="line">MSG_CONFIRM</span><br><span class="line">    → 匹配 confirm_queue 中的 write operation</span><br></pre></td></tr></table></figure>
+
+<p>如果把接收环移到 <code>io_can_net_t</code>，底层后端仍然必须先解析 <code>MSG_CONFIRM</code>，反而会造成职责拆分和重复缓存。</p>
+<hr>
+<h2 id="8-完整发送流程"><a href="#8-完整发送流程" class="headerlink" title="8. 完整发送流程"></a>8. 完整发送流程</h2><h3 id="8-1-从-CANopen-协议对象到-SocketCAN"><a href="#8-1-从-CANopen-协议对象到-SocketCAN" class="headerlink" title="8.1 从 CANopen 协议对象到 SocketCAN"></a>8.1 从 CANopen 协议对象到 SocketCAN</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant CO as CANopen protocol</span><br><span class="line">    participant CORE as can_net_t</span><br><span class="line">    participant TXR as io_can_net tx_ring</span><br><span class="line">    participant ION as io_can_net write operation</span><br><span class="line">    participant CH as io_can_chan</span><br><span class="line">    participant WQ as Linux write_queue</span><br><span class="line">    participant K as SocketCAN</span><br><span class="line"></span><br><span class="line">    CO-&gt;&gt;CORE: can_net_send(msg)</span><br><span class="line">    CORE-&gt;&gt;TXR: io_can_net_send_func copies msg</span><br><span class="line">    TXR-&gt;&gt;ION: consumer signal when frame becomes available</span><br><span class="line">    ION-&gt;&gt;TXR: fetch one frame into write_msg</span><br><span class="line">    ION-&gt;&gt;CH: submit_write</span><br><span class="line">    CH-&gt;&gt;WQ: queue write operation</span><br><span class="line">    WQ-&gt;&gt;K: write CAN frame</span><br><span class="line">    K--&gt;&gt;CH: completion or confirmation</span><br><span class="line">    CH--&gt;&gt;ION: write completion task</span><br><span class="line">    ION-&gt;&gt;TXR: commit one consumed frame</span><br><span class="line">    ION-&gt;&gt;TXR: fetch next frame if available</span><br></pre></td></tr></table></figure>
+
+<h3 id="8-2-can-net-send-成功不等于总线发送成功"><a href="#8-2-can-net-send-成功不等于总线发送成功" class="headerlink" title="8.2 can_net_send() 成功不等于总线发送成功"></a>8.2 <code>can_net_send()</code> 成功不等于总线发送成功</h3><p>对 <code>io_can_net_t</code> 而言，<code>can_net_send()</code> 返回成功通常表示：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">该帧已经成功复制到 io_can_net.tx_ring</span><br></pre></td></tr></table></figure>
+
+<p>它并不表示：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">SocketCAN write 已完成</span><br><span class="line">CAN 仲裁已成功</span><br><span class="line">对端已收到</span><br><span class="line">发送确认已返回</span><br></pre></td></tr></table></figure>
+
+<p>真正的异步写错误通过 <code>on_write_error</code> 回调报告。</p>
+<p>当 <code>tx_ring</code> 已满时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_send_func()</span><br><span class="line">    ↓</span><br><span class="line">返回 ERRNUM_AGAIN</span><br><span class="line">    ↓</span><br><span class="line">增加 tx_errcnt</span><br><span class="line">    ↓</span><br><span class="line">触发 on_queue_error</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>tx_ring</code> 同时定义了协议发送端的背压边界。</p>
+<hr>
+<h2 id="9-为什么-tx-ring-在-io-can-net-t-中"><a href="#9-为什么-tx-ring-在-io-can-net-t-中" class="headerlink" title="9. 为什么 tx_ring 在 io_can_net_t 中"></a>9. 为什么 <code>tx_ring</code> 在 <code>io_can_net_t</code> 中</h2><h3 id="9-1-原因一：它服务的是-can-net-send-的语义"><a href="#9-1-原因一：它服务的是-can-net-send-的语义" class="headerlink" title="9.1 原因一：它服务的是 can_net_send() 的语义"></a>9.1 原因一：它服务的是 <code>can_net_send()</code> 的语义</h3><p><code>can_net_t</code> 的发送接口是同步回调：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">调用 send_func</span><br><span class="line">立即得到成功或失败</span><br></pre></td></tr></table></figure>
+
+<p>而底层 CAN channel 使用异步 operation：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">提交 write</span><br><span class="line">稍后由 executor 执行 completion task</span><br></pre></td></tr></table></figure>
+
+<p>两者之间必须有一个适配层：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">同步产生帧</span><br><span class="line">    ↓</span><br><span class="line">保存帧副本</span><br><span class="line">    ↓</span><br><span class="line">异步逐帧提交</span><br></pre></td></tr></table></figure>
+
+<p>这个适配层就是 <code>io_can_net_t</code>，因此发送 ring 属于它。</p>
+<h3 id="9-2-原因二：协议层可能在一个回调中产生多帧"><a href="#9-2-原因二：协议层可能在一个回调中产生多帧" class="headerlink" title="9.2 原因二：协议层可能在一个回调中产生多帧"></a>9.2 原因二：协议层可能在一个回调中产生多帧</h3><p>例如某个时间推进或接收回调可能连续触发：</p>
+<ul>
+<li>多个 PDO；</li>
+<li>SDO 应答；</li>
+<li>心跳；</li>
+<li>EMCY；</li>
+<li>NMT 相关消息；</li>
+<li>多个同时到期的协议 timer。</li>
+</ul>
+<p>这些调用都通过 <code>can_net_send()</code> 快速产生消息。</p>
+<p>如果每次都要求底层写操作立即完成，协议状态机会被 I&#x2F;O 延迟直接阻塞。</p>
+<p><code>tx_ring</code> 允许：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">协议逻辑快速入队</span><br><span class="line">I/O 层按实际通道速度串行发送</span><br></pre></td></tr></table></figure>
+
+<h3 id="9-3-原因三：发送队列长度是-io-can-net-的公开策略"><a href="#9-3-原因三：发送队列长度是-io-can-net-的公开策略" class="headerlink" title="9.3 原因三：发送队列长度是 io_can_net 的公开策略"></a>9.3 原因三：发送队列长度是 <code>io_can_net</code> 的公开策略</h3><p><code>io_can_net_create()</code> 直接接收：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">txlen</span><br></pre></td></tr></table></figure>
+
+<p>用于配置用户态发送队列长度。</p>
+<p>这说明该队列是 CAN 网络桥接层对外暴露的行为策略，而不是 Linux 后端的私有实现细节。</p>
+<p>不同后端都应共享同样的：</p>
+<ul>
+<li>入队语义；</li>
+<li>队列满错误；</li>
+<li>丢帧计数；</li>
+<li><code>on_queue_error</code> 回调；</li>
+<li>顺序发送行为。</li>
+</ul>
+<p>所以它应当放在平台无关的 <code>src/io2/can_net.c</code> 中。</p>
+<h3 id="9-4-原因四：io-can-net-t-只复用一个-write-operation"><a href="#9-4-原因四：io-can-net-t-只复用一个-write-operation" class="headerlink" title="9.4 原因四：io_can_net_t 只复用一个 write operation"></a>9.4 原因四：<code>io_can_net_t</code> 只复用一个 write operation</h3><p><code>io_can_net_t</code> 内部只维护：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">一个 write_msg</span><br><span class="line">一个 io_can_chan_write write</span><br></pre></td></tr></table></figure>
+
+<p>运行方式是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">从 tx_ring 取一帧</span><br><span class="line">    ↓</span><br><span class="line">复制到 write_msg</span><br><span class="line">    ↓</span><br><span class="line">提交同一个 write operation</span><br><span class="line">    ↓</span><br><span class="line">完成后释放 ring 中这一帧</span><br><span class="line">    ↓</span><br><span class="line">继续下一帧</span><br></pre></td></tr></table></figure>
+
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">tx_ring = 多帧数据队列</span><br><span class="line">write    = 当前唯一在途操作</span><br></pre></td></tr></table></figure>
+
+<p>这使发送状态机非常清晰。</p>
+<h3 id="9-5-原因五：写确认超时属于桥接策略"><a href="#9-5-原因五：写确认超时属于桥接策略" class="headerlink" title="9.5 原因五：写确认超时属于桥接策略"></a>9.5 原因五：写确认超时属于桥接策略</h3><p><code>io_can_net_t</code> 还维护：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">wait_confirm</span><br><span class="line">txtimeo</span><br></pre></td></tr></table></figure>
+
+<p>每次提交底层 write 后，会通过 <code>io_tqueue</code> 注册确认超时。</p>
+<p>收到完成或写错误后再终止该等待。</p>
+<p>这说明 <code>io_can_net_t</code> 管理的是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">帧排队</span><br><span class="line">逐帧写入</span><br><span class="line">写确认等待</span><br><span class="line">确认超时</span><br><span class="line">错误统计</span><br></pre></td></tr></table></figure>
+
+<p>这些是完整的“逻辑网络发送策略”，不应散落在某个特定平台的 CAN channel 后端中。</p>
+<hr>
+<h2 id="10-为什么-rxring-在-Linux-can-chan-底层"><a href="#10-为什么-rxring-在-Linux-can-chan-底层" class="headerlink" title="10. 为什么 rxring 在 Linux can_chan 底层"></a>10. 为什么 <code>rxring</code> 在 Linux <code>can_chan</code> 底层</h2><h3 id="10-1-原因一：接收入口由底层设备决定"><a href="#10-1-原因一：接收入口由底层设备决定" class="headerlink" title="10.1 原因一：接收入口由底层设备决定"></a>10.1 原因一：接收入口由底层设备决定</h3><p>发送帧的生产者是上层协议，<code>io_can_net_t</code> 可以控制是否接受新帧。</p>
+<p>接收帧的生产者则是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">CAN 控制器 / SocketCAN 内核队列</span><br></pre></td></tr></table></figure>
+
+<p>当文件描述符可读时，底层必须尽快处理 I&#x2F;O 就绪事件，避免：</p>
+<ul>
+<li>内核接收队列堆积；</li>
+<li>丢帧；</li>
+<li><code>poll</code> 事件反复触发；</li>
+<li>executor 调度延迟扩大。</li>
+</ul>
+<p>因此最接近 fd 的 channel 后端需要拥有接收缓冲。</p>
+<h3 id="10-2-原因二：它连接的是-I-O-readiness-与-read-operation"><a href="#10-2-原因二：它连接的是-I-O-readiness-与-read-operation" class="headerlink" title="10.2 原因二：它连接的是 I&#x2F;O readiness 与 read operation"></a>10.2 原因二：它连接的是 I&#x2F;O readiness 与 read operation</h3><p>Linux 后端有两类队列：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">rxring</span><br><span class="line">    保存已经收到的数据</span><br><span class="line"></span><br><span class="line">read_queue</span><br><span class="line">    保存等待数据的 read operation</span><br></pre></td></tr></table></figure>
+
+<p>二者分别代表：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">数据先到，操作后执行</span><br><span class="line">操作先到，数据后到</span><br></pre></td></tr></table></figure>
+
+<p><code>read_task</code> 的职责就是在二者之间配对。</p>
+<h3 id="10-3-原因三：接收数据包含平台相关信息"><a href="#10-3-原因三：接收数据包含平台相关信息" class="headerlink" title="10.3 原因三：接收数据包含平台相关信息"></a>10.3 原因三：接收数据包含平台相关信息</h3><p>Linux 后端需要处理：</p>
+<ul>
+<li><code>struct can_frame</code>；</li>
+<li><code>struct canfd_frame</code>；</li>
+<li><code>CAN_MTU</code> &#x2F; <code>CANFD_MTU</code>；</li>
+<li><code>MSG_CONFIRM</code>；</li>
+<li>SocketCAN 接收时间戳；</li>
+<li><code>EAGAIN</code> &#x2F; <code>EWOULDBLOCK</code>；</li>
+<li><code>IO_EVENT_IN</code>；</li>
+<li>非阻塞 <code>read()</code>。</li>
+</ul>
+<p>这些都属于 channel 后端，不属于 <code>io_can_net_t</code>。</p>
+<h3 id="10-4-原因四：channel-可以脱离-io-can-net-t-独立使用"><a href="#10-4-原因四：channel-可以脱离-io-can-net-t-独立使用" class="headerlink" title="10.4 原因四：channel 可以脱离 io_can_net_t 独立使用"></a>10.4 原因四：channel 可以脱离 <code>io_can_net_t</code> 独立使用</h3><p><code>io_can_chan_t</code> 是通用 CAN I&#x2F;O 接口。</p>
+<p>用户可以直接：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">submit_read()</span><br><span class="line">submit_write()</span><br></pre></td></tr></table></figure>
+
+<p>而不创建 <code>io_can_net_t</code> 或 CANopen 协议对象。</p>
+<p>如果接收缓冲只放在 <code>io_can_net_t</code> 中，那么独立使用 channel 时就失去异步接收所需的缓冲和调度能力。</p>
+<p>因此接收 ring 必须属于 channel 实现。</p>
+<h3 id="10-5-原因五：避免二级接收缓存"><a href="#10-5-原因五：避免二级接收缓存" class="headerlink" title="10.5 原因五：避免二级接收缓存"></a>10.5 原因五：避免二级接收缓存</h3><p><code>io_can_net_t</code> 始终保持一个异步 read operation：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">read 完成</span><br><span class="line">    ↓</span><br><span class="line">can_net_recv()</span><br><span class="line">    ↓</span><br><span class="line">再次 submit_read()</span><br></pre></td></tr></table></figure>
+
+<p>底层 channel 已经用 <code>rxring</code> 解决了 I&#x2F;O 与 task 调度之间的解耦。</p>
+<p>如果 <code>io_can_net_t</code> 再增加一个 RX ring，会形成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">SocketCAN</span><br><span class="line">    ↓</span><br><span class="line">channel.rxring</span><br><span class="line">    ↓</span><br><span class="line">io_can_net.rx_ring</span><br><span class="line">    ↓</span><br><span class="line">can_net_recv</span><br></pre></td></tr></table></figure>
+
+<p>其结果通常只是：</p>
+<ul>
+<li>多一次内存复制；</li>
+<li>多一层容量配置；</li>
+<li>多一套溢出策略；</li>
+<li>增加延迟；</li>
+<li>更难定位丢帧发生在哪一层。</li>
+</ul>
+<p>所以 Lely 没有在 <code>io_can_net_t</code> 中重复实现 RX ring。</p>
+<hr>
+<h2 id="11-关键点：write-queue-不是-tx-ring"><a href="#11-关键点：write-queue-不是-tx-ring" class="headerlink" title="11. 关键点：write_queue 不是 tx_ring"></a>11. 关键点：<code>write_queue</code> 不是 <code>tx_ring</code></h2><p>这是理解当前设计时最容易混淆的地方。</p>
+<h3 id="11-1-各队列保存的内容不同"><a href="#11-1-各队列保存的内容不同" class="headerlink" title="11.1 各队列保存的内容不同"></a>11.1 各队列保存的内容不同</h3><table>
+<thead>
+<tr>
+<th>队列</th>
+<th>所在对象</th>
+<th>保存内容</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>tx_ring + tx_buf</code></td>
+<td><code>io_can_net_t</code></td>
+<td><code>struct can_msg</code> 的副本</td>
+<td>缓存协议层待发送帧</td>
+</tr>
+<tr>
+<td><code>write_queue</code></td>
+<td>Linux <code>io_can_chan_impl</code></td>
+<td><code>io_can_chan_write.task</code> 节点</td>
+<td>缓存等待执行的异步写操作</td>
+</tr>
+<tr>
+<td><code>confirm_queue</code></td>
+<td>Linux <code>io_can_chan_impl</code></td>
+<td>已写出但等待确认的 write operation</td>
+<td>匹配 SocketCAN <code>MSG_CONFIRM</code></td>
+</tr>
+<tr>
+<td><code>rxring + rxbuf</code></td>
+<td>Linux <code>io_can_chan_impl</code></td>
+<td>收到的原始 CAN&#x2F;CAN FD 帧与时间戳</td>
+<td>缓存已到达的数据</td>
+</tr>
+<tr>
+<td><code>read_queue</code></td>
+<td>Linux <code>io_can_chan_impl</code></td>
+<td><code>io_can_chan_read.task</code> 节点</td>
+<td>缓存等待数据的异步读操作</td>
+</tr>
+</tbody></table>
+<h3 id="11-2-数据队列与操作队列不能替代"><a href="#11-2-数据队列与操作队列不能替代" class="headerlink" title="11.2 数据队列与操作队列不能替代"></a>11.2 数据队列与操作队列不能替代</h3><p><code>tx_ring</code> 解决：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">有很多 CAN 帧要发</span><br></pre></td></tr></table></figure>
+
+<p><code>write_queue</code> 解决：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">有很多异步 write 请求等待 channel 执行</span><br></pre></td></tr></table></figure>
+
+<p>在 <code>io_can_net_t</code> 的用法中，虽然 <code>tx_ring</code> 可以有很多帧，但它通常只向 channel 提交一个在途 write operation。</p>
+<p>也就是说：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">100 个待发送帧</span><br><span class="line">    可以位于 tx_ring</span><br><span class="line"></span><br><span class="line">底层 write_queue</span><br><span class="line">    可能只有 1 个 io_can_net.write operation</span><br></pre></td></tr></table></figure>
+
+<p>这正是两级队列职责不同的证明。</p>
+<h3 id="11-3-为什么不把所有帧都变成独立-write-operation"><a href="#11-3-为什么不把所有帧都变成独立-write-operation" class="headerlink" title="11.3 为什么不把所有帧都变成独立 write operation"></a>11.3 为什么不把所有帧都变成独立 write operation</h3><p>若每个协议发送帧都动态创建一个 <code>io_can_chan_write</code>：</p>
+<ul>
+<li>需要额外分配或管理 operation 对象；</li>
+<li>每个对象都要保证 <code>msg</code> 指针生命周期；</li>
+<li>取消和确认超时管理更复杂；</li>
+<li>协议层突发发送会制造大量 task；</li>
+<li>很难统一实现固定长度的丢帧策略。</li>
+</ul>
+<p>Lely 选择：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">固定长度帧 ring</span><br><span class="line">    +</span><br><span class="line">单个可复用 write operation</span><br></pre></td></tr></table></figure>
+
+<p>从而减少对象数量并明确所有权。</p>
+<hr>
+<h2 id="12-TX-与-RX-的背压模型本来就不同"><a href="#12-TX-与-RX-的背压模型本来就不同" class="headerlink" title="12. TX 与 RX 的背压模型本来就不同"></a>12. TX 与 RX 的背压模型本来就不同</h2><h3 id="12-1-发送方向可以拒绝上层"><a href="#12-1-发送方向可以拒绝上层" class="headerlink" title="12.1 发送方向可以拒绝上层"></a>12.1 发送方向可以拒绝上层</h3><p>当 <code>tx_ring</code> 已满时，<code>io_can_net_send_func()</code> 可以：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">返回 ERRNUM_AGAIN</span><br><span class="line">记录 dropped frame</span><br><span class="line">通知 on_queue_error</span><br></pre></td></tr></table></figure>
+
+<p>也就是说，发送方向能够把压力反馈给帧生产者。</p>
+<h3 id="12-2-接收方向不能要求总线暂停"><a href="#12-2-接收方向不能要求总线暂停" class="headerlink" title="12.2 接收方向不能要求总线暂停"></a>12.2 接收方向不能要求总线暂停</h3><p>当远端节点已经在 CAN 总线上发送帧后，本机不能通过软件调用告诉它：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">请暂停，等我的 executor 空闲后再发</span><br></pre></td></tr></table></figure>
+
+<p>接收侧只能：</p>
+<ul>
+<li>尽快从控制器或内核队列取走；</li>
+<li>缓存；</li>
+<li>或在容量不足时丢弃。</li>
+</ul>
+<p>因此 RX 缓冲必须靠近 I&#x2F;O 入口。</p>
+<h3 id="12-3-Linux-内核本身已有发送队列"><a href="#12-3-Linux-内核本身已有发送队列" class="headerlink" title="12.3 Linux 内核本身已有发送队列"></a>12.3 Linux 内核本身已有发送队列</h3><p>SocketCAN 写入后，内核和 CAN 控制器还有自己的发送队列。</p>
+<p>底层 channel 再增加一个通用“帧副本 TX ring”会造成多级不可见排队：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">io_can_net.tx_ring</span><br><span class="line">    ↓</span><br><span class="line">channel frame ring</span><br><span class="line">    ↓</span><br><span class="line">SocketCAN send queue</span><br><span class="line">    ↓</span><br><span class="line">CAN controller mailbox</span><br></pre></td></tr></table></figure>
+
+<p>这样会使：</p>
+<ul>
+<li>实际排队深度难以计算；</li>
+<li>发送延迟难以预测；</li>
+<li>错误归属模糊；</li>
+<li><code>txlen</code> 的意义失真。</li>
+</ul>
+<p>因此 channel 后端只管理写操作和系统 I&#x2F;O，不重复承担网络层发送缓存策略。</p>
+<hr>
+<h2 id="13-spscring-在两处的生产者和消费者"><a href="#13-spscring-在两处的生产者和消费者" class="headerlink" title="13. spscring 在两处的生产者和消费者"></a>13. <code>spscring</code> 在两处的生产者和消费者</h2><p><code>spscring</code> 是 single-producer &#x2F; single-consumer ring。</p>
+<h3 id="13-1-io-can-net-tx-ring"><a href="#13-1-io-can-net-tx-ring" class="headerlink" title="13.1 io_can_net.tx_ring"></a>13.1 <code>io_can_net.tx_ring</code></h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Producer：io_can_net_send_func()</span><br><span class="line">    p_alloc</span><br><span class="line">    写 tx_buf</span><br><span class="line">    p_commit</span><br><span class="line"></span><br><span class="line">Consumer：io_can_net_do_wait() / io_can_net_write_func()</span><br><span class="line">    c_alloc</span><br><span class="line">    复制到 write_msg</span><br><span class="line">    写完成后 c_commit</span><br></pre></td></tr></table></figure>
+
+<p>当 ring 为空时，consumer 注册等待：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">spscring_c_submit_wait()</span><br></pre></td></tr></table></figure>
+
+<p>producer 提交新帧后，ring 调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_c_wait_func()</span><br></pre></td></tr></table></figure>
+
+<p>进而启动发送。</p>
+<h3 id="13-2-Linux-can-chan-rxring"><a href="#13-2-Linux-can-chan-rxring" class="headerlink" title="13.2 Linux can_chan.rxring"></a>13.2 Linux <code>can_chan.rxring</code></h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Producer：rxbuf_task</span><br><span class="line">    从 SocketCAN read</span><br><span class="line">    写 rxbuf</span><br><span class="line">    p_commit</span><br><span class="line"></span><br><span class="line">Consumer：read_task 或同步 read</span><br><span class="line">    c_alloc</span><br><span class="line">    转换为 can_msg / can_err</span><br><span class="line">    c_commit</span><br></pre></td></tr></table></figure>
+
+<p>当 ring 为空时，consumer 注册等待；producer 放入帧后唤醒 <code>read_task</code>。</p>
+<h3 id="13-3-相同数据结构，不同层次语义"><a href="#13-3-相同数据结构，不同层次语义" class="headerlink" title="13.3 相同数据结构，不同层次语义"></a>13.3 相同数据结构，不同层次语义</h3><table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Producer</th>
+<th>Consumer</th>
+<th>业务语义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>tx_ring</code></td>
+<td>协议发送适配回调</td>
+<td>异步 write 状态机</td>
+<td>待发送逻辑 CAN 帧</td>
+</tr>
+<tr>
+<td><code>rxring</code></td>
+<td>SocketCAN 读取任务</td>
+<td>异步 read 状态机</td>
+<td>已接收底层帧</td>
+</tr>
+</tbody></table>
+<p>所以不能仅因为两者都使用 <code>spscring</code>，就认为它们应位于同一结构体中。</p>
+<hr>
+<h2 id="14-接收任务之间如何协作"><a href="#14-接收任务之间如何协作" class="headerlink" title="14. 接收任务之间如何协作"></a>14. 接收任务之间如何协作</h2><p>Linux channel 有三个与接收相关的对象：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">watch</span><br><span class="line">rxbuf_task</span><br><span class="line">read_task</span><br></pre></td></tr></table></figure>
+
+<h3 id="14-1-watch"><a href="#14-1-watch" class="headerlink" title="14.1 watch"></a>14.1 <code>watch</code></h3><p><code>io_poll_watch</code> 只负责通知：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">fd 当前可读或可写</span><br></pre></td></tr></table></figure>
+
+<p>它不执行完整协议处理。</p>
+<p>收到 <code>IO_EVENT_IN</code> 后，watch callback 通常只投递 <code>rxbuf_task</code>。</p>
+<h3 id="14-2-rxbuf-task"><a href="#14-2-rxbuf-task" class="headerlink" title="14.2 rxbuf_task"></a>14.2 <code>rxbuf_task</code></h3><p>主要职责：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">从 fd 读取</span><br><span class="line">识别普通帧或 MSG_CONFIRM</span><br><span class="line">普通帧写入 rxring</span><br><span class="line">确认帧完成 confirm_queue 中的写操作</span><br><span class="line">遇到 EAGAIN 时重新监听 IO_EVENT_IN</span><br></pre></td></tr></table></figure>
+
+<h3 id="14-3-read-task"><a href="#14-3-read-task" class="headerlink" title="14.3 read_task"></a>14.3 <code>read_task</code></h3><p>主要职责：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">检查 read_queue</span><br><span class="line">检查 rxring</span><br><span class="line">把一帧复制给一个 read operation</span><br><span class="line">完成并投递该 operation 的 completion task</span><br><span class="line">ring 为空时注册 consumer wait</span><br></pre></td></tr></table></figure>
+
+<h3 id="14-4-为什么拆成两个-task"><a href="#14-4-为什么拆成两个-task" class="headerlink" title="14.4 为什么拆成两个 task"></a>14.4 为什么拆成两个 task</h3><p>如果把 fd 读取、ring 管理、read operation 完成和协议回调全部塞进 poll callback：</p>
+<ul>
+<li>poll callback 执行时间不可控；</li>
+<li>容易在 I&#x2F;O 监视上下文中执行大量协议逻辑；</li>
+<li>难以处理阻塞与非阻塞模式；</li>
+<li>难以统一 executor 的任务生命周期；</li>
+<li>锁边界更复杂。</li>
+</ul>
+<p>拆分后，poll callback 只负责唤醒，executor 负责任务执行。</p>
+<hr>
+<h2 id="15-发送任务之间如何协作"><a href="#15-发送任务之间如何协作" class="headerlink" title="15. 发送任务之间如何协作"></a>15. 发送任务之间如何协作</h2><p><code>io_can_net_t</code> 与 Linux channel 各自维护一段发送状态机。</p>
+<h3 id="15-1-io-can-net-t-发送状态机"><a href="#15-1-io-can-net-t-发送状态机" class="headerlink" title="15.1 io_can_net_t 发送状态机"></a>15.1 <code>io_can_net_t</code> 发送状态机</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">tx_ring empty</span><br><span class="line">    ↓</span><br><span class="line">注册 consumer wait</span><br><span class="line">    ↓</span><br><span class="line">新帧入队后被唤醒</span><br><span class="line">    ↓</span><br><span class="line">取一帧到 write_msg</span><br><span class="line">    ↓</span><br><span class="line">submit_write</span><br><span class="line">    ↓</span><br><span class="line">等待 completion</span><br><span class="line">    ↓</span><br><span class="line">释放 tx_ring 当前帧</span><br><span class="line">    ↓</span><br><span class="line">继续下一帧</span><br></pre></td></tr></table></figure>
+
+<h3 id="15-2-Linux-channel-发送状态机"><a href="#15-2-Linux-channel-发送状态机" class="headerlink" title="15.2 Linux channel 发送状态机"></a>15.2 Linux channel 发送状态机</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">submit_write</span><br><span class="line">    ↓</span><br><span class="line">operation 进入 write_queue</span><br><span class="line">    ↓</span><br><span class="line">write_task 调用 SocketCAN write</span><br><span class="line">    ↓</span><br><span class="line">立即错误</span><br><span class="line">    或</span><br><span class="line">成功且无需确认</span><br><span class="line">    或</span><br><span class="line">进入 confirm_queue 等待 MSG_CONFIRM</span><br><span class="line">    ↓</span><br><span class="line">完成 operation</span><br></pre></td></tr></table></figure>
+
+<h3 id="15-3-两层分别解决的问题"><a href="#15-3-两层分别解决的问题" class="headerlink" title="15.3 两层分别解决的问题"></a>15.3 两层分别解决的问题</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">io_can_net_t</span><br><span class="line">    解决“多帧如何排队并逐帧提交”</span><br><span class="line"></span><br><span class="line">Linux channel</span><br><span class="line">    解决“一个异步 write operation 如何在 fd 上完成”</span><br></pre></td></tr></table></figure>
+
+<p>这就是 TX ring 不应下沉到 Linux channel 的核心原因。</p>
+<hr>
+<h2 id="16-与-io-tqueue-pheap-的完整连接"><a href="#16-与-io-tqueue-pheap-的完整连接" class="headerlink" title="16. 与 io_tqueue + pheap 的完整连接"></a>16. 与 <code>io_tqueue + pheap</code> 的完整连接</h2><p>发送、接收和 Timer 三条链路最终在 <code>io_can_net_t</code> 汇合。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    CT[&quot;CANopen can_timer_t objects&quot;] --&gt; CHP[&quot;can_net.timer_heap&quot;]</span><br><span class="line">    CHP --&gt; NF[&quot;can_net_set_next&quot;]</span><br><span class="line">    NF --&gt; NCB[&quot;io_can_net_next_func&quot;]</span><br><span class="line">    NCB --&gt; WN[&quot;wait_next&quot;]</span><br><span class="line">    WN --&gt; TQ[&quot;io_tqueue.queue&quot;]</span><br><span class="line">    TQ --&gt; ST[&quot;system timer&quot;]</span><br><span class="line">    ST --&gt; WNF[&quot;io_can_net_wait_next_func&quot;]</span><br><span class="line">    WNF --&gt; CST[&quot;can_net_set_time&quot;]</span><br><span class="line"></span><br><span class="line">    CO[&quot;CANopen send request&quot;] --&gt; CS[&quot;can_net_send&quot;]</span><br><span class="line">    CS --&gt; TX[&quot;io_can_net.tx_ring&quot;]</span><br><span class="line">    TX --&gt; CW[&quot;io_can_chan write&quot;]</span><br><span class="line"></span><br><span class="line">    CR[&quot;SocketCAN receive&quot;] --&gt; RX[&quot;can_chan.rxring&quot;]</span><br><span class="line">    RX --&gt; RR[&quot;io_can_net read completion&quot;]</span><br><span class="line">    RR --&gt; CNR[&quot;can_net_recv&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>因此整个系统可以分成三种适配：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">协议时间 → 系统 Timer</span><br><span class="line">协议发送 → 异步 write</span><br><span class="line">底层接收 → 协议 receiver</span><br></pre></td></tr></table></figure>
+
+<p>这三种适配都由 <code>io_can_net_t</code> 组织，但只有平台相关接收缓冲位于 channel 后端。</p>
+<hr>
+<h2 id="参考源码"><a href="#参考源码" class="headerlink" title="参考源码"></a>参考源码</h2><h3 id="CAN-逻辑核心"><a href="#CAN-逻辑核心" class="headerlink" title="CAN 逻辑核心"></a>CAN 逻辑核心</h3><ul>
+<li><code>lely-core/include/lely/can/net.h</code></li>
+<li><code>lely-core/src/can/net.c</code></li>
+</ul>
+<h3 id="I-O-桥接层"><a href="#I-O-桥接层" class="headerlink" title="I&#x2F;O 桥接层"></a>I&#x2F;O 桥接层</h3><ul>
+<li><code>lely-core/include/lely/io2/can_net.h</code></li>
+<li><code>lely-core/include/lely/io2/can_net.hpp</code></li>
+<li><code>lely-core/src/io2/can_net.c</code></li>
+</ul>
+<h3 id="CAN-channel-抽象与-Linux-后端"><a href="#CAN-channel-抽象与-Linux-后端" class="headerlink" title="CAN channel 抽象与 Linux 后端"></a>CAN channel 抽象与 Linux 后端</h3><ul>
+<li><code>lely-core/include/lely/io2/can.h</code></li>
+<li><code>lely-core/src/io2/linux/can_chan.c</code></li>
+</ul>
+<h3 id="数据结构"><a href="#数据结构" class="headerlink" title="数据结构"></a>数据结构</h3><ul>
+<li><code>lely-core/include/lely/util/spscring.h</code></li>
+<li><code>lely-core/include/lely/util/pheap.h</code></li>
+<li><code>lely-core/src/util/pheap.c</code></li>
+</ul>
+<h3 id="前置学习笔记"><a href="#前置学习笔记" class="headerlink" title="前置学习笔记"></a>前置学习笔记</h3><ul>
+<li><code>Lely_CANopen_io_tqueue_pheap_机制原理与运行流程(1).md</code></li>
+</ul>
+<h3 id="协议参考"><a href="#协议参考" class="headerlink" title="协议参考"></a>协议参考</h3><ul>
+<li>CiA 301 V4.2.0：CANopen 应用层和通信协议</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/1f644911/">https://wdfk-prog.space/posts/1f644911/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/canopen/">canopen</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/07.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/84d7829a/" title="Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen：co_dev 设备对象字典与 EDS&#x2F;DCF 解析、concise DCF 和 PDO 事件机制 @[toc] 一句话结论Lely 的 co_dev_t 不是协议状态机，也不是简单的 EDS 文件句柄，而是 CANopen 设备描述在运行期的根对象：  它保存 Node-ID、网络号、设备名称、身份信息、支持的位速率、LSS 和 dummy PDO 类型等设备级元数据； 它用一棵以 16 位索引为 key 的红黑树管理全部 co_obj_t，每个 co_obj_t 再管理自己的 co_sub_t； dcf.c 先把 EDS&#x2F;DCF 的 INI 文本解析为通用配置树，再逐层创建 co_dev_t → co_obj_t → co_sub_t； $NODEID + n 不只是文本替换，解析器会记录相应 flag，co_dev_set_id() 在 Node-ID 改变时遍历整棵对象字典并按差值修正相关值； 文本 EDS&#x2F;DCF 与 concise DCF 是两种完全不同的格式：前者描述设备结构和元数据，后者是用于参数配置的一组...</div></div></div></a><a class="pagination-related" href="/posts/ddeb74ca/" title="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系 @[toc] 一句话结论io_tqueue 是一个“多路逻辑定时器复用器”：  上层可以同时提交很多个不同绝对截止时间的 io_tqueue_wait； 中间用 pheap 维护“当前最早到期”的等待； 下层始终只占用 一个 io_timer_t； 底层 Timer 到期时，再回到 io_tqueue 批量完成所有 value &lt;= now 的等待。  它与 can_net 串起来之后，又形成“两级最早截止时间压缩”： 123456789很多 can_timer_t    ↓can_net.timer_heap    ↓ 选出协议层最早一个io_tqueue.queue    ↓ 再与其他 I/O 等待一起排序一个 io_timer_t    ↓Linux timerfd / poll / executor   1. 为什么需要 io_tqueue如果没有 io_tqueue，最直观的设计是： 1234每一个逻辑等待    → 一个 io_tim...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/78c092c/" title="Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen：RPDO&#x2F;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程 @[toc]  源码基线：lely-industries/lely-core，提交 620d1858eb8520dbc3dc5e1a7314565becd54199，查阅时间为 2026-07-30。 本文核心分析以下文件： 123456include/lely/co/rpdo.hinclude/lely/co/rpdo.hppsrc/co/rpdo.cinclude/lely/co/tpdo.hinclude/lely/co/tpdo.hppsrc/co/tpdo.c  前置文章已经说明 co_pdo_dn()、co_pdo_up()、PDO 映射校验、位级编解码以及对象字典 indication 桥接。本文不重复展开这些基础算法，而是集中分析 RPDO&#x2F;TPDO 服务对象如何注册 CAN 接收器、维护运行期参数、处理 SYNC、事件定时器、接收超时、同步窗口、抑制时间、RTR 和用户回调。 事实边界：函数、字段、条件分支和调用链来自上述源码；并发风险、生...</div></div></div></a><a class="pagination-related" href="/posts/77cd4175/" title="README"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">README</div></div><div class="info-2"><div class="info-item-1">canopen 学习笔记 [1. CANopen  TIM&amp;SYNC 运行流程.md](CANopen  TIM&amp;SYNC 运行流程.md) [2. CANopen CiA 协议全景：核心内容、重点与组合关系.md](CANopen CiA 协议全景：核心内容、重点与组合关系.md) [3. CANopen Emergency： 搞懂 EM 运行流程.md](CANopen Emergency： 搞懂 EM 运行流程.md) [4. CANopen NMT：搞懂 NMT 运行流程.md](CANopen NMT：搞懂 NMT 运行流程.md) [5. CANopen PDO 运行流程.md](CANopen PDO 运行流程.md) [6. CANopen 搞懂 SDO client&amp;server 运行流程.md](CANopen 搞懂 SDO client&amp;server 运行流程.md) [7. CANopen 网络拓扑限制.md](CANopen 网络拓扑限制.md) [8. CANopene Heartbeat运行流程.md](CANopen...</div></div></div></a><a class="pagination-related" href="/posts/178cc435/" title="Lely CANopen &#96;coapp Device&#96; 本地 SDO PDO 读写、远程对象映射与运行机制"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-30</div><div class="info-item-2">Lely CANopen &#96;coapp Device&#96; 本地 SDO PDO 读写、远程对象映射与运行机制</div></div><div class="info-2"><div class="info-item-1">Lely CANopen coapp::Device：本地 SDO&#x2F;PDO 读写、远程对象映射与运行机制 @[toc] 1. 先给出最关键的结论理解 Device 时，必须先把“本地读写”“远程读写”“SDO”“PDO”分开：  Device 本质上是 co_dev_t 的 C++ 所有权与访问封装。 Device::Read()、Device::Write() 是对本地对象字典执行一次“本地 SDO 请求”，不会发送 CAN 帧。 Device::Get()、Device::Set() 是直接访问本地对象字典值，绕过 SDO 访问权限、范围检查和下载&#x2F;上传回调。 Device::RpdoRead() 并不会通过 CAN 去读取远程节点，而是把“远程 TPDO 对象地址”转换为本地 RPDO 映射对象，再读取本地缓存值。 Device::TpdoWrite() 也不会执行远程 SDO 下载，而是把“远程 RPDO 对象地址”转换为本地 TPDO 映射对象，再写入本地待发送值。 真正通过 CAN 总线访问远程对象字典的是 co_csdo_t &#x2F; lel...</div></div></div></a><a class="pagination-related" href="/posts/84d7829a/" title="Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen：co_dev 设备对象字典与 EDS&#x2F;DCF 解析、concise DCF 和 PDO 事件机制 @[toc] 一句话结论Lely 的 co_dev_t 不是协议状态机，也不是简单的 EDS 文件句柄，而是 CANopen 设备描述在运行期的根对象：  它保存 Node-ID、网络号、设备名称、身份信息、支持的位速率、LSS 和 dummy PDO 类型等设备级元数据； 它用一棵以 16 位索引为 key 的红黑树管理全部 co_obj_t，每个 co_obj_t 再管理自己的 co_sub_t； dcf.c 先把 EDS&#x2F;DCF 的 INI 文本解析为通用配置树，再逐层创建 co_dev_t → co_obj_t → co_sub_t； $NODEID + n 不只是文本替换，解析器会记录相应 flag，co_dev_set_id() 在 Node-ID 改变时遍历整棵对象字典并按差值修正相关值； 文本 EDS&#x2F;DCF 与 concise DCF 是两种完全不同的格式：前者描述设备结构和元数据，后者是用于参数配置的一组...</div></div></div></a><a class="pagination-related" href="/posts/ddeb74ca/" title="Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen：io_tqueue 与 pheap 的实现原理、运行流程及其与 Timer、can_net 的关系 @[toc] 一句话结论io_tqueue 是一个“多路逻辑定时器复用器”：  上层可以同时提交很多个不同绝对截止时间的 io_tqueue_wait； 中间用 pheap 维护“当前最早到期”的等待； 下层始终只占用 一个 io_timer_t； 底层 Timer 到期时，再回到 io_tqueue 批量完成所有 value &lt;= now 的等待。  它与 can_net 串起来之后，又形成“两级最早截止时间压缩”： 123456789很多 can_timer_t    ↓can_net.timer_heap    ↓ 选出协议层最早一个io_tqueue.queue    ↓ 再与其他 I/O 等待一起排序一个 io_timer_t    ↓Linux timerfd / poll / executor   1. 为什么需要 io_tqueue如果没有 io_tqueue，最直观的设计是： 1234每一个逻辑等待    → 一个 io_tim...</div></div></div></a><a class="pagination-related" href="/posts/1510f72a/" title="Lely CANopen &#96;spscring&#96; 单生产者单消费者环形队列完整机制学习笔记"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">Lely CANopen &#96;spscring&#96; 单生产者单消费者环形队列完整机制学习笔记</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen spscring 单生产者单消费者环形队列完整机制学习笔记 @[toc]  1. 先明确边界：spscring 不是数据缓冲区SPSC 是 Single-Producer Single-Consumer，即单生产者、单消费者。 Lely 的 spscring 与常见“结构体内部直接包含数组”的环形队列不同。它只管理：  哪些索引可以由生产者写入； 哪些索引可以由消费者读取； 生产者何时把写入结果发布给消费者； 消费者何时把已读槽位归还给生产者； 队列由空变为可读或由满变为可写时，是否需要触发回调。  实际数据存储由调用者单独提供： 12struct spscring ring;struct io_can_frame *rxbuf;  两者的关系是： 12345spscring= 索引所有权与可见性控制器rxbuf= 真正保存 CAN 帧的内存数组  因此，调用 spscring_p_alloc() 只会得到一个可写索引，不会返回数据指针，也不会复制任何数据。 1234567flowchart LR    Prod[Producer] --&gt;|p...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">556</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Lely-CANopen%EF%BC%9Acan-net%E3%80%81io-can-net-%E4%B8%8E-CAN-channel-%E7%9A%84%E5%88%86%E5%B1%82%E5%85%B3%E7%B3%BB%EF%BC%8C%E4%BB%A5%E5%8F%8A-TX-RX-Ring-%E7%9A%84%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86"><span class="toc-number">1.</span> <span class="toc-text">Lely CANopen：can_net、io_can_net 与 CAN channel 的分层关系，以及 TX&#x2F;RX Ring 的设计原理</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E5%8F%A5%E8%AF%9D%E7%BB%93%E8%AE%BA"><span class="toc-number">1.1.</span> <span class="toc-text">一句话结论</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%85%88%E6%BE%84%E6%B8%85%EF%BC%9A%E8%BF%99%E4%BA%9B%E5%90%8D%E7%A7%B0%E4%B8%8D%E6%98%AF%E5%90%8C%E4%B8%80%E4%B8%AA-net"><span class="toc-number">1.2.</span> <span class="toc-text">1. 先澄清：这些名称不是同一个 net</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E5%90%8D%E7%A7%B0%E4%B8%8E%E5%AE%9E%E9%99%85%E5%AF%B9%E8%B1%A1%E5%AF%B9%E7%85%A7"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 名称与实际对象对照</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-CiA-301-%E4%B8%8E-Lely-%E5%AE%9E%E7%8E%B0%E8%BE%B9%E7%95%8C"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 CiA 301 与 Lely 实现边界</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E7%9B%B8%E5%85%B3%E6%96%87%E4%BB%B6%E5%88%86%E5%88%AB%E8%B4%9F%E8%B4%A3%E4%BB%80%E4%B9%88"><span class="toc-number">1.3.</span> <span class="toc-text">2. 相关文件分别负责什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-CAN-%E9%80%BB%E8%BE%91%E6%A0%B8%E5%BF%83"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 CAN 逻辑核心</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E6%8A%BD%E8%B1%A1-CAN-%E9%80%9A%E9%81%93"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 抽象 CAN 通道</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-CAN-%E7%BD%91%E7%BB%9C%E6%A1%A5%E6%8E%A5%E5%B1%82"><span class="toc-number">1.3.3.</span> <span class="toc-text">2.3 CAN 网络桥接层</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-C-%E5%8C%85%E8%A3%85%E5%B1%82"><span class="toc-number">1.3.4.</span> <span class="toc-text">2.4 C++ 包装层</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E6%80%BB%E4%BD%93%E5%AF%B9%E8%B1%A1%E5%85%B3%E7%B3%BB"><span class="toc-number">1.4.</span> <span class="toc-text">3. 总体对象关系</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E9%9D%99%E6%80%81%E5%AF%B9%E8%B1%A1%E5%9B%BE"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 静态对象图</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-io-can-net-t-%E6%98%AF%E6%95%B4%E4%B8%AA%E8%BF%9E%E6%8E%A5%E7%82%B9"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 io_can_net_t 是整个连接点</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-can-net-t-%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.5.</span> <span class="toc-text">4. can_net_t 到底是什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%86%85%E9%83%A8%E5%8F%AA%E6%9C%89%E4%B8%89%E7%B1%BB%E6%A0%B8%E5%BF%83%E8%B5%84%E6%BA%90"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 内部只有三类核心资源</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E5%AE%83%E4%B8%8D%E6%98%AF%E8%AE%BE%E5%A4%87%E9%A9%B1%E5%8A%A8"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 它不是设备驱动</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E6%8E%A5%E6%94%B6%E6%96%B9%E5%90%91%EF%BC%9Arecv-tree"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 接收方向：recv_tree</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E5%8F%91%E9%80%81%E6%96%B9%E5%90%91%EF%BC%9A%E5%8F%AA%E8%B0%83%E7%94%A8%E5%9B%9E%E8%B0%83"><span class="toc-number">1.5.4.</span> <span class="toc-text">4.4 发送方向：只调用回调</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E5%AE%9A%E6%97%B6%E6%96%B9%E5%90%91%EF%BC%9Atimer-heap"><span class="toc-number">1.5.5.</span> <span class="toc-text">4.5 定时方向：timer_heap</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-io-can-chan-t-%E4%B8%8E-Linux-can-chan-c"><span class="toc-number">1.6.</span> <span class="toc-text">5. io_can_chan_t 与 Linux can_chan.c</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-io-can-chan-t-%E6%98%AF%E6%8E%A5%E5%8F%A3%EF%BC%8C%E4%B8%8D%E6%98%AF%E5%AE%8C%E6%95%B4%E5%AF%B9%E8%B1%A1%E5%B8%83%E5%B1%80"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 io_can_chan_t 是接口，不是完整对象布局</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-Linux-%E5%90%8E%E7%AB%AF%E7%BB%B4%E6%8A%A4%E7%9A%84%E8%B5%84%E6%BA%90"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 Linux 后端维护的资源</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-io-can-net-t-%E5%88%9D%E5%A7%8B%E5%8C%96%E6%97%B6%E5%81%9A%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.7.</span> <span class="toc-text">6. io_can_net_t 初始化时做了什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-io-can-net-start"><span class="toc-number">1.7.1.</span> <span class="toc-text">6.1 io_can_net_start()</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E5%AE%8C%E6%95%B4%E6%8E%A5%E6%94%B6%E6%B5%81%E7%A8%8B"><span class="toc-number">1.8.</span> <span class="toc-text">7. 完整接收流程</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E4%BB%8E-SocketCAN-%E5%88%B0-CANopen-%E5%8D%8F%E8%AE%AE%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.8.1.</span> <span class="toc-text">7.1 从 SocketCAN 到 CANopen 协议对象</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-Linux-%E5%90%8E%E7%AB%AF%E4%B8%BA%E4%BB%80%E4%B9%88%E5%85%88%E6%94%BE%E5%85%A5-rxring"><span class="toc-number">1.8.2.</span> <span class="toc-text">7.2 Linux 后端为什么先放入 rxring</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-rxring-%E4%B8%AD%E4%BF%9D%E5%AD%98%E7%9A%84%E4%B8%8D%E6%98%AF%E5%8D%95%E7%BA%AF-can-msg"><span class="toc-number">1.8.3.</span> <span class="toc-text">7.3 rxring 中保存的不是单纯 can_msg</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-%E5%86%99%E7%A1%AE%E8%AE%A4%E4%B9%9F%E5%BF%85%E9%A1%BB%E5%9C%A8%E6%8E%A5%E6%94%B6%E5%90%8E%E7%AB%AF%E5%A4%84%E7%90%86"><span class="toc-number">1.8.4.</span> <span class="toc-text">7.4 写确认也必须在接收后端处理</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E5%AE%8C%E6%95%B4%E5%8F%91%E9%80%81%E6%B5%81%E7%A8%8B"><span class="toc-number">1.9.</span> <span class="toc-text">8. 完整发送流程</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E4%BB%8E-CANopen-%E5%8D%8F%E8%AE%AE%E5%AF%B9%E8%B1%A1%E5%88%B0-SocketCAN"><span class="toc-number">1.9.1.</span> <span class="toc-text">8.1 从 CANopen 协议对象到 SocketCAN</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-can-net-send-%E6%88%90%E5%8A%9F%E4%B8%8D%E7%AD%89%E4%BA%8E%E6%80%BB%E7%BA%BF%E5%8F%91%E9%80%81%E6%88%90%E5%8A%9F"><span class="toc-number">1.9.2.</span> <span class="toc-text">8.2 can_net_send() 成功不等于总线发送成功</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E4%B8%BA%E4%BB%80%E4%B9%88-tx-ring-%E5%9C%A8-io-can-net-t-%E4%B8%AD"><span class="toc-number">1.10.</span> <span class="toc-text">9. 为什么 tx_ring 在 io_can_net_t 中</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#9-1-%E5%8E%9F%E5%9B%A0%E4%B8%80%EF%BC%9A%E5%AE%83%E6%9C%8D%E5%8A%A1%E7%9A%84%E6%98%AF-can-net-send-%E7%9A%84%E8%AF%AD%E4%B9%89"><span class="toc-number">1.10.1.</span> <span class="toc-text">9.1 原因一：它服务的是 can_net_send() 的语义</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-2-%E5%8E%9F%E5%9B%A0%E4%BA%8C%EF%BC%9A%E5%8D%8F%E8%AE%AE%E5%B1%82%E5%8F%AF%E8%83%BD%E5%9C%A8%E4%B8%80%E4%B8%AA%E5%9B%9E%E8%B0%83%E4%B8%AD%E4%BA%A7%E7%94%9F%E5%A4%9A%E5%B8%A7"><span class="toc-number">1.10.2.</span> <span class="toc-text">9.2 原因二：协议层可能在一个回调中产生多帧</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-3-%E5%8E%9F%E5%9B%A0%E4%B8%89%EF%BC%9A%E5%8F%91%E9%80%81%E9%98%9F%E5%88%97%E9%95%BF%E5%BA%A6%E6%98%AF-io-can-net-%E7%9A%84%E5%85%AC%E5%BC%80%E7%AD%96%E7%95%A5"><span class="toc-number">1.10.3.</span> <span class="toc-text">9.3 原因三：发送队列长度是 io_can_net 的公开策略</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-4-%E5%8E%9F%E5%9B%A0%E5%9B%9B%EF%BC%9Aio-can-net-t-%E5%8F%AA%E5%A4%8D%E7%94%A8%E4%B8%80%E4%B8%AA-write-operation"><span class="toc-number">1.10.4.</span> <span class="toc-text">9.4 原因四：io_can_net_t 只复用一个 write operation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-5-%E5%8E%9F%E5%9B%A0%E4%BA%94%EF%BC%9A%E5%86%99%E7%A1%AE%E8%AE%A4%E8%B6%85%E6%97%B6%E5%B1%9E%E4%BA%8E%E6%A1%A5%E6%8E%A5%E7%AD%96%E7%95%A5"><span class="toc-number">1.10.5.</span> <span class="toc-text">9.5 原因五：写确认超时属于桥接策略</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E4%B8%BA%E4%BB%80%E4%B9%88-rxring-%E5%9C%A8-Linux-can-chan-%E5%BA%95%E5%B1%82"><span class="toc-number">1.11.</span> <span class="toc-text">10. 为什么 rxring 在 Linux can_chan 底层</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#10-1-%E5%8E%9F%E5%9B%A0%E4%B8%80%EF%BC%9A%E6%8E%A5%E6%94%B6%E5%85%A5%E5%8F%A3%E7%94%B1%E5%BA%95%E5%B1%82%E8%AE%BE%E5%A4%87%E5%86%B3%E5%AE%9A"><span class="toc-number">1.11.1.</span> <span class="toc-text">10.1 原因一：接收入口由底层设备决定</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-2-%E5%8E%9F%E5%9B%A0%E4%BA%8C%EF%BC%9A%E5%AE%83%E8%BF%9E%E6%8E%A5%E7%9A%84%E6%98%AF-I-O-readiness-%E4%B8%8E-read-operation"><span class="toc-number">1.11.2.</span> <span class="toc-text">10.2 原因二：它连接的是 I&#x2F;O readiness 与 read operation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-3-%E5%8E%9F%E5%9B%A0%E4%B8%89%EF%BC%9A%E6%8E%A5%E6%94%B6%E6%95%B0%E6%8D%AE%E5%8C%85%E5%90%AB%E5%B9%B3%E5%8F%B0%E7%9B%B8%E5%85%B3%E4%BF%A1%E6%81%AF"><span class="toc-number">1.11.3.</span> <span class="toc-text">10.3 原因三：接收数据包含平台相关信息</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-4-%E5%8E%9F%E5%9B%A0%E5%9B%9B%EF%BC%9Achannel-%E5%8F%AF%E4%BB%A5%E8%84%B1%E7%A6%BB-io-can-net-t-%E7%8B%AC%E7%AB%8B%E4%BD%BF%E7%94%A8"><span class="toc-number">1.11.4.</span> <span class="toc-text">10.4 原因四：channel 可以脱离 io_can_net_t 独立使用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-5-%E5%8E%9F%E5%9B%A0%E4%BA%94%EF%BC%9A%E9%81%BF%E5%85%8D%E4%BA%8C%E7%BA%A7%E6%8E%A5%E6%94%B6%E7%BC%93%E5%AD%98"><span class="toc-number">1.11.5.</span> <span class="toc-text">10.5 原因五：避免二级接收缓存</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%85%B3%E9%94%AE%E7%82%B9%EF%BC%9Awrite-queue-%E4%B8%8D%E6%98%AF-tx-ring"><span class="toc-number">1.12.</span> <span class="toc-text">11. 关键点：write_queue 不是 tx_ring</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-1-%E5%90%84%E9%98%9F%E5%88%97%E4%BF%9D%E5%AD%98%E7%9A%84%E5%86%85%E5%AE%B9%E4%B8%8D%E5%90%8C"><span class="toc-number">1.12.1.</span> <span class="toc-text">11.1 各队列保存的内容不同</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-%E6%95%B0%E6%8D%AE%E9%98%9F%E5%88%97%E4%B8%8E%E6%93%8D%E4%BD%9C%E9%98%9F%E5%88%97%E4%B8%8D%E8%83%BD%E6%9B%BF%E4%BB%A3"><span class="toc-number">1.12.2.</span> <span class="toc-text">11.2 数据队列与操作队列不能替代</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-3-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E6%8A%8A%E6%89%80%E6%9C%89%E5%B8%A7%E9%83%BD%E5%8F%98%E6%88%90%E7%8B%AC%E7%AB%8B-write-operation"><span class="toc-number">1.12.3.</span> <span class="toc-text">11.3 为什么不把所有帧都变成独立 write operation</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-TX-%E4%B8%8E-RX-%E7%9A%84%E8%83%8C%E5%8E%8B%E6%A8%A1%E5%9E%8B%E6%9C%AC%E6%9D%A5%E5%B0%B1%E4%B8%8D%E5%90%8C"><span class="toc-number">1.13.</span> <span class="toc-text">12. TX 与 RX 的背压模型本来就不同</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#12-1-%E5%8F%91%E9%80%81%E6%96%B9%E5%90%91%E5%8F%AF%E4%BB%A5%E6%8B%92%E7%BB%9D%E4%B8%8A%E5%B1%82"><span class="toc-number">1.13.1.</span> <span class="toc-text">12.1 发送方向可以拒绝上层</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-2-%E6%8E%A5%E6%94%B6%E6%96%B9%E5%90%91%E4%B8%8D%E8%83%BD%E8%A6%81%E6%B1%82%E6%80%BB%E7%BA%BF%E6%9A%82%E5%81%9C"><span class="toc-number">1.13.2.</span> <span class="toc-text">12.2 接收方向不能要求总线暂停</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-3-Linux-%E5%86%85%E6%A0%B8%E6%9C%AC%E8%BA%AB%E5%B7%B2%E6%9C%89%E5%8F%91%E9%80%81%E9%98%9F%E5%88%97"><span class="toc-number">1.13.3.</span> <span class="toc-text">12.3 Linux 内核本身已有发送队列</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-spscring-%E5%9C%A8%E4%B8%A4%E5%A4%84%E7%9A%84%E7%94%9F%E4%BA%A7%E8%80%85%E5%92%8C%E6%B6%88%E8%B4%B9%E8%80%85"><span class="toc-number">1.14.</span> <span class="toc-text">13. spscring 在两处的生产者和消费者</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#13-1-io-can-net-tx-ring"><span class="toc-number">1.14.1.</span> <span class="toc-text">13.1 io_can_net.tx_ring</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-2-Linux-can-chan-rxring"><span class="toc-number">1.14.2.</span> <span class="toc-text">13.2 Linux can_chan.rxring</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-3-%E7%9B%B8%E5%90%8C%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84%EF%BC%8C%E4%B8%8D%E5%90%8C%E5%B1%82%E6%AC%A1%E8%AF%AD%E4%B9%89"><span class="toc-number">1.14.3.</span> <span class="toc-text">13.3 相同数据结构，不同层次语义</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-%E6%8E%A5%E6%94%B6%E4%BB%BB%E5%8A%A1%E4%B9%8B%E9%97%B4%E5%A6%82%E4%BD%95%E5%8D%8F%E4%BD%9C"><span class="toc-number">1.15.</span> <span class="toc-text">14. 接收任务之间如何协作</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#14-1-watch"><span class="toc-number">1.15.1.</span> <span class="toc-text">14.1 watch</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-2-rxbuf-task"><span class="toc-number">1.15.2.</span> <span class="toc-text">14.2 rxbuf_task</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-3-read-task"><span class="toc-number">1.15.3.</span> <span class="toc-text">14.3 read_task</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-4-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8B%86%E6%88%90%E4%B8%A4%E4%B8%AA-task"><span class="toc-number">1.15.4.</span> <span class="toc-text">14.4 为什么拆成两个 task</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E5%8F%91%E9%80%81%E4%BB%BB%E5%8A%A1%E4%B9%8B%E9%97%B4%E5%A6%82%E4%BD%95%E5%8D%8F%E4%BD%9C"><span class="toc-number">1.16.</span> <span class="toc-text">15. 发送任务之间如何协作</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#15-1-io-can-net-t-%E5%8F%91%E9%80%81%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.16.1.</span> <span class="toc-text">15.1 io_can_net_t 发送状态机</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-2-Linux-channel-%E5%8F%91%E9%80%81%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.16.2.</span> <span class="toc-text">15.2 Linux channel 发送状态机</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-3-%E4%B8%A4%E5%B1%82%E5%88%86%E5%88%AB%E8%A7%A3%E5%86%B3%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">1.16.3.</span> <span class="toc-text">15.3 两层分别解决的问题</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-%E4%B8%8E-io-tqueue-pheap-%E7%9A%84%E5%AE%8C%E6%95%B4%E8%BF%9E%E6%8E%A5"><span class="toc-number">1.17.</span> <span class="toc-text">16. 与 io_tqueue + pheap 的完整连接</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E6%BA%90%E7%A0%81"><span class="toc-number">1.18.</span> <span class="toc-text">参考源码</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#CAN-%E9%80%BB%E8%BE%91%E6%A0%B8%E5%BF%83"><span class="toc-number">1.18.1.</span> <span class="toc-text">CAN 逻辑核心</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#I-O-%E6%A1%A5%E6%8E%A5%E5%B1%82"><span class="toc-number">1.18.2.</span> <span class="toc-text">I&#x2F;O 桥接层</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#CAN-channel-%E6%8A%BD%E8%B1%A1%E4%B8%8E-Linux-%E5%90%8E%E7%AB%AF"><span class="toc-number">1.18.3.</span> <span class="toc-text">CAN channel 抽象与 Linux 后端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84"><span class="toc-number">1.18.4.</span> <span class="toc-text">数据结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%89%8D%E7%BD%AE%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0"><span class="toc-number">1.18.5.</span> <span class="toc-text">前置学习笔记</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8D%8F%E8%AE%AE%E5%8F%82%E8%80%83"><span class="toc-number">1.18.6.</span> <span class="toc-text">协议参考</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/78c092c/" title="Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程"/></a><div class="content"><a class="title" href="/posts/78c092c/" title="Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程">Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程</a><time datetime="2026-07-30T06:34:49.937Z" title="更新于 2026-07-30 14:34:49">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/77cd4175/" title="README"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="README"/></a><div class="content"><a class="title" href="/posts/77cd4175/" title="README">README</a><time datetime="2026-07-30T06:31:11.775Z" title="更新于 2026-07-30 14:31:11">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/178cc435/" title="Lely CANopen `coapp Device` 本地 SDO PDO 读写、远程对象映射与运行机制"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen `coapp Device` 本地 SDO PDO 读写、远程对象映射与运行机制"/></a><div class="content"><a class="title" href="/posts/178cc435/" title="Lely CANopen `coapp Device` 本地 SDO PDO 读写、远程对象映射与运行机制">Lely CANopen `coapp Device` 本地 SDO PDO 读写、远程对象映射与运行机制</a><time datetime="2026-07-30T02:35:15.396Z" title="更新于 2026-07-30 10:35:15">2026-07-30</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/84d7829a/" title="Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制"/></a><div class="content"><a class="title" href="/posts/84d7829a/" title="Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制">Lely CANopen：co_dev 设备对象字典与 DCF 和 PDO 事件机制</a><time datetime="2026-07-29T09:37:37.543Z" title="更新于 2026-07-29 17:37:37">2026-07-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/1f644911/" title="Lely CANopen：can_net、io_can_net设计原理"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen：can_net、io_can_net设计原理"/></a><div class="content"><a class="title" href="/posts/1f644911/" title="Lely CANopen：can_net、io_can_net设计原理">Lely CANopen：can_net、io_can_net设计原理</a><time datetime="2026-07-29T06:20:17.738Z" title="更新于 2026-07-29 14:20:17">2026-07-29</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/07.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '5cdae1f5dc9b53446bfa861a44017b3e'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",398],["2025-10-04",5],["2025-10-06",9],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",3],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",3]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [440,16,6,11,9,9,5,2,21,37],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":38},{"name":"fs","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":266},{"name":"uboot","value":68},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":68,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"canopen","children":[],"count":32,"path":"canopen"},{"name":"杂谈","children":[],"count":35,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":17,"path":"嵌入式面试真题"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":266,"path":"linux"},{"name":"MCU","children":[],"count":38,"path":"MCU"},{"name":"git","children":[],"count":12,"path":"git"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>
