@@ -1,0 +1,1734 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Lely CANopen：CSDO&amp;SSDO 客户端服务器 SDO 状态机、分段与块传输机制 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Lely CANopen：CSDO&#x2F;SSDO 客户端服务器 SDO 状态机、分段与块传输机制 @[toc] 一句话结论Lely 将 SDO 实现拆成客户端和服务器两个事件驱动状态机：  co_csdo_t 主动发起远程上传或下载，负责构造请求帧、等待响应、维护超时、toggle、块序号、CRC、进度与完成回调； co_ssdo_t 被动接收客户端请求，负责解析命令、定位对象字典、调用">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Lely CANopen：CSDO&amp;SSDO 客户端服务器 SDO 状态机、分段与块传输机制">
+<meta property="og:url" content="https://wdfk-prog.space/posts/5abb5f73/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Lely CANopen：CSDO&#x2F;SSDO 客户端服务器 SDO 状态机、分段与块传输机制 @[toc] 一句话结论Lely 将 SDO 实现拆成客户端和服务器两个事件驱动状态机：  co_csdo_t 主动发起远程上传或下载，负责构造请求帧、等待响应、维护超时、toggle、块序号、CRC、进度与完成回调； co_ssdo_t 被动接收客户端请求，负责解析命令、定位对象字典、调用">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/06.jpg">
+<meta property="article:published_time" content="2026-07-31T02:41:30.000Z">
+<meta property="article:modified_time" content="2026-07-31T02:41:48.229Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="canopen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/06.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lely CANopen：CSDO&SSDO 客户端服务器 SDO 状态机、分段与块传输机制",
+  "url": "https://wdfk-prog.space/posts/5abb5f73/",
+  "image": "https://wdfk-prog.space/images/covers/06.jpg",
+  "datePublished": "2026-07-31T02:41:30.000Z",
+  "dateModified": "2026-07-31T02:41:48.229Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/5abb5f73/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Lely CANopen：CSDO&SSDO 客户端服务器 SDO 状态机、分段与块传输机制',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">564</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/06.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">Lely CANopen：CSDO&amp;SSDO 客户端服务器 SDO 状态机、分段与块传输机制</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Lely CANopen：CSDO&amp;SSDO 客户端服务器 SDO 状态机、分段与块传输机制<a class="post-edit-link" href="null_posts/canopen/Lely CANopen：CSDO&amp;SSDO 客户端服务器 SDO 状态机、分段与块传输机制.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-31T02:41:30.000Z" title="发表于 2026-07-31 10:41:30">2026-07-31</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-31T02:41:48.229Z" title="更新于 2026-07-31 10:41:48">2026-07-31</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/canopen/">canopen</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6.9k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>29分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/5abb5f73/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-07-31 10:41:48&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Lely-CANopen：CSDO-SSDO-客户端服务器-SDO-状态机、分段与块传输机制"><a href="#Lely-CANopen：CSDO-SSDO-客户端服务器-SDO-状态机、分段与块传输机制" class="headerlink" title="Lely CANopen：CSDO&#x2F;SSDO 客户端服务器 SDO 状态机、分段与块传输机制"></a>Lely CANopen：CSDO&#x2F;SSDO 客户端服务器 SDO 状态机、分段与块传输机制</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/4383c3b166a84ec9b378cd7668e20280.png" alt="在这里插入图片描述"></p>
+<p>@[toc]</p>
+<h2 id="一句话结论"><a href="#一句话结论" class="headerlink" title="一句话结论"></a>一句话结论</h2><p>Lely 将 SDO 实现拆成客户端和服务器两个事件驱动状态机：</p>
+<ul>
+<li><code>co_csdo_t</code> 主动发起远程上传或下载，负责构造请求帧、等待响应、维护超时、toggle、块序号、CRC、进度与完成回调；</li>
+<li><code>co_ssdo_t</code> 被动接收客户端请求，负责解析命令、定位对象字典、调用 <code>co_sub_dn_ind()</code>&#x2F;<code>co_sub_up_ind()</code>，并生成成功响应或 SDO abort；</li>
+<li>两者都依赖 <code>can_net_t</code> 的 receiver、timer 和 send callback，本身不创建线程，也不直接操作 SocketCAN；</li>
+<li>快速传输只有初始化帧，分段传输每帧最多携带 7 字节并交替 toggle bit，块传输以最多 127 个 segment 组成一个 block，通过 <code>ackseq</code>、<code>blksize</code> 和可选 CRC 实现 Go-Back-N 式恢复；</li>
+<li>CSDO 的完成回调在状态机回到空闲态后触发，因此回调中可以提交下一次请求；SSDO 没有服务级完成回调，其应用语义集中在对象字典 indication；</li>
+<li>动态修改 <code>0x1200..0x12FF</code> 会中止正在进行的传输并重新注册 CAN receiver，参数更新不是透明操作。</li>
+</ul>
+<p>最重要的运行模型是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">application request or incoming CAN frame</span><br><span class="line">    ↓</span><br><span class="line">can_net_t receiver/timer callback</span><br><span class="line">    ↓</span><br><span class="line">CSDO or SSDO finite-state machine</span><br><span class="line">    ↓</span><br><span class="line">command validation, timeout, toggle, sequence and CRC</span><br><span class="line">    ↓</span><br><span class="line">co_sdo_req</span><br><span class="line">    ↓</span><br><span class="line">co_sub_dn_ind / co_sub_up_ind</span><br><span class="line">    ↓</span><br><span class="line">object dictionary and application callback</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="1-四个核心文件的职责边界"><a href="#1-四个核心文件的职责边界" class="headerlink" title="1. 四个核心文件的职责边界"></a>1. 四个核心文件的职责边界</h2><h3 id="1-1-include-lely-co-csdo-h"><a href="#1-1-include-lely-co-csdo-h" class="headerlink" title="1.1 include/lely/co/csdo.h"></a>1.1 <code>include/lely/co/csdo.h</code></h3><p>该头文件公开 Client-SDO API：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">local object dictionary request helpers</span><br><span class="line">Client-SDO create/start/stop/destroy</span><br><span class="line">parameter and timeout access</span><br><span class="line">request progress callbacks</span><br><span class="line">download/upload confirmation callbacks</span><br><span class="line">normal download/upload requests</span><br><span class="line">block download/upload requests</span><br><span class="line">abort transfer request</span><br></pre></td></tr></table></figure>
+
+<p>它是主站侧或其他 SDO 客户端主动访问远端对象字典的底层 C 接口。</p>
+<h3 id="1-2-src-co-csdo-c"><a href="#1-2-src-co-csdo-c" class="headerlink" title="1.2 src/co/csdo.c"></a>1.2 <code>src/co/csdo.c</code></h3><p>该文件实现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">CSDO service object</span><br><span class="line">client-side finite-state machine</span><br><span class="line">CAN request frame construction</span><br><span class="line">response frame validation</span><br><span class="line">timeout handling</span><br><span class="line">expedited and segmented transfer</span><br><span class="line">block transfer, retransmission and CRC</span><br><span class="line">progress and completion callbacks</span><br><span class="line">concise DCF sequential download</span><br></pre></td></tr></table></figure>
+
+<h3 id="1-3-include-lely-co-ssdo-h"><a href="#1-3-include-lely-co-ssdo-h" class="headerlink" title="1.3 include/lely/co/ssdo.h"></a>1.3 <code>include/lely/co/ssdo.h</code></h3><p>该头文件公开 Server-SDO 的生命周期、参数查询和 timeout 配置接口。与 CSDO 相比，它没有“主动上传&#x2F;下载”API，因为 SSDO 的动作由收到的客户端请求触发。</p>
+<h3 id="1-4-src-co-ssdo-c"><a href="#1-4-src-co-ssdo-c" class="headerlink" title="1.4 src/co/ssdo.c"></a>1.4 <code>src/co/ssdo.c</code></h3><p>该文件实现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">SSDO service object</span><br><span class="line">server-side finite-state machine</span><br><span class="line">request frame dispatch</span><br><span class="line">object dictionary lookup</span><br><span class="line">co_sub_dn_ind / co_sub_up_ind bridge</span><br><span class="line">expedited and segmented response</span><br><span class="line">block transfer, acknowledgment and CRC</span><br><span class="line">timeout and abort response</span><br></pre></td></tr></table></figure>
+
+<h3 id="1-5-与-sdo-c-的分层关系"><a href="#1-5-与-sdo-c-的分层关系" class="headerlink" title="1.5 与 sdo.c 的分层关系"></a>1.5 与 <code>sdo.c</code> 的分层关系</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;CAN frame and timer events&quot;] --&gt; B[&quot;csdo.c or ssdo.c protocol state machine&quot;]</span><br><span class="line">    B --&gt; C[&quot;co_sdo_req segment description&quot;]</span><br><span class="line">    C --&gt; D[&quot;co_sub_dn_ind or co_sub_up_ind&quot;]</span><br><span class="line">    D --&gt; E[&quot;object dictionary value and application callback&quot;]</span><br></pre></td></tr></table></figure>
+
+<p><code>csdo.c</code>&#x2F;<code>ssdo.c</code> 知道协议命令字、toggle、timeout、block sequence 和 CRC；<code>sdo.c</code> 只负责请求片段、数据聚合和类型序列化。</p>
+<hr>
+<h2 id="2-CSDO-与-SSDO-的方向不要混淆"><a href="#2-CSDO-与-SSDO-的方向不要混淆" class="headerlink" title="2. CSDO 与 SSDO 的方向不要混淆"></a>2. CSDO 与 SSDO 的方向不要混淆</h2><p>CANopen 使用“上传&#x2F;下载”描述相对于 Server-SDO 对象字典的数据方向：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>数据方向</th>
+<th>CSDO 行为</th>
+<th>SSDO 行为</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>SDO download</td>
+<td>Client → Server</td>
+<td>发送本地数据</td>
+<td>写远端对象字典</td>
+</tr>
+<tr>
+<td>SDO upload</td>
+<td>Server → Client</td>
+<td>接收远端数据</td>
+<td>读取本地对象字典</td>
+</tr>
+</tbody></table>
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">co_csdo_dn_req()</span><br><span class="line">    client sends bytes to server</span><br><span class="line"></span><br><span class="line">co_ssdo_dn_ind()</span><br><span class="line">    server writes those bytes into local OD</span><br><span class="line"></span><br><span class="line">co_csdo_up_req()</span><br><span class="line">    client requests bytes from server</span><br><span class="line"></span><br><span class="line">co_ssdo_up_ind()</span><br><span class="line">    server reads bytes from local OD</span><br></pre></td></tr></table></figure>
+
+<p><code>CSDO</code> 是 Client-SDO，<code>SSDO</code> 是 Server-SDO。官方网页的个别文字可能把 Server-SDO 后的缩写误写为 CSDO，但源码类型名和头文件边界是明确的：<code>co_csdo_t</code> 对应客户端，<code>co_ssdo_t</code> 对应服务器。</p>
+<hr>
+<h2 id="3-SDO-连接参数与对象字典"><a href="#3-SDO-连接参数与对象字典" class="headerlink" title="3. SDO 连接参数与对象字典"></a>3. SDO 连接参数与对象字典</h2><h3 id="3-1-参数对象范围"><a href="#3-1-参数对象范围" class="headerlink" title="3.1 参数对象范围"></a>3.1 参数对象范围</h3><table>
+<thead>
+<tr>
+<th>角色</th>
+<th align="right">对象范围</th>
+<th align="right">典型对象</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Server-SDO 参数</td>
+<td align="right"><code>0x1200..0x127F</code></td>
+<td align="right"><code>0x1200</code> 为默认 SSDO</td>
+</tr>
+<tr>
+<td>Client-SDO 参数</td>
+<td align="right"><code>0x1280..0x12FF</code></td>
+<td align="right"><code>0x1280</code> 为第一个 CSDO</td>
+</tr>
+</tbody></table>
+<p>参数记录由 <code>struct co_sdo_par</code> 表示：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">co_sdo_par</span> &#123;</span></span><br><span class="line">    <span class="type">co_unsigned8_t</span> n;</span><br><span class="line">    <span class="type">co_unsigned32_t</span> cobid_req;</span><br><span class="line">    <span class="type">co_unsigned32_t</span> cobid_res;</span><br><span class="line">    <span class="type">co_unsigned8_t</span> id;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>字段含义：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>n</code></td>
+<td>最高支持子索引</td>
+</tr>
+<tr>
+<td><code>cobid_req</code></td>
+<td>Client → Server 请求 COB-ID</td>
+</tr>
+<tr>
+<td><code>cobid_res</code></td>
+<td>Server → Client 响应 COB-ID</td>
+</tr>
+<tr>
+<td><code>id</code></td>
+<td>对端 Node-ID</td>
+</tr>
+</tbody></table>
+<h3 id="3-2-默认连接集"><a href="#3-2-默认连接集" class="headerlink" title="3.2 默认连接集"></a>3.2 默认连接集</h3><p>当 Node-ID 为 <code>N</code> 时，默认 SDO 使用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">request COB-ID  = 0x600 + N</span><br><span class="line">response COB-ID = 0x580 + N</span><br></pre></td></tr></table></figure>
+
+<p>例如 Node-ID 1：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Client → Server    0x601</span><br><span class="line">Server → Client    0x581</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-3-位-31-的语义"><a href="#3-3-位-31-的语义" class="headerlink" title="3.3 位 31 的语义"></a>3.3 位 31 的语义</h3><p><code>CO_SDO_COBID_VALID</code> 的名称容易误导。该位被置位时表示对应 COB-ID 无效或服务不存在；请求与响应 COB-ID 的 invalid bit 都清零，服务才可用。</p>
+<hr>
+<h2 id="4-两个服务对象内部保存了什么"><a href="#4-两个服务对象内部保存了什么" class="headerlink" title="4. 两个服务对象内部保存了什么"></a>4. 两个服务对象内部保存了什么</h2><h2 id="4-1-struct-co-csdo"><a href="#4-1-struct-co-csdo" class="headerlink" title="4.1 struct __co_csdo"></a>4.1 <code>struct __co_csdo</code></h2><p>CSDO 的主要字段可分为六组：</p>
+<table>
+<thead>
+<tr>
+<th>组别</th>
+<th>字段</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>连接</td>
+<td><code>net</code>、<code>dev</code>、<code>num</code>、<code>par</code></td>
+<td>CAN 网络、对象字典和 SDO 参数</td>
+</tr>
+<tr>
+<td>事件源</td>
+<td><code>recv</code>、<code>timer</code>、<code>timeout</code></td>
+<td>响应接收和协议超时</td>
+</tr>
+<tr>
+<td>状态机</td>
+<td><code>state</code>、<code>ac</code>、<code>idx</code>、<code>subidx</code></td>
+<td>当前状态、abort code 和对象地址</td>
+</tr>
+<tr>
+<td>分段</td>
+<td><code>size</code>、<code>toggle</code></td>
+<td>总长度与 toggle bit</td>
+</tr>
+<tr>
+<td>块传输</td>
+<td><code>blksize</code>、<code>pst</code>、<code>ackseq</code>、<code>crc</code></td>
+<td>block 协商、恢复和 CRC</td>
+</tr>
+<tr>
+<td>缓冲&#x2F;回调</td>
+<td><code>dn_buf</code>、<code>up_buf</code>、<code>buf</code>、各类 callback</td>
+<td>下载源、上传目标、序列化和通知</td>
+</tr>
+</tbody></table>
+<p>关键区别：</p>
+<ul>
+<li><code>dn_buf</code> 通常直接引用用户传给 <code>co_csdo_dn_req()</code> 的缓冲区；</li>
+<li><code>up_buf</code> 指向上传结果缓冲区，默认使用 CSDO 自己的 <code>buf</code>；</li>
+<li><code>buf</code> 也用于 <code>co_csdo_dn_val_req()</code> 把类型值序列化为字节流；</li>
+<li>一个 CSDO 同时只允许一个进行中的请求。</li>
+</ul>
+<h2 id="4-2-struct-co-ssdo"><a href="#4-2-struct-co-ssdo" class="headerlink" title="4.2 struct __co_ssdo"></a>4.2 <code>struct __co_ssdo</code></h2><p>SSDO 保存：</p>
+<table>
+<thead>
+<tr>
+<th>组别</th>
+<th>字段</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>连接</td>
+<td><code>net</code>、<code>dev</code>、<code>num</code>、<code>par</code></td>
+<td>本地服务器和 SDO 参数</td>
+</tr>
+<tr>
+<td>事件源</td>
+<td><code>recv</code>、<code>timer</code>、<code>timeout</code></td>
+<td>请求接收和协议超时</td>
+</tr>
+<tr>
+<td>状态机</td>
+<td><code>state</code>、<code>idx</code>、<code>subidx</code></td>
+<td>当前协议状态和访问地址</td>
+</tr>
+<tr>
+<td>分段</td>
+<td><code>toggle</code>、<code>req</code></td>
+<td>toggle 和对象访问请求</td>
+</tr>
+<tr>
+<td>块传输</td>
+<td><code>blksize</code>、<code>ackseq</code>、<code>gencrc</code>、<code>crc</code></td>
+<td>block 接收&#x2F;发送状态</td>
+</tr>
+<tr>
+<td>缓冲</td>
+<td><code>buf</code>、<code>nbyte</code></td>
+<td>segment&#x2F;block 临时数据与当前 request 消费位置</td>
+</tr>
+</tbody></table>
+<p>SSDO 不保存完成回调。完成或失败最终表现为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">CAN response or abort frame</span><br><span class="line">+ object dictionary indication result</span><br><span class="line">+ optional application side effect inside indication</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="5-Lely-的状态机不是-switch-enum-state"><a href="#5-Lely-的状态机不是-switch-enum-state" class="headerlink" title="5. Lely 的状态机不是 switch(enum state)"></a>5. Lely 的状态机不是 <code>switch(enum state)</code></h2><p>官方 FSM 文档说明，Lely 服务对象使用函数指针驱动的事件状态机。CSDO 和 SSDO 都为每个状态定义一组处理函数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">on_enter</span><br><span class="line">on_abort</span><br><span class="line">on_time</span><br><span class="line">on_recv</span><br><span class="line">on_leave</span><br></pre></td></tr></table></figure>
+
+<p>CSDO 的状态结构包含完整的 enter&#x2F;leave 钩子；SSDO 状态结构只包含 abort、time 和 recv 转移。</p>
+<h3 id="5-1-CSDO-状态进入逻辑"><a href="#5-1-CSDO-状态进入逻辑" class="headerlink" title="5.1 CSDO 状态进入逻辑"></a>5.1 CSDO 状态进入逻辑</h3><p><code>co_csdo_enter()</code> 支持瞬态状态：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">set next state</span><br><span class="line">    ↓</span><br><span class="line">invoke previous state&#x27;s on_leave</span><br><span class="line">    ↓</span><br><span class="line">invoke next state&#x27;s on_enter</span><br><span class="line">    ↓</span><br><span class="line">if on_enter returns another state, continue immediately</span><br></pre></td></tr></table></figure>
+
+<p><code>abort_state</code> 就是典型瞬态状态：</p>
+<ol>
+<li>进入时停止 timer；</li>
+<li>立即返回 <code>wait_state</code>；</li>
+<li>离开 <code>abort_state</code> 时调用完成 callback。</li>
+</ol>
+<p>这意味着完成 callback 被调用时，CSDO 已经回到 idle 状态。应用可以在 callback 内提交下一次 SDO 请求，而不会因“上一请求仍忙”被拒绝。</p>
+<h3 id="5-2-SSDO-状态进入逻辑"><a href="#5-2-SSDO-状态进入逻辑" class="headerlink" title="5.2 SSDO 状态进入逻辑"></a>5.2 SSDO 状态进入逻辑</h3><p><code>co_ssdo_enter()</code> 只替换 <code>state</code> 指针。初始化请求不是长期等待状态：SSDO 在 <code>wait_state</code> 收到 initiate frame 后直接调用对应处理函数，再进入 segment 或 block 状态。</p>
+<p>这是客户端和服务器状态结构不完全对称的原因：</p>
+<ul>
+<li>Client 发起请求后必须等待远端 initiate response；</li>
+<li>Server 收到 initiate request 时可以同步完成解析、对象访问和首个响应。</li>
+</ul>
+<hr>
+<h2 id="6-CSDO-状态集合"><a href="#6-CSDO-状态集合" class="headerlink" title="6. CSDO 状态集合"></a>6. CSDO 状态集合</h2><p>CSDO 定义的主要状态：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">stopped</span><br><span class="line">waiting</span><br><span class="line">abort transfer</span><br><span class="line">normal download initiate</span><br><span class="line">normal download segment</span><br><span class="line">normal upload initiate</span><br><span class="line">normal upload segment</span><br><span class="line">block download initiate</span><br><span class="line">block download sub-block</span><br><span class="line">block download end</span><br><span class="line">block upload initiate</span><br><span class="line">block upload sub-block</span><br><span class="line">block upload end</span><br></pre></td></tr></table></figure>
+
+<p>总览：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    S0[&quot;stopped&quot;] --&gt; S1[&quot;waiting&quot;]</span><br><span class="line">    S1 --&gt; D0[&quot;download initiate&quot;]</span><br><span class="line">    D0 --&gt; D1[&quot;download segment&quot;]</span><br><span class="line">    D1 --&gt; S2[&quot;abort or complete&quot;]</span><br><span class="line">    S1 --&gt; U0[&quot;upload initiate&quot;]</span><br><span class="line">    U0 --&gt; U1[&quot;upload segment&quot;]</span><br><span class="line">    U1 --&gt; S2</span><br><span class="line">    S1 --&gt; BD0[&quot;block download initiate&quot;]</span><br><span class="line">    BD0 --&gt; BD1[&quot;block download sub-block&quot;]</span><br><span class="line">    BD1 --&gt; BD2[&quot;block download end&quot;]</span><br><span class="line">    BD2 --&gt; S2</span><br><span class="line">    S1 --&gt; BU0[&quot;block upload initiate&quot;]</span><br><span class="line">    BU0 --&gt; BU1[&quot;block upload sub-block&quot;]</span><br><span class="line">    BU1 --&gt; BU2[&quot;block upload end&quot;]</span><br><span class="line">    BU2 --&gt; S2</span><br><span class="line">    S2 --&gt; S1</span><br></pre></td></tr></table></figure>
+
+<p>快速传输不单独定义状态，它在 initiate 状态收到响应后直接完成。</p>
+<hr>
+<h2 id="7-SSDO-状态集合"><a href="#7-SSDO-状态集合" class="headerlink" title="7. SSDO 状态集合"></a>7. SSDO 状态集合</h2><p>SSDO 的长期状态更少：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">stopped</span><br><span class="line">waiting</span><br><span class="line">normal download segment</span><br><span class="line">normal upload segment</span><br><span class="line">block download sub-block</span><br><span class="line">block download end</span><br><span class="line">block upload sub-block</span><br><span class="line">block upload end</span><br></pre></td></tr></table></figure>
+
+<p><code>download initiate</code>、<code>upload initiate</code>、<code>block download initiate</code> 和 <code>block upload initiate</code> 只是 <code>wait_state</code> 内部直接调用的处理函数，并未实例化为独立长期状态。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;waiting&quot;] --&gt;|&quot;download initiate request&quot;| B[&quot;parse and access OD&quot;]</span><br><span class="line">    B --&gt;|&quot;expedited complete&quot;| A</span><br><span class="line">    B --&gt;|&quot;segmented&quot;| C[&quot;download segment&quot;]</span><br><span class="line">    C --&gt; A</span><br><span class="line">    A --&gt;|&quot;upload initiate request&quot;| D[&quot;read OD and choose mode&quot;]</span><br><span class="line">    D --&gt;|&quot;expedited complete&quot;| A</span><br><span class="line">    D --&gt;|&quot;segmented&quot;| E[&quot;upload segment&quot;]</span><br><span class="line">    E --&gt; A</span><br><span class="line">    A --&gt;|&quot;block request&quot;| F[&quot;block sub-block states&quot;]</span><br><span class="line">    F --&gt; A</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="8-创建、启动、停止和销毁"><a href="#8-创建、启动、停止和销毁" class="headerlink" title="8. 创建、启动、停止和销毁"></a>8. 创建、启动、停止和销毁</h2><h2 id="8-1-CSDO-创建"><a href="#8-1-CSDO-创建" class="headerlink" title="8.1 CSDO 创建"></a>8.1 CSDO 创建</h2><p><code>co_csdo_create(net, dev, num)</code> 最终执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">validate num</span><br><span class="line">find 0x1280 + num - 1 when dev is non-NULL</span><br><span class="line">initialize default SDO parameters</span><br><span class="line">create CAN receiver</span><br><span class="line">create timeout timer</span><br><span class="line">initialize state and buffers</span><br><span class="line">start service</span><br></pre></td></tr></table></figure>
+
+<p>当 <code>dev == NULL</code> 时，<code>num</code> 不再表示 SDO 编号，而是 Node-ID，范围为 <code>1..127</code>。CSDO 直接使用默认请求&#x2F;响应 COB-ID，因此主站应用无需先构造 <code>0x1280</code> 参数对象。</p>
+<p>当 <code>dev != NULL</code> 时，<code>num</code> 表示 <code>1..128</code> 的 Client-SDO 编号，对应参数对象必须存在。</p>
+<h2 id="8-2-SSDO-创建"><a href="#8-2-SSDO-创建" class="headerlink" title="8.2 SSDO 创建"></a>8.2 SSDO 创建</h2><p><code>co_ssdo_create(net, dev, num)</code> 要求本地 <code>co_dev_t</code> 必须存在。对于第一个 SSDO：</p>
+<ul>
+<li><code>0x1200</code> 参数对象可以不存在；</li>
+<li>服务使用本地 Node-ID 推导默认 COB-ID。</li>
+</ul>
+<p>对于第 2 到第 128 个 SSDO，对应 <code>0x1200 + num - 1</code> 参数对象必须存在。</p>
+<h2 id="8-3-start-做了什么"><a href="#8-3-start-做了什么" class="headerlink" title="8.3 start() 做了什么"></a>8.3 <code>start()</code> 做了什么</h2><p>CSDO：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">copy 0x1280..0x12FF parameters</span><br><span class="line">install parameter download indication</span><br><span class="line">enter waiting state</span><br><span class="line">register response COB-ID receiver</span><br></pre></td></tr></table></figure>
+
+<p>SSDO：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">enter waiting state</span><br><span class="line">copy 0x1200..0x127F parameters if object exists</span><br><span class="line">install parameter download indication</span><br><span class="line">register request COB-ID receiver</span><br></pre></td></tr></table></figure>
+
+<h2 id="8-4-stop-做了什么"><a href="#8-4-stop-做了什么" class="headerlink" title="8.4 stop() 做了什么"></a>8.4 <code>stop()</code> 做了什么</h2><p>两个服务都会：</p>
+<ol>
+<li>用 <code>CO_SDO_AC_NO_SDO</code> 中止当前传输；</li>
+<li>停止 timer；</li>
+<li>注销 CAN receiver；</li>
+<li>移除参数对象的 download indication；</li>
+<li>进入 stopped 状态。</li>
+</ol>
+<p>CSDO 停止时，进行中请求的 confirmation callback 会收到 abort code；SSDO 停止时会清理协议状态，但没有服务级用户 completion callback。</p>
+<hr>
+<h2 id="9-can-net-t-是协议栈与平台之间的边界"><a href="#9-can-net-t-是协议栈与平台之间的边界" class="headerlink" title="9. can_net_t 是协议栈与平台之间的边界"></a>9. <code>can_net_t</code> 是协议栈与平台之间的边界</h2><p>CSDO&#x2F;SSDO 都只依赖三个 <code>can_net_t</code> 能力：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">can_recv_start / can_recv_stop</span><br><span class="line">can_timer_timeout / can_timer_stop</span><br><span class="line">can_net_send</span><br></pre></td></tr></table></figure>
+
+<p>完整运行链路是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;SocketCAN or MCU CAN driver&quot;] --&gt; B[&quot;application adapter&quot;]</span><br><span class="line">    B --&gt; C[&quot;can_net_recv&quot;]</span><br><span class="line">    C --&gt; D[&quot;CSDO or SSDO receiver callback&quot;]</span><br><span class="line">    D --&gt; E[&quot;state transition&quot;]</span><br><span class="line">    E --&gt; F[&quot;can_net_send&quot;]</span><br><span class="line">    F --&gt; B</span><br><span class="line">    G[&quot;system or RTOS time&quot;] --&gt; H[&quot;can_net_set_time&quot;]</span><br><span class="line">    H --&gt; I[&quot;SDO timer callback&quot;]</span><br><span class="line">    I --&gt; E</span><br></pre></td></tr></table></figure>
+
+<p>因此创建 CSDO&#x2F;SSDO 并不代表总线已经工作。应用必须：</p>
+<ul>
+<li>把收到的 CAN 帧喂给 <code>can_net_recv()</code>；</li>
+<li>把协议栈产生的发送帧写到实际 CAN 驱动；</li>
+<li>持续调用 <code>can_net_set_time()</code> 推进 timer。</li>
+</ul>
+<p>如果只接入 CAN 收发但不推进时间，SDO timeout 永远不会触发。</p>
+<hr>
+<h2 id="10-本地对象访问-API-与远程-CSDO-不同"><a href="#10-本地对象访问-API-与远程-CSDO-不同" class="headerlink" title="10. 本地对象访问 API 与远程 CSDO 不同"></a>10. 本地对象访问 API 与远程 CSDO 不同</h2><p><code>csdo.h</code> 同时提供：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">co_dev_dn_req / co_dev_dn_val_req / co_dev_dn_dcf_req</span><br><span class="line">co_dev_up_req</span><br></pre></td></tr></table></figure>
+
+<p>这些函数名称位于 CSDO 头文件中，但它们不会发送 CAN 帧，也不会进入 CSDO 状态机。</p>
+<p>本地下载流程：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">find object and sub-object</span><br><span class="line">construct complete co_sdo_req</span><br><span class="line">co_sub_dn_ind</span><br><span class="line">invoke confirmation with sdo == NULL</span><br></pre></td></tr></table></figure>
+
+<p>本地上传流程：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">find object and sub-object</span><br><span class="line">co_sub_up_ind</span><br><span class="line">collect all request segments into membuf</span><br><span class="line">invoke confirmation with sdo == NULL</span><br></pre></td></tr></table></figure>
+
+<p>重要区别：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th><code>co_dev_*_req()</code></th>
+<th><code>co_csdo_*_req()</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>目标</td>
+<td>本地对象字典</td>
+<td>远端对象字典</td>
+</tr>
+<tr>
+<td>CAN 报文</td>
+<td>无</td>
+<td>有</td>
+</tr>
+<tr>
+<td>完成方式</td>
+<td>当前调用内同步完成</td>
+<td>由后续 CAN&#x2F;time 事件异步完成</td>
+</tr>
+<tr>
+<td>callback 中 <code>sdo</code></td>
+<td><code>NULL</code></td>
+<td>当前 CSDO 指针</td>
+</tr>
+<tr>
+<td>timeout</td>
+<td>无</td>
+<td>可配置</td>
+</tr>
+</tbody></table>
+<p>应用不能根据函数名中的 <code>req</code> 就假定它一定异步。</p>
+<hr>
+<h2 id="11-CSDO-提交请求前的统一检查"><a href="#11-CSDO-提交请求前的统一检查" class="headerlink" title="11. CSDO 提交请求前的统一检查"></a>11. CSDO 提交请求前的统一检查</h2><p>正常和块传输都先通过内部请求初始化函数：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">service must be valid</span><br><span class="line">service must be idle</span><br><span class="line">save index and sub-index</span><br><span class="line">reset abort/toggle/block/CRC state</span><br><span class="line">bind download source or upload destination buffer</span><br><span class="line">save confirmation callback</span><br></pre></td></tr></table></figure>
+
+<p>若连接无效或已有请求正在进行，函数返回 <code>-1</code> 并设置 <code>ERRNUM_INVAL</code>，不会排队等待。</p>
+<p>因此一个 <code>co_csdo_t</code> 同时只能处理一个请求。并行访问多个节点或多条 SDO 通道时，应创建多个 CSDO service，或在上层实现请求队列。</p>
+<hr>
+<h2 id="12-快速下载：Client-写入-1-到-4-字节"><a href="#12-快速下载：Client-写入-1-到-4-字节" class="headerlink" title="12. 快速下载：Client 写入 1 到 4 字节"></a>12. 快速下载：Client 写入 1 到 4 字节</h2><p><code>co_csdo_dn_req()</code> 根据长度选择协议：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">1..4 bytes    expedited download</span><br><span class="line">0 or &gt;4       normal segmented download</span><br></pre></td></tr></table></figure>
+
+<p>快速下载流程：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;co_csdo_dn_req&quot;] --&gt; B[&quot;build initiate download request&quot;]</span><br><span class="line">    B --&gt; C[&quot;embed 1 to 4 data bytes&quot;]</span><br><span class="line">    C --&gt; D[&quot;send request&quot;]</span><br><span class="line">    D --&gt; E[&quot;wait for initiate response&quot;]</span><br><span class="line">    E --&gt; F[&quot;verify command, index and sub-index&quot;]</span><br><span class="line">    F --&gt; G[&quot;completion callback&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>典型 4 字节下载命令字为 <code>0x23</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">byte 0      command specifier</span><br><span class="line">byte 1..2   index, little-endian</span><br><span class="line">byte 3      sub-index</span><br><span class="line">byte 4..7   value, little-endian</span><br></pre></td></tr></table></figure>
+
+<p>SSDO 收到快速下载后：</p>
+<ol>
+<li>解析 index&#x2F;sub-index 和数据长度；</li>
+<li>将 <code>req.buf</code> 直接指向当前 CAN frame 的数据区；</li>
+<li>调用 <code>co_sub_dn_ind()</code>；</li>
+<li>成功则发送 download initiate response；</li>
+<li>失败则发送 SDO abort。</li>
+</ol>
+<p><code>req.buf</code> 只在同步 indication 调用期间有效，应用 callback 不能保存该指针供以后使用。</p>
+<hr>
+<h2 id="13-0-字节值为什么走分段下载"><a href="#13-0-字节值为什么走分段下载" class="headerlink" title="13. 0 字节值为什么走分段下载"></a>13. 0 字节值为什么走分段下载</h2><p>CSDO 的快速路径条件是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">size != 0 and size &lt;= 4</span><br></pre></td></tr></table></figure>
+
+<p>因此 0 字节对象不会使用 expedited transfer。分段状态会专门发送一个空的最后 segment，并借助 toggle 状态确认它确实已经发送。</p>
+<p>这不是普通应用的常见对象类型，但对 DOMAIN、空文件或自定义对象测试很有价值。</p>
+<hr>
+<h2 id="14-普通分段下载状态机"><a href="#14-普通分段下载状态机" class="headerlink" title="14. 普通分段下载状态机"></a>14. 普通分段下载状态机</h2><h3 id="14-1-CSDO-侧"><a href="#14-1-CSDO-侧" class="headerlink" title="14.1 CSDO 侧"></a>14.1 CSDO 侧</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">send download initiate request with total size</span><br><span class="line">    ↓</span><br><span class="line">wait for initiate response</span><br><span class="line">    ↓</span><br><span class="line">send at most 7 bytes in each segment</span><br><span class="line">    ↓</span><br><span class="line">wait for one response after every segment</span><br><span class="line">    ↓</span><br><span class="line">toggle bit alternates</span><br><span class="line">    ↓</span><br><span class="line">last segment acknowledged</span><br><span class="line">    ↓</span><br><span class="line">completion callback</span><br></pre></td></tr></table></figure>
+
+<p>每次进入 <code>download segment</code> 状态，CSDO 从 <code>dn_buf</code> 计算剩余字节数，最多发送 7 字节，并在等待响应前重新启动 timeout。</p>
+<h3 id="14-2-toggle-检查"><a href="#14-2-toggle-检查" class="headerlink" title="14.2 toggle 检查"></a>14.2 toggle 检查</h3><p>发送 segment 时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">command contains current toggle</span><br><span class="line">then local toggle flips</span><br></pre></td></tr></table></figure>
+
+<p>收到 server response 时，源码检查响应 toggle 是否已经变化。若不符合预期，发送 <code>CO_SDO_AC_TOGGLE</code> abort。</p>
+<h3 id="14-3-SSDO-侧"><a href="#14-3-SSDO-侧" class="headerlink" title="14.3 SSDO 侧"></a>14.3 SSDO 侧</h3><p>SSDO 在 initiate 阶段先调用一次 download indication，使对象回调有机会仅根据：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">req.size</span><br><span class="line">req.offset = 0</span><br><span class="line">req.nbyte = 0</span><br></pre></td></tr></table></figure>
+
+<p>预先拒绝非法长度或当前状态下不允许的写入。</p>
+<p>随后每收到一个 segment：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">verify command</span><br><span class="line">verify toggle</span><br><span class="line">extract 0..7 bytes</span><br><span class="line">update req.offset, req.nbyte and req.buf</span><br><span class="line">verify declared total length</span><br><span class="line">co_sub_dn_ind</span><br><span class="line">send segment response</span><br></pre></td></tr></table></figure>
+
+<p>这说明 custom download indication 必须支持“首次只通知总长度，后续再逐段提交数据”的调用模式。</p>
+<hr>
+<h2 id="15-快速上传：Server-返回-1-到-4-字节"><a href="#15-快速上传：Server-返回-1-到-4-字节" class="headerlink" title="15. 快速上传：Server 返回 1 到 4 字节"></a>15. 快速上传：Server 返回 1 到 4 字节</h2><p>CSDO 发送 upload initiate request，SSDO 定位对象并调用 <code>co_sub_up_ind()</code>。</p>
+<p>若 <code>req.size</code> 为 <code>1..4</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">SSDO gathers the complete value</span><br><span class="line">    ↓</span><br><span class="line">embeds it in upload initiate response</span><br><span class="line">    ↓</span><br><span class="line">CSDO validates index/sub-index</span><br><span class="line">    ↓</span><br><span class="line">copies bytes into upload buffer</span><br><span class="line">    ↓</span><br><span class="line">completion callback</span><br></pre></td></tr></table></figure>
+
+<p>CSDO 的 upload confirmation 获得：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">const</span> <span class="type">void</span> *ptr;</span><br><span class="line"><span class="type">size_t</span> n;</span><br></pre></td></tr></table></figure>
+
+<p>该指针通常指向 CSDO 内部 <code>membuf</code>，其内容可能在下一次上传或对象销毁时失效。需要长期保存时，callback 内必须复制。</p>
+<hr>
+<h2 id="16-普通分段上传状态机"><a href="#16-普通分段上传状态机" class="headerlink" title="16. 普通分段上传状态机"></a>16. 普通分段上传状态机</h2><h3 id="16-1-SSDO-侧数据生产"><a href="#16-1-SSDO-侧数据生产" class="headerlink" title="16.1 SSDO 侧数据生产"></a>16.1 SSDO 侧数据生产</h3><p>SSDO 的 <code>co_ssdo_up_buf()</code> 不要求对象 indication 一次返回完整值。它可以反复：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">consume current req.buf</span><br><span class="line">    ↓</span><br><span class="line">if current request segment exhausted and not last</span><br><span class="line">    ↓</span><br><span class="line">call co_sub_up_ind again</span><br><span class="line">    ↓</span><br><span class="line">continue filling protocol buffer</span><br></pre></td></tr></table></figure>
+
+<p>因此应用可通过多次 upload indication 流式提供较大 DOMAIN 数据。</p>
+<h3 id="16-2-CSDO-侧数据聚合"><a href="#16-2-CSDO-侧数据聚合" class="headerlink" title="16.2 CSDO 侧数据聚合"></a>16.2 CSDO 侧数据聚合</h3><p>CSDO 在 initiate response 中读取声明的总长度，预留上传缓冲区，然后逐段请求：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">send upload segment request</span><br><span class="line">receive up to 7 bytes</span><br><span class="line">verify toggle</span><br><span class="line">append to membuf</span><br><span class="line">if last, verify final length</span><br><span class="line">otherwise request next segment</span><br></pre></td></tr></table></figure>
+
+<p>源码对收到的数据执行上限和最终长度检查：</p>
+<ul>
+<li>超过声明长度：<code>CO_SDO_AC_TYPE_LEN_HI</code>；</li>
+<li>last segment 到达但总长度不足：<code>CO_SDO_AC_TYPE_LEN_LO</code>。</li>
+</ul>
+<p>工程上应保证 Server-SDO 在普通分段上传中提供准确 size indication。当前 CSDO 实现使用该长度完成缓冲预留和边界判断。</p>
+<hr>
+<h2 id="17-Client-SDO-block-download"><a href="#17-Client-SDO-block-download" class="headerlink" title="17. Client-SDO block download"></a>17. Client-SDO block download</h2><p>块下载用于 Client 向 Server 发送大数据。</p>
+<h3 id="17-1-初始化"><a href="#17-1-初始化" class="headerlink" title="17.1 初始化"></a>17.1 初始化</h3><p>CSDO 发送：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">block download initiate</span><br><span class="line">index/sub-index</span><br><span class="line">total size</span><br><span class="line">CRC capability</span><br></pre></td></tr></table></figure>
+
+<p>SSDO：</p>
+<ol>
+<li>解析对象地址和总长度；</li>
+<li>选择 block size；</li>
+<li>让 download indication 预检大小；</li>
+<li>返回 block size 和 CRC 支持情况。</li>
+</ol>
+<h3 id="17-2-子块发送"><a href="#17-2-子块发送" class="headerlink" title="17.2 子块发送"></a>17.2 子块发送</h3><p>CSDO 在一个 block 内连续发送多个 segment，不等待每帧响应：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">seqno 1</span><br><span class="line">seqno 2</span><br><span class="line">...</span><br><span class="line">seqno blksize</span><br></pre></td></tr></table></figure>
+
+<p>每个 segment 最多 7 字节，第 7 位标记最后 segment，低 7 位为 sequence number。</p>
+<h3 id="17-3-Go-Back-N-式恢复"><a href="#17-3-Go-Back-N-式恢复" class="headerlink" title="17.3 Go-Back-N 式恢复"></a>17.3 Go-Back-N 式恢复</h3><p>SSDO 只接收连续 sequence：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">seqno == ackseq + 1</span><br></pre></td></tr></table></figure>
+
+<p>乱序或丢失后的 segment 不会写入对象数据。block 结束时，SSDO 返回最后连续接收成功的 <code>ackseq</code>。</p>
+<p>若：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ackseq &lt; blksize</span><br></pre></td></tr></table></figure>
+
+<p>CSDO 将 <code>dn_buf.cur</code> 回退到缺失位置，并从下一轮 block 重发未确认部分。</p>
+<h3 id="17-4-结束与-CRC"><a href="#17-4-结束与-CRC" class="headerlink" title="17.4 结束与 CRC"></a>17.4 结束与 CRC</h3><p>最后一个 block 完成后：</p>
+<ol>
+<li>Client 发送 end request，携带末段有效字节数和可选 CRC；</li>
+<li>Server 检查总长度；</li>
+<li>Server 检查最后 segment 有效字节数；</li>
+<li>Server 校验 CRC；</li>
+<li>Server 将最后数据提交 indication；</li>
+<li>Server 返回 end response。</li>
+</ol>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;block initiate&quot;] --&gt; B[&quot;server returns blksize&quot;]</span><br><span class="line">    B --&gt; C[&quot;client sends sequential segments&quot;]</span><br><span class="line">    C --&gt; D[&quot;server returns ackseq and next blksize&quot;]</span><br><span class="line">    D --&gt; E&#123;&quot;all data acknowledged&quot;&#125;</span><br><span class="line">    E --&gt;|&quot;no&quot;| C</span><br><span class="line">    E --&gt;|&quot;yes&quot;| F[&quot;end request with size and optional CRC&quot;]</span><br><span class="line">    F --&gt; G[&quot;server validates and responds&quot;]</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="18-Client-SDO-block-upload"><a href="#18-Client-SDO-block-upload" class="headerlink" title="18. Client-SDO block upload"></a>18. Client-SDO block upload</h2><p>块上传用于 Client 从 Server 读取大数据。</p>
+<h3 id="18-1-CSDO-初始参数"><a href="#18-1-CSDO-初始参数" class="headerlink" title="18.1 CSDO 初始参数"></a>18.1 CSDO 初始参数</h3><p><code>co_csdo_blk_up_req()</code> 初始化：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">pst       protocol switch threshold</span><br><span class="line">blksize   127 by default</span><br></pre></td></tr></table></figure>
+
+<p>Client 把最大可接收 block size 发给 Server。</p>
+<h3 id="18-2-block-size-兼容退让"><a href="#18-2-block-size-兼容退让" class="headerlink" title="18.2 block size 兼容退让"></a>18.2 block size 兼容退让</h3><p>若 Server 用 <code>CO_SDO_AC_BLK_SIZE</code> 拒绝 block size，CSDO 不立即失败，而是把大小减半后重试：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">127 → 64 → 32 → 16 → ... → 1</span><br></pre></td></tr></table></figure>
+
+<p>源码特别保证第一次从 127 变为 64。</p>
+<h3 id="18-3-Server-induced-protocol-switch"><a href="#18-3-Server-induced-protocol-switch" class="headerlink" title="18.3 Server-induced protocol switch"></a>18.3 Server-induced protocol switch</h3><p>若 CSDO 请求 block upload，但收到普通 upload initiate response，它会直接转入普通上传处理。这是 Server 主动降级到 expedited&#x2F;segmented upload 的协议切换。</p>
+<h3 id="18-4-子块接收和确认"><a href="#18-4-子块接收和确认" class="headerlink" title="18.4 子块接收和确认"></a>18.4 子块接收和确认</h3><p>CSDO 只复制连续 sequence segment：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">seqno == ackseq + 1</span><br></pre></td></tr></table></figure>
+
+<p>达到 block size 或遇到 last segment 时，Client 返回 <code>ackseq</code>。Server 根据确认：</p>
+<ul>
+<li>flush 已确认的 segment；</li>
+<li>保留未确认数据；</li>
+<li>使用新的 <code>blksize</code> 生成下一 block。</li>
+</ul>
+<h3 id="18-5-结束校验"><a href="#18-5-结束校验" class="headerlink" title="18.5 结束校验"></a>18.5 结束校验</h3><p>CSDO 在 block upload end response 中检查：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">total length</span><br><span class="line">last segment byte count</span><br><span class="line">optional CRC</span><br></pre></td></tr></table></figure>
+
+<p>成功后发送 end confirmation，并触发 upload completion callback。</p>
+<hr>
+<h2 id="19-Protocol-Switch-Threshold-的实际作用"><a href="#19-Protocol-Switch-Threshold-的实际作用" class="headerlink" title="19. Protocol Switch Threshold 的实际作用"></a>19. Protocol Switch Threshold 的实际作用</h2><p>PST 只用于 block upload。</p>
+<p>Client 提供非零 <code>pst</code> 后，如果 Server 发现对象长度：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">req.size &lt;= pst</span><br></pre></td></tr></table></figure>
+
+<p>SSDO 可以切换为普通 SDO upload：</p>
+<ul>
+<li><code>size &lt;= 4</code>：expedited upload；</li>
+<li><code>size &gt; 4</code>：segmented upload。</li>
+</ul>
+<p>PST 的目的不是改变对象数据，而是避免小对象承担 block 协议额外开销。</p>
+<hr>
+<h2 id="20-timeout-的真实计时边界"><a href="#20-timeout-的真实计时边界" class="headerlink" title="20. timeout 的真实计时边界"></a>20. timeout 的真实计时边界</h2><p>CSDO&#x2F;SSDO 的 timeout 都不是后台线程定时器。它依赖 <code>can_net_t</code> 时间推进。</p>
+<h3 id="20-1-CSDO"><a href="#20-1-CSDO" class="headerlink" title="20.1 CSDO"></a>20.1 CSDO</h3><p>CSDO 在发送需要响应的请求后启动或重启 timer：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">initiate request</span><br><span class="line">segment request</span><br><span class="line">block initiate</span><br><span class="line">block acknowledgment wait</span><br><span class="line">block end wait</span><br></pre></td></tr></table></figure>
+
+<p>超时后进入当前状态的 <code>on_time()</code>，通常：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">send abort with CO_SDO_AC_TIMEOUT</span><br><span class="line">complete local request with timeout</span><br><span class="line">return to waiting</span><br></pre></td></tr></table></figure>
+
+<h3 id="20-2-SSDO"><a href="#20-2-SSDO" class="headerlink" title="20.2 SSDO"></a>20.2 SSDO</h3><p>SSDO 在已经建立传输、等待 Client 下一步请求时启动 timer。空闲 waiting 状态不使用传输 timeout。</p>
+<p>例如：</p>
+<ul>
+<li>download initiate response 后等待第一个 segment；</li>
+<li>upload segment response 后等待下一个 request；</li>
+<li>block response 后等待下一 block 或 end request。</li>
+</ul>
+<h3 id="20-3-每个-CSDO-SSDO-一个-timer"><a href="#20-3-每个-CSDO-SSDO-一个-timer" class="headerlink" title="20.3 每个 CSDO&#x2F;SSDO 一个 timer"></a>20.3 每个 CSDO&#x2F;SSDO 一个 timer</h3><p>单个服务对象只有一个协议 timer，与“一个服务对象同时只允许一个传输”的设计一致。</p>
+<hr>
+<h2 id="21-abort-是协议错误，也是统一完成路径"><a href="#21-abort-是协议错误，也是统一完成路径" class="headerlink" title="21. abort 是协议错误，也是统一完成路径"></a>21. abort 是协议错误，也是统一完成路径</h2><p>SDO abort frame 的布局为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">byte 0      0x80</span><br><span class="line">byte 1..2   index</span><br><span class="line">byte 3      sub-index</span><br><span class="line">byte 4..7   abort code, little-endian</span><br></pre></td></tr></table></figure>
+
+<h3 id="21-1-CSDO-的两类-abort"><a href="#21-1-CSDO-的两类-abort" class="headerlink" title="21.1 CSDO 的两类 abort"></a>21.1 CSDO 的两类 abort</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">abort indication</span><br><span class="line">    remote Server sent abort</span><br><span class="line">    or local transfer completed with success/failure</span><br><span class="line"></span><br><span class="line">abort response</span><br><span class="line">    local Client detects protocol error</span><br><span class="line">    sends abort frame</span><br><span class="line">    then enters abort indication path</span><br></pre></td></tr></table></figure>
+
+<p><code>co_csdo_abort_ind()</code> 保存最终 <code>ac</code> 并进入瞬态 abort state。成功完成也使用 <code>ac == 0</code> 经过同一完成路径。</p>
+<h3 id="21-2-SSDO-的两类-abort"><a href="#21-2-SSDO-的两类-abort" class="headerlink" title="21.2 SSDO 的两类 abort"></a>21.2 SSDO 的两类 abort</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">co_ssdo_abort_res</span><br><span class="line">    log error</span><br><span class="line">    send abort frame</span><br><span class="line">    clear state</span><br><span class="line"></span><br><span class="line">co_ssdo_abort_ind</span><br><span class="line">    peer aborted or transfer completed</span><br><span class="line">    clear state without sending another abort</span><br></pre></td></tr></table></figure>
+
+<p>成功完成同样通过 <code>co_ssdo_abort_ind()</code> 清理 index、toggle、block、CRC、request 和 buffer，然后回到 waiting。</p>
+<h3 id="21-3-常见-abort-来源"><a href="#21-3-常见-abort-来源" class="headerlink" title="21.3 常见 abort 来源"></a>21.3 常见 abort 来源</h3><table>
+<thead>
+<tr>
+<th align="right">Abort code</th>
+<th>典型触发点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="right"><code>CO_SDO_AC_NO_CS</code></td>
+<td>command specifier、帧长度或 subcommand 非法</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_TOGGLE</code></td>
+<td>分段 toggle 不符合预期</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_TIMEOUT</code></td>
+<td>等待下一请求或响应超时</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_TYPE_LEN_HI</code></td>
+<td>收到数据超过声明长度</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_TYPE_LEN_LO</code></td>
+<td>last 到达但数据不足</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_BLK_SIZE</code></td>
+<td>block size 非法或不支持</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_BLK_SEQ</code></td>
+<td>block sequence number 非法</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_BLK_CRC</code></td>
+<td>block CRC 不匹配</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_NO_OBJ</code></td>
+<td>index 不存在</td>
+</tr>
+<tr>
+<td align="right"><code>CO_SDO_AC_NO_SUB</code></td>
+<td>sub-index 不存在</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="22-完成-callback-与进度-indication"><a href="#22-完成-callback-与进度-indication" class="headerlink" title="22. 完成 callback 与进度 indication"></a>22. 完成 callback 与进度 indication</h2><h2 id="22-1-下载确认"><a href="#22-1-下载确认" class="headerlink" title="22.1 下载确认"></a>22.1 下载确认</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">co_csdo_dn_con_t</span>(</span><br><span class="line">    <span class="type">co_csdo_t</span> *sdo,</span><br><span class="line">    <span class="type">co_unsigned16_t</span> idx,</span><br><span class="line">    <span class="type">co_unsigned8_t</span> subidx,</span><br><span class="line">    <span class="type">co_unsigned32_t</span> ac,</span><br><span class="line">    <span class="type">void</span> *data);</span><br></pre></td></tr></table></figure>
+
+<p><code>ac == 0</code> 表示成功。远程请求时 <code>sdo</code> 为当前服务对象，本地 <code>co_dev_dn_req()</code> 时为 <code>NULL</code>。</p>
+<h2 id="22-2-上传确认"><a href="#22-2-上传确认" class="headerlink" title="22.2 上传确认"></a>22.2 上传确认</h2><p>上传 callback 额外获得结果缓冲区：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">const</span> <span class="type">void</span> *ptr;</span><br><span class="line"><span class="type">size_t</span> n;</span><br></pre></td></tr></table></figure>
+
+<p>失败时源码传递：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">ptr = NULL</span><br><span class="line">n = 0</span><br></pre></td></tr></table></figure>
+
+<h2 id="22-3-进度-indication"><a href="#22-3-进度-indication" class="headerlink" title="22.3 进度 indication"></a>22.3 进度 indication</h2><p><code>co_csdo_ind_t</code> 提供：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">total size</span><br><span class="line">completed bytes</span><br></pre></td></tr></table></figure>
+
+<p>其触发规则：</p>
+<ul>
+<li>expedited transfer 不产生进度通知；</li>
+<li>确定总长度后通知一次；</li>
+<li>之后按 block 边界或最多 127 个 segment 的区间通知；</li>
+<li>最后一次 progress 在 completion callback 前发生。</li>
+</ul>
+<p>进度 callback 应保持轻量，不应阻塞 CAN event loop。</p>
+<hr>
+<h2 id="23-completion-callback-的重入边界"><a href="#23-completion-callback-的重入边界" class="headerlink" title="23. completion callback 的重入边界"></a>23. completion callback 的重入边界</h2><p>CSDO 的 callback 在 abort transient state 离开时执行，此时状态已经切换到 waiting。因此下面的模式是可行的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">on_upload</span><span class="params">(...)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">if</span> (ac == <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="comment">// copy result</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// The CSDO is idle here; submit the next request if needed.</span></span><br><span class="line">    co_csdo_up_req(sdo, next_idx, next_subidx, on_upload, data);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>但需要避免：</p>
+<ul>
+<li>在 callback 内销毁仍被外层调用栈使用的 <code>can_net_t</code>；</li>
+<li>多线程同时对同一 CSDO 调用 request&#x2F;stop&#x2F;destroy；</li>
+<li>未复制上传数据就提交下一次可能复用内部 <code>membuf</code> 的请求。</li>
+</ul>
+<hr>
+<h2 id="24-参数对象动态更新"><a href="#24-参数对象动态更新" class="headerlink" title="24. 参数对象动态更新"></a>24. 参数对象动态更新</h2><p>CSDO 给 <code>0x1280..0x12FF</code> 安装 <code>co_1280_dn_ind()</code>；SSDO 给 <code>0x1200..0x127F</code> 安装 <code>co_1200_dn_ind()</code>。</p>
+<p>更新流程：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">SDO or local write to parameter object</span><br><span class="line">    ↓</span><br><span class="line">co_sdo_req_dn_val</span><br><span class="line">    ↓</span><br><span class="line">validate COB-ID or Node-ID</span><br><span class="line">    ↓</span><br><span class="line">store value</span><br><span class="line">    ↓</span><br><span class="line">abort current transfer with NO_SDO</span><br><span class="line">    ↓</span><br><span class="line">re-register or stop CAN receiver</span><br></pre></td></tr></table></figure>
+
+<h3 id="24-1-COB-ID-修改限制"><a href="#24-1-COB-ID-修改限制" class="headerlink" title="24.1 COB-ID 修改限制"></a>24.1 COB-ID 修改限制</h3><p>源码拒绝：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">old COB-ID valid</span><br><span class="line">and new COB-ID valid</span><br><span class="line">and CAN-ID changes</span><br></pre></td></tr></table></figure>
+
+<p>正确顺序是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">set invalid bit</span><br><span class="line">change CAN-ID or frame format</span><br><span class="line">clear invalid bit</span><br></pre></td></tr></table></figure>
+
+<h3 id="24-2-扩展帧检查"><a href="#24-2-扩展帧检查" class="headerlink" title="24.2 扩展帧检查"></a>24.2 扩展帧检查</h3><p>若 COB-ID 中出现 11-bit 之外的 CAN-ID 位，却没有设置 frame bit，参数写入返回 <code>CO_SDO_AC_PARAM_VAL</code>。</p>
+<h3 id="24-3-更新会打断传输"><a href="#24-3-更新会打断传输" class="headerlink" title="24.3 更新会打断传输"></a>24.3 更新会打断传输</h3><p><code>co_csdo_update()</code> 和 <code>co_ssdo_update()</code> 都先中止进行中的传输。应用不应在参数写成功后假定旧请求还能继续。</p>
+<hr>
+<h2 id="25-CSDO-下载缓冲区所有权"><a href="#25-CSDO-下载缓冲区所有权" class="headerlink" title="25. CSDO 下载缓冲区所有权"></a>25. CSDO 下载缓冲区所有权</h2><p><code>co_csdo_dn_req()</code> 不复制用户提供的原始下载数据。内部 <code>dn_buf</code> 直接引用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">const</span> <span class="type">void</span> *ptr;</span><br><span class="line"><span class="type">size_t</span> n;</span><br></pre></td></tr></table></figure>
+
+<p>因此直到 confirmation callback 发生前，应用必须保证：</p>
+<ul>
+<li>缓冲区仍存在；</li>
+<li>内容不被修改；</li>
+<li>DMA、其他线程或栈退出不会使地址失效。</li>
+</ul>
+<p>错误示例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">send_config</span><span class="params">(<span class="type">co_csdo_t</span> *sdo)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">uint8_t</span> tmp[<span class="number">32</span>];</span><br><span class="line">    build_config(tmp);</span><br><span class="line">    co_csdo_dn_req(sdo, <span class="number">0x2000</span>, <span class="number">0</span>, tmp, <span class="keyword">sizeof</span>(tmp), done, <span class="literal">NULL</span>);</span><br><span class="line">    <span class="comment">// Function returns; tmp is no longer valid while transfer is still running.</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>安全做法是使用静态、堆、对象成员或请求上下文持有的缓冲区，并在 callback 后释放。</p>
+<p><code>co_csdo_dn_val_req()</code> 会先把类型值序列化到 CSDO 内部 <code>buf</code>，因此不直接持有调用者标量地址；但同一 CSDO 仍不能并行提交其他请求。</p>
+<hr>
+<h2 id="26-SSDO-request-buffer-生命周期"><a href="#26-SSDO-request-buffer-生命周期" class="headerlink" title="26. SSDO request buffer 生命周期"></a>26. SSDO request buffer 生命周期</h2><p>SSDO 的 <code>req.buf</code> 可能指向：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">incoming CAN frame data</span><br><span class="line">SSDO temporary membuf</span><br><span class="line">a buffer returned by an upload indication</span><br></pre></td></tr></table></figure>
+
+<p>custom indication 只能在当前同步调用内读取该指针。若要交给工作线程处理，必须先复制。</p>
+<p>对于异步硬件写入，推荐：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">indication validates and copies bytes</span><br><span class="line">    ↓</span><br><span class="line">returns success quickly</span><br><span class="line">    ↓</span><br><span class="line">application task processes copied command</span><br></pre></td></tr></table></figure>
+
+<p>但这意味着 SDO 成功响应只表示“数据已被应用接收”，不一定表示外设操作已经完成。若业务要求远程确认硬件结果，应在 indication 内完成必要操作或设计额外状态对象。</p>
+<hr>
+<h2 id="27-无动态内存配置"><a href="#27-无动态内存配置" class="headerlink" title="27. 无动态内存配置"></a>27. 无动态内存配置</h2><h3 id="27-1-CSDO"><a href="#27-1-CSDO" class="headerlink" title="27.1 CSDO"></a>27.1 CSDO</h3><p>当 <code>LELY_NO_MALLOC</code> 启用时，默认：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">CO_CSDO_MEMBUF_SIZE = 8 bytes</span><br></pre></td></tr></table></figure>
+
+<p>足以序列化基本数据类型，但不足以自动保存较大的 typed value 或 upload result。应用需要评估并调整宏或避免大对象。</p>
+<h3 id="27-2-SSDO"><a href="#27-2-SSDO" class="headerlink" title="27.2 SSDO"></a>27.2 SSDO</h3><p>当禁用动态内存时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">block disabled     default 7 bytes</span><br><span class="line">block enabled      CO_SDO_MAX_SEQNO * 7 bytes</span><br></pre></td></tr></table></figure>
+
+<p>最大 sequence number 为 127 时，默认 block buffer 为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">127 * 7 = 889 bytes</span><br></pre></td></tr></table></figure>
+
+<p>这对小型 MCU 已经不是可忽略的内存。若减小 <code>CO_SSDO_MEMBUF_SIZE</code>，<code>CO_SSDO_MAX_SEQNO</code> 也会相应受限，客户端必须接受更小 block size。</p>
+<hr>
+<h2 id="28-条件编译边界"><a href="#28-条件编译边界" class="headerlink" title="28. 条件编译边界"></a>28. 条件编译边界</h2><table>
+<thead>
+<tr>
+<th>宏或配置项</th>
+<th>影响</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>LELY_NO_CO_CSDO</code></td>
+<td>移除 Client-SDO 支持，同时影响依赖 CSDO 的 master 功能</td>
+</tr>
+<tr>
+<td><code>LELY_NO_CO_SSDO_BLK</code></td>
+<td>移除 Server-SDO block transfer</td>
+</tr>
+<tr>
+<td><code>LELY_NO_MALLOC</code></td>
+<td>使用固定 membuf，限制可处理对象和 block 大小</td>
+</tr>
+<tr>
+<td><code>LELY_NO_CANFD</code></td>
+<td>决定是否编译 CAN FD 帧过滤分支</td>
+</tr>
+<tr>
+<td><code>LELY_NO_STDIO</code></td>
+<td>移除部分 trace 字符串格式化</td>
+</tr>
+<tr>
+<td><code>LELY_NO_ERRNO</code></td>
+<td>降低系统错误到 errno 的细分能力</td>
+</tr>
+</tbody></table>
+<p>CSDO&#x2F;SSDO 均忽略 RTR 帧和 CAN FD format 帧，本文分析的是 CiA 301 经典 CAN SDO。</p>
+<hr>
+<h2 id="29-线程安全和串行化要求"><a href="#29-线程安全和串行化要求" class="headerlink" title="29. 线程安全和串行化要求"></a>29. 线程安全和串行化要求</h2><p>源码未在 CSDO&#x2F;SSDO 内部提供 mutex。推荐所有下列操作由同一 CAN event loop 线程执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">can_net_recv</span><br><span class="line">can_net_set_time</span><br><span class="line">co_csdo_*_req</span><br><span class="line">co_csdo_abort_req</span><br><span class="line">co_csdo_start/stop/destroy</span><br><span class="line">co_ssdo_start/stop/destroy</span><br><span class="line">SDO parameter object reconfiguration</span><br></pre></td></tr></table></figure>
+
+<p>如果业务线程需要发起 SDO，应向 event loop 投递命令，而不是直接并发调用同一 service。</p>
+<p>主要竞态风险：</p>
+<ul>
+<li>request 提交与 response callback 同时修改 state；</li>
+<li>parameter update 中止传输时，另一线程仍使用 buffer；</li>
+<li>stop&#x2F;destroy 与 receiver&#x2F;timer callback 并发；</li>
+<li>completion callback 释放上层上下文，而其他线程仍访问。</li>
+</ul>
+<hr>
+<h2 id="30-CSDO-完整下载流程"><a href="#30-CSDO-完整下载流程" class="headerlink" title="30. CSDO 完整下载流程"></a>30. CSDO 完整下载流程</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;application calls co_csdo_dn_req&quot;] --&gt; B&#123;&quot;valid and idle&quot;&#125;</span><br><span class="line">    B --&gt;|&quot;no&quot;| X[&quot;return ERRNUM_INVAL&quot;]</span><br><span class="line">    B --&gt;|&quot;yes&quot;| C[&quot;bind source buffer and save callback&quot;]</span><br><span class="line">    C --&gt; D&#123;&quot;size from 1 to 4&quot;&#125;</span><br><span class="line">    D --&gt;|&quot;yes&quot;| E[&quot;send expedited initiate request&quot;]</span><br><span class="line">    D --&gt;|&quot;no&quot;| F[&quot;send normal initiate request with size&quot;]</span><br><span class="line">    E --&gt; G[&quot;wait response with timeout&quot;]</span><br><span class="line">    F --&gt; G</span><br><span class="line">    G --&gt; H&#123;&quot;response valid&quot;&#125;</span><br><span class="line">    H --&gt;|&quot;no&quot;| I[&quot;send or accept abort&quot;]</span><br><span class="line">    H --&gt;|&quot;yes and expedited&quot;| J[&quot;complete&quot;]</span><br><span class="line">    H --&gt;|&quot;yes and segmented&quot;| K[&quot;send segments with toggle&quot;]</span><br><span class="line">    K --&gt; L&#123;&quot;last segment acknowledged&quot;&#125;</span><br><span class="line">    L --&gt;|&quot;no&quot;| K</span><br><span class="line">    L --&gt;|&quot;yes&quot;| J</span><br><span class="line">    I --&gt; M[&quot;enter abort state&quot;]</span><br><span class="line">    J --&gt; M</span><br><span class="line">    M --&gt; N[&quot;return to waiting and invoke callback&quot;]</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="31-SSDO-完整请求处理流程"><a href="#31-SSDO-完整请求处理流程" class="headerlink" title="31. SSDO 完整请求处理流程"></a>31. SSDO 完整请求处理流程</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;request frame received&quot;] --&gt; B[&quot;wait state decodes command specifier&quot;]</span><br><span class="line">    B --&gt; C&#123;&quot;request type&quot;&#125;</span><br><span class="line">    C --&gt;|&quot;download&quot;| D[&quot;parse index, sub-index and size&quot;]</span><br><span class="line">    D --&gt; E[&quot;co_sub_dn_ind&quot;]</span><br><span class="line">    C --&gt;|&quot;upload&quot;| F[&quot;parse index and sub-index&quot;]</span><br><span class="line">    F --&gt; G[&quot;co_sub_up_ind&quot;]</span><br><span class="line">    C --&gt;|&quot;block download&quot;| H[&quot;negotiate block and receive sequence&quot;]</span><br><span class="line">    C --&gt;|&quot;block upload&quot;| I[&quot;negotiate block and produce sequence&quot;]</span><br><span class="line">    E --&gt; J&#123;&quot;result&quot;&#125;</span><br><span class="line">    G --&gt; J</span><br><span class="line">    H --&gt; J</span><br><span class="line">    I --&gt; J</span><br><span class="line">    J --&gt;|&quot;error&quot;| K[&quot;send SDO abort&quot;]</span><br><span class="line">    J --&gt;|&quot;complete&quot;| L[&quot;send success response&quot;]</span><br><span class="line">    J --&gt;|&quot;more data&quot;| M[&quot;enter segment or block state&quot;]</span><br><span class="line">    K --&gt; N[&quot;clear transfer and return waiting&quot;]</span><br><span class="line">    L --&gt; N</span><br><span class="line">    M --&gt; A</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="38-完整机制总图"><a href="#38-完整机制总图" class="headerlink" title="38. 完整机制总图"></a>38. 完整机制总图</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;application submits CSDO request&quot;] --&gt; B[&quot;CSDO validates idle and connection&quot;]</span><br><span class="line">    B --&gt; C[&quot;CSDO sends request through can_net_send&quot;]</span><br><span class="line">    C --&gt; D[&quot;CAN bus&quot;]</span><br><span class="line">    D --&gt; E[&quot;SSDO receiver callback&quot;]</span><br><span class="line">    E --&gt; F[&quot;SSDO state machine parses command&quot;]</span><br><span class="line">    F --&gt; G[&quot;co_sdo_req&quot;]</span><br><span class="line">    G --&gt; H[&quot;co_sub_dn_ind or co_sub_up_ind&quot;]</span><br><span class="line">    H --&gt; I[&quot;object dictionary and application&quot;]</span><br><span class="line">    I --&gt; J[&quot;SSDO response or abort&quot;]</span><br><span class="line">    J --&gt; D</span><br><span class="line">    D --&gt; K[&quot;CSDO receiver callback&quot;]</span><br><span class="line">    K --&gt; L[&quot;CSDO validates response and advances state&quot;]</span><br><span class="line">    L --&gt; M&#123;&quot;transfer complete&quot;&#125;</span><br><span class="line">    M --&gt;|&quot;no&quot;| C</span><br><span class="line">    M --&gt;|&quot;yes&quot;| N[&quot;CSDO enters waiting&quot;]</span><br><span class="line">    N --&gt; O[&quot;completion callback&quot;]</span><br><span class="line">    P[&quot;application updates can_net time&quot;] --&gt; Q[&quot;CSDO and SSDO timers&quot;]</span><br><span class="line">    Q --&gt; L</span><br><span class="line">    Q --&gt; F</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="39-最终心智模型"><a href="#39-最终心智模型" class="headerlink" title="39. 最终心智模型"></a>39. 最终心智模型</h2><p>可以将 CSDO&#x2F;SSDO 压缩为五层：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">第 1 层：平台适配</span><br><span class="line">    CAN driver, can_net_recv, can_net_send, can_net_set_time</span><br><span class="line"></span><br><span class="line">第 2 层：连接对象</span><br><span class="line">    0x1200..0x127F and 0x1280..0x12FF</span><br><span class="line"></span><br><span class="line">第 3 层：协议状态机</span><br><span class="line">    initiate, segment, block, timeout, abort, toggle, CRC</span><br><span class="line"></span><br><span class="line">第 4 层：请求描述</span><br><span class="line">    co_sdo_req and membuf</span><br><span class="line"></span><br><span class="line">第 5 层：对象语义</span><br><span class="line">    co_sub_dn_ind, co_sub_up_ind and application callbacks</span><br></pre></td></tr></table></figure>
+
+<p>最简洁的结论是：</p>
+<blockquote>
+<p><code>co_csdo_t</code> 是“主动请求、等待响应和通知应用”的客户端状态机；<code>co_ssdo_t</code> 是“接收请求、访问本地对象字典和生成响应”的服务器状态机。两者通过 <code>can_net_t</code> 获得 CAN 与时间事件，通过 <code>co_sdo_req</code> 交换对象值，通过统一 abort code 表达所有协议、长度、权限和应用错误。理解 receiver、timer、state、buffer 和 indication 五个边界后，快速、分段和块 SDO 都只是同一事件状态机上的不同传输路径。</p>
+</blockquote>
+<hr>
+<h2 id="参考源码与资料"><a href="#参考源码与资料" class="headerlink" title="参考源码与资料"></a>参考源码与资料</h2><h3 id="核心源码"><a href="#核心源码" class="headerlink" title="核心源码"></a>核心源码</h3><ul>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/co/csdo.h"><code>include/lely/co/csdo.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/csdo.c"><code>src/co/csdo.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/co/ssdo.h"><code>include/lely/co/ssdo.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/ssdo.c"><code>src/co/ssdo.c</code></a></li>
+</ul>
+<h3 id="关联源码"><a href="#关联源码" class="headerlink" title="关联源码"></a>关联源码</h3><ul>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/co/sdo.h"><code>include/lely/co/sdo.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/sdo.c"><code>src/co/sdo.c</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/sdo.h"><code>src/co/sdo.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/include/lely/can/net.h"><code>include/lely/can/net.h</code></a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://gitlab.com/lely_industries/lely-core/-/blob/620d1858eb8520dbc3dc5e1a7314565becd54199/src/co/obj.c"><code>src/co/obj.c</code></a></li>
+</ul>
+<h3 id="Lely-官方网页"><a href="#Lely-官方网页" class="headerlink" title="Lely 官方网页"></a>Lely 官方网页</h3><ul>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/overview/">Library overview</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/fsm/">Finite-state machines</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/configuration/">Build configuration</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/standards/">Standards support</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://opensource.lely.com/canopen/docs/coctl/">CANopen control tool</a></li>
+</ul>
+<h3 id="协议参考"><a href="#协议参考" class="headerlink" title="协议参考"></a>协议参考</h3><ul>
+<li>CiA 301 V4.2.0：7.2.4 SDO 服务与协议；7.5.2.33 Server-SDO 参数；7.5.2.34 Client-SDO 参数。</li>
+<li>CiA 302-3 V4.1.0：对象 <code>0x1F22</code> concise DCF。</li>
+</ul>
+<h3 id="前置学习笔记"><a href="#前置学习笔记" class="headerlink" title="前置学习笔记"></a>前置学习笔记</h3><ul>
+<li><code>Lely_CANopen_co_obj_co_sub_对象字典节点_机制原理与运行流程.md</code></li>
+<li><code>Lely_CANopen_co_dev_DCF_EDS解析_对象字典设备描述_机制原理与运行流程.md</code></li>
+<li><code>Lely_CANopen_co_sdo_req_PDO映射编解码_对象字典访问桥接机制.md</code></li>
+<li><code>Lely_CANopen_RPDO_TPDO_运行期收发_SYNC_事件与定时器_机制原理与运行流程.md</code></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/5abb5f73/">https://wdfk-prog.space/posts/5abb5f73/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/canopen/">canopen</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/06.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/1508b7a3/" title="Lely CANopen NMT Boot Slave：从 `nmt_boot.c` 看主站如何识别、配置并启动从站"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Lely CANopen NMT Boot Slave：从 `nmt_boot.c` 看主站如何识别、配置并启动从站</div></div><div class="info-2"><div class="info-item-1">   Lely CANopen NMT Boot Slave：从 nmt_boot.c 看主站如何识别、配置并启动从站 @[toc] 1. 先给出核心判断nmt_boot.c 实现的不是普通从站侧 NMT 状态机，也不是简单地发送一条 Start Remote Node 命令。它是 NMT manager 针对一个远端从站执行的启动编排状态机。 对每个被管理的从站，它把多种已有服务串成一条完整链路： 1234567891011121314151617主站 DCF 中的从站声明    ↓确认该节点是否允许/需要 boot    ↓通过 Client-SDO 校验设备类型与 Identity    ↓通过 Heartbeat 或 Node Guarding 判断节点状态    ↓必要时发送 Reset Communication 并等待 boot-up    ↓按配置决定是否检查、停止、清除和下载程序    ↓比较配置日期/时间，必要时调用 configuration request    ↓启动 Heartbeat/Node Guarding 错误控制    ↓向 co_nmt_t...</div></div></div></a><a class="pagination-related" href="/posts/78c092c/" title="Lely CANopen：RPDO&amp;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Lely CANopen：RPDO&TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程</div></div><div class="info-2"><div class="info-item-1">  Lely CANopen：RPDO&#x2F;TPDO 运行期收发、SYNC、事件与定时器机制原理和运行流程 @[toc]  源码基线：lely-industries/lely-core，提交 620d1858eb8520dbc3dc5e1a7314565becd54199，查阅时间为 2026-07-30。 本文核心分析以下文件： 123456include/lely/co/rpdo.hinclude/lely/co/rpdo.hppsrc/co/rpdo.cinclude/lely/co/tpdo.hinclude/lely/co/tpdo.hppsrc/co/tpdo.c  前置文章已经说明 co_pdo_dn()、co_pdo_up()、PDO 映射校验、位级编解码以及对象字典 indication 桥接。本文不重复展开这些基础算法，而是集中分析 RPDO&#x2F;TPDO 服务对象如何注册 CAN 接收器、维护运行期参数、处理 SYNC、事件定时器、接收超时、同步窗口、抑制时间、RTR 和用户回调。 事实边界：函数、字段、条件分支和调用链来自上述源码；并发风险、生...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/7a565dc9/" title="CANopen  TIME&#x2F;SYNC 运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">CANopen  TIME&#x2F;SYNC 运行流程</div></div><div class="info-2"><div class="info-item-1">   CANopen  TIME&#x2F;SYNC 运行流程 @[toc]  1. 先把 TIME 和 SYNC 分开TIME 和 SYNC 都属于 CANopen 的特殊功能通信对象，但它们解决的问题不同：    对象 核心问题 默认 CAN-ID 数据长度 典型用途    SYNC “什么时候进入一个同步周期？” 0x080 0 或 1 同步 TPDO&#x2F;RPDO、周期采样、周期控制   TIME “网络当前时间是多少？” 0x100 6 网络时间校准、时间戳、日志时间基准   一句话区分： 1SYNC 是节拍；TIME 是时钟。  SYNC 不携带实际过程数据，它只广播一个同步事件。同步 PDO 在这个事件前后按配置动作。TIME 也不携带过程数据，它只携带“当天毫秒数 + 自 1984-01-01 起的天数”。  2. 协议侧：SYNC 规定了什么2.1 SYNC 的角色SYNC 使用 producer&#x2F;consumer 模型： 1234567flowchart LR    P[&quot;SYNC producer&lt;br/&gt;周期发送同步对...</div></div></div></a><a class="pagination-related" href="/posts/526a5796/" title="CANopen CiA 协议全景：核心内容、重点与组合关系"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-30</div><div class="info-item-2">CANopen CiA 协议全景：核心内容、重点与组合关系</div></div><div class="info-2"><div class="info-item-1">  CANopen CiA 协议全景：重点规范、核心内容与组合关系 @[toc]  本文面向 CANopen 工程学习、设备选型、对象字典设计和协议组合判断。本版按你的要求移除了原文末尾的项目建议和评审清单类章节。图片均为 PNG，不包含 SVG；交付格式为 Markdown + images 目录。  1. 结论CANopen 的协议体系可以按三层理解：  通信基础层：以 CiA 301 &#x2F; CiA 1301 为核心，定义对象字典、通信服务和网络管理。 横向功能层：例如 CiA 320 处理 sleep&#x2F;wake-up，CiA 710 处理 bootloader，CiA 305 处理 LSS，CiA 306 处理 EDS&#x2F;DCF。 设备与应用 Profile 层：例如 CiA 401、402、406、445、461、434 等，为某类设备定义应用对象、过程数据、配置参数、诊断信息和默认 PDO 思路。  本版重点单独展开 8 个规范：CiA 320、CiA 710、CiA 401、CiA 402、CiA 445、CiA 406、CiA 461、Ci...</div></div></div></a><a class="pagination-related" href="/posts/81b37f02/" title="CANopen Emergency： 搞懂 EM 运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">CANopen Emergency： 搞懂 EM 运行流程</div></div><div class="info-2"><div class="info-item-1">  CANopen Emergency： 搞懂 EM 运行流程 @[toc] 先给结论Emergency（下文简称 EMCY 或 EM）不是普通日志，也不是 PDO。它是 CANopen 用于故障事件上报的标准机制。CAN in Automation 对 EMCY 的公开说明包括：由设备内部错误触发、映射到单个 CAN Classic 帧、内容包含 0x1001 error register、16 位 emergency error code 和最多 5 字节制造商信息，默认 CAN-ID 为 0x80 + node-ID，且同一 error event 只发送一次。[^cia-emcy] 在 CANopenNode 的 301/CO_Emergency.c/h 中，运行链路可以压缩成： 1234567应用/协议栈检测到错误变化    -&gt; CO_errorReport() / CO_errorReset()    -&gt; CO_error() 修改 errorStatusBits[] 并写入 FIFO    -&gt; CO_EM_process() 周期运行    ...</div></div></div></a><a class="pagination-related" href="/posts/b404ac99/" title="CANopen NMT：搞懂 NMT 运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-28</div><div class="info-item-2">CANopen NMT：搞懂 NMT 运行流程</div></div><div class="info-2"><div class="info-item-1">  CANopen NMT：搞懂 NMT 运行流程 @[toc]  先给结论NMT 是 CANopen 的网络管理状态机控制协议，Heartbeat 是配套的节点在线与状态上报机制。在 CANopenNode 里，CO_NMT_Heartbeat.c/h 不是单纯“收一帧命令就切状态”的代码，而是把以下功能合在一个对象 CO_NMT_t 里：  NMT slave &#x2F; NMT consumer：接收 CAN-ID 0x000 的 NMT 命令，目标 Node-ID 为 0 或本节点时才处理。 Heartbeat producer：用 CAN-ID 0x700 + nodeId 周期发送本节点 NMT 状态；初始化阶段还会发 boot-up message。 NMT 状态机执行点：真正状态切换不在 CAN 接收回调里完成，而是在 CO_NMT_process() 周期调用中完成。 错误条件联动：可根据 CAN bus off、Heartbeat consumer 错误、Error register mask，把 Operational 自动降到 Pre-operation...</div></div></div></a><a class="pagination-related" href="/posts/4f21cda1/" title="CANopen 网络拓扑限制"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-26</div><div class="info-item-2">CANopen 网络拓扑限制</div></div><div class="info-2"><div class="info-item-1">  从 Node-ID 到线长：读懂 CAN&#x2F;CANopen 网络拓扑限制 @[toc] 结论先行“CANopen 逻辑上限制到 128，物理上一段常见只能挂 64 个节点；1 Mbit&#x2F;s 可到 25 m，50 kbit&#x2F;s 可到 1000 m”这段话把两类约束放在了一起：一类是 CANopen 协议层的地址空间，另一类是 CAN 物理层的线缆、终端、收发器负载和传播延迟。两者都影响网络规模，但判断方式完全不同。  CANopen 的 Node-ID 是逻辑地址问题，7 bit 编码提供 0127 的编号空间；普通节点通常使用 1127，0 用于广播或特殊用途。 CAN 的线性拓扑是物理层问题。一个 CAN 总线段应尽量保持主干线连续，两端各 120 Ω 终端，节点通过短支线接入。 线长受位速率限制。速率越高，单个 bit 的时间越短，信号传播、收发器延迟和采样裕量越紧张，所以允许总线越短。 节点数量受收发器和线缆负载限制。协议允许的地址数量不等于一段总线的可靠驱动能力。 中继器可以在低速下扩展网络规模和构造分段&#x2F;树形结构，但中继器本身也...</div></div></div></a><a class="pagination-related" href="/posts/1d4e9f18/" title="CANopen PDO 运行流程"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-06-29</div><div class="info-item-2">CANopen PDO 运行流程</div></div><div class="info-2"><div class="info-item-1">  CANopen PDO 运行流程 @[toc] PDO 不是“带 index&#x2F;sub-index 的小 SDO”，也不是“谁发给谁的一问一答报文”。它更像一条预先约定好格式的实时数据通道：发送方把对象字典里的几个变量按固定顺序塞进一个 CAN 数据帧，接收方再按自己的 PDO 映射表把这些字节拆回本地对象字典变量。 理解 PDO 时要先把两个问题分开：  协议规定 PDO 应该是什么样。 包括它为什么只有过程数据、为什么要靠对象字典配置、为什么要区分 RPDO&#x2F;TPDO、为什么 transmission type 会影响触发时机。 CANopenNode 源码怎样实现这些规定。 包括 CO_CANopenInitPDO() 如何初始化每个 PDO，CO_PDO_receive() 为什么只缓存，CO_RPDO_process() 为什么等到主循环才写 OD，CO_TPDO_process() 又为什么要同时看 SYNC、event timer、inhibit timer 和 sendRequest。  本文按这个顺序讲。前半部分先把协议模型讲清楚，后半部分...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">564</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Lely-CANopen%EF%BC%9ACSDO-SSDO-%E5%AE%A2%E6%88%B7%E7%AB%AF%E6%9C%8D%E5%8A%A1%E5%99%A8-SDO-%E7%8A%B6%E6%80%81%E6%9C%BA%E3%80%81%E5%88%86%E6%AE%B5%E4%B8%8E%E5%9D%97%E4%BC%A0%E8%BE%93%E6%9C%BA%E5%88%B6"><span class="toc-number">1.</span> <span class="toc-text">Lely CANopen：CSDO&#x2F;SSDO 客户端服务器 SDO 状态机、分段与块传输机制</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E5%8F%A5%E8%AF%9D%E7%BB%93%E8%AE%BA"><span class="toc-number">1.1.</span> <span class="toc-text">一句话结论</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%9B%9B%E4%B8%AA%E6%A0%B8%E5%BF%83%E6%96%87%E4%BB%B6%E7%9A%84%E8%81%8C%E8%B4%A3%E8%BE%B9%E7%95%8C"><span class="toc-number">1.2.</span> <span class="toc-text">1. 四个核心文件的职责边界</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-include-lely-co-csdo-h"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 include&#x2F;lely&#x2F;co&#x2F;csdo.h</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-src-co-csdo-c"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 src&#x2F;co&#x2F;csdo.c</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-include-lely-co-ssdo-h"><span class="toc-number">1.2.3.</span> <span class="toc-text">1.3 include&#x2F;lely&#x2F;co&#x2F;ssdo.h</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-4-src-co-ssdo-c"><span class="toc-number">1.2.4.</span> <span class="toc-text">1.4 src&#x2F;co&#x2F;ssdo.c</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-5-%E4%B8%8E-sdo-c-%E7%9A%84%E5%88%86%E5%B1%82%E5%85%B3%E7%B3%BB"><span class="toc-number">1.2.5.</span> <span class="toc-text">1.5 与 sdo.c 的分层关系</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-CSDO-%E4%B8%8E-SSDO-%E7%9A%84%E6%96%B9%E5%90%91%E4%B8%8D%E8%A6%81%E6%B7%B7%E6%B7%86"><span class="toc-number">1.3.</span> <span class="toc-text">2. CSDO 与 SSDO 的方向不要混淆</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-SDO-%E8%BF%9E%E6%8E%A5%E5%8F%82%E6%95%B0%E4%B8%8E%E5%AF%B9%E8%B1%A1%E5%AD%97%E5%85%B8"><span class="toc-number">1.4.</span> <span class="toc-text">3. SDO 连接参数与对象字典</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E5%8F%82%E6%95%B0%E5%AF%B9%E8%B1%A1%E8%8C%83%E5%9B%B4"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 参数对象范围</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E9%BB%98%E8%AE%A4%E8%BF%9E%E6%8E%A5%E9%9B%86"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 默认连接集</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%BD%8D-31-%E7%9A%84%E8%AF%AD%E4%B9%89"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 位 31 的语义</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E4%B8%A4%E4%B8%AA%E6%9C%8D%E5%8A%A1%E5%AF%B9%E8%B1%A1%E5%86%85%E9%83%A8%E4%BF%9D%E5%AD%98%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.5.</span> <span class="toc-text">4. 两个服务对象内部保存了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-1-struct-co-csdo"><span class="toc-number">1.6.</span> <span class="toc-text">4.1 struct __co_csdo</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-2-struct-co-ssdo"><span class="toc-number">1.7.</span> <span class="toc-text">4.2 struct __co_ssdo</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-Lely-%E7%9A%84%E7%8A%B6%E6%80%81%E6%9C%BA%E4%B8%8D%E6%98%AF-switch-enum-state"><span class="toc-number">1.8.</span> <span class="toc-text">5. Lely 的状态机不是 switch(enum state)</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-CSDO-%E7%8A%B6%E6%80%81%E8%BF%9B%E5%85%A5%E9%80%BB%E8%BE%91"><span class="toc-number">1.8.1.</span> <span class="toc-text">5.1 CSDO 状态进入逻辑</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-SSDO-%E7%8A%B6%E6%80%81%E8%BF%9B%E5%85%A5%E9%80%BB%E8%BE%91"><span class="toc-number">1.8.2.</span> <span class="toc-text">5.2 SSDO 状态进入逻辑</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-CSDO-%E7%8A%B6%E6%80%81%E9%9B%86%E5%90%88"><span class="toc-number">1.9.</span> <span class="toc-text">6. CSDO 状态集合</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-SSDO-%E7%8A%B6%E6%80%81%E9%9B%86%E5%90%88"><span class="toc-number">1.10.</span> <span class="toc-text">7. SSDO 状态集合</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E5%88%9B%E5%BB%BA%E3%80%81%E5%90%AF%E5%8A%A8%E3%80%81%E5%81%9C%E6%AD%A2%E5%92%8C%E9%94%80%E6%AF%81"><span class="toc-number">1.11.</span> <span class="toc-text">8. 创建、启动、停止和销毁</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-1-CSDO-%E5%88%9B%E5%BB%BA"><span class="toc-number">1.12.</span> <span class="toc-text">8.1 CSDO 创建</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-2-SSDO-%E5%88%9B%E5%BB%BA"><span class="toc-number">1.13.</span> <span class="toc-text">8.2 SSDO 创建</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-3-start-%E5%81%9A%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.14.</span> <span class="toc-text">8.3 start() 做了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-4-stop-%E5%81%9A%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.15.</span> <span class="toc-text">8.4 stop() 做了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-can-net-t-%E6%98%AF%E5%8D%8F%E8%AE%AE%E6%A0%88%E4%B8%8E%E5%B9%B3%E5%8F%B0%E4%B9%8B%E9%97%B4%E7%9A%84%E8%BE%B9%E7%95%8C"><span class="toc-number">1.16.</span> <span class="toc-text">9. can_net_t 是协议栈与平台之间的边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E6%9C%AC%E5%9C%B0%E5%AF%B9%E8%B1%A1%E8%AE%BF%E9%97%AE-API-%E4%B8%8E%E8%BF%9C%E7%A8%8B-CSDO-%E4%B8%8D%E5%90%8C"><span class="toc-number">1.17.</span> <span class="toc-text">10. 本地对象访问 API 与远程 CSDO 不同</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-CSDO-%E6%8F%90%E4%BA%A4%E8%AF%B7%E6%B1%82%E5%89%8D%E7%9A%84%E7%BB%9F%E4%B8%80%E6%A3%80%E6%9F%A5"><span class="toc-number">1.18.</span> <span class="toc-text">11. CSDO 提交请求前的统一检查</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E5%BF%AB%E9%80%9F%E4%B8%8B%E8%BD%BD%EF%BC%9AClient-%E5%86%99%E5%85%A5-1-%E5%88%B0-4-%E5%AD%97%E8%8A%82"><span class="toc-number">1.19.</span> <span class="toc-text">12. 快速下载：Client 写入 1 到 4 字节</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-0-%E5%AD%97%E8%8A%82%E5%80%BC%E4%B8%BA%E4%BB%80%E4%B9%88%E8%B5%B0%E5%88%86%E6%AE%B5%E4%B8%8B%E8%BD%BD"><span class="toc-number">1.20.</span> <span class="toc-text">13. 0 字节值为什么走分段下载</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-%E6%99%AE%E9%80%9A%E5%88%86%E6%AE%B5%E4%B8%8B%E8%BD%BD%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.21.</span> <span class="toc-text">14. 普通分段下载状态机</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#14-1-CSDO-%E4%BE%A7"><span class="toc-number">1.21.1.</span> <span class="toc-text">14.1 CSDO 侧</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-2-toggle-%E6%A3%80%E6%9F%A5"><span class="toc-number">1.21.2.</span> <span class="toc-text">14.2 toggle 检查</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-3-SSDO-%E4%BE%A7"><span class="toc-number">1.21.3.</span> <span class="toc-text">14.3 SSDO 侧</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E5%BF%AB%E9%80%9F%E4%B8%8A%E4%BC%A0%EF%BC%9AServer-%E8%BF%94%E5%9B%9E-1-%E5%88%B0-4-%E5%AD%97%E8%8A%82"><span class="toc-number">1.22.</span> <span class="toc-text">15. 快速上传：Server 返回 1 到 4 字节</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-%E6%99%AE%E9%80%9A%E5%88%86%E6%AE%B5%E4%B8%8A%E4%BC%A0%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.23.</span> <span class="toc-text">16. 普通分段上传状态机</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#16-1-SSDO-%E4%BE%A7%E6%95%B0%E6%8D%AE%E7%94%9F%E4%BA%A7"><span class="toc-number">1.23.1.</span> <span class="toc-text">16.1 SSDO 侧数据生产</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#16-2-CSDO-%E4%BE%A7%E6%95%B0%E6%8D%AE%E8%81%9A%E5%90%88"><span class="toc-number">1.23.2.</span> <span class="toc-text">16.2 CSDO 侧数据聚合</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-Client-SDO-block-download"><span class="toc-number">1.24.</span> <span class="toc-text">17. Client-SDO block download</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#17-1-%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="toc-number">1.24.1.</span> <span class="toc-text">17.1 初始化</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#17-2-%E5%AD%90%E5%9D%97%E5%8F%91%E9%80%81"><span class="toc-number">1.24.2.</span> <span class="toc-text">17.2 子块发送</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#17-3-Go-Back-N-%E5%BC%8F%E6%81%A2%E5%A4%8D"><span class="toc-number">1.24.3.</span> <span class="toc-text">17.3 Go-Back-N 式恢复</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#17-4-%E7%BB%93%E6%9D%9F%E4%B8%8E-CRC"><span class="toc-number">1.24.4.</span> <span class="toc-text">17.4 结束与 CRC</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-Client-SDO-block-upload"><span class="toc-number">1.25.</span> <span class="toc-text">18. Client-SDO block upload</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#18-1-CSDO-%E5%88%9D%E5%A7%8B%E5%8F%82%E6%95%B0"><span class="toc-number">1.25.1.</span> <span class="toc-text">18.1 CSDO 初始参数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#18-2-block-size-%E5%85%BC%E5%AE%B9%E9%80%80%E8%AE%A9"><span class="toc-number">1.25.2.</span> <span class="toc-text">18.2 block size 兼容退让</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#18-3-Server-induced-protocol-switch"><span class="toc-number">1.25.3.</span> <span class="toc-text">18.3 Server-induced protocol switch</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#18-4-%E5%AD%90%E5%9D%97%E6%8E%A5%E6%94%B6%E5%92%8C%E7%A1%AE%E8%AE%A4"><span class="toc-number">1.25.4.</span> <span class="toc-text">18.4 子块接收和确认</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#18-5-%E7%BB%93%E6%9D%9F%E6%A0%A1%E9%AA%8C"><span class="toc-number">1.25.5.</span> <span class="toc-text">18.5 结束校验</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#19-Protocol-Switch-Threshold-%E7%9A%84%E5%AE%9E%E9%99%85%E4%BD%9C%E7%94%A8"><span class="toc-number">1.26.</span> <span class="toc-text">19. Protocol Switch Threshold 的实际作用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#20-timeout-%E7%9A%84%E7%9C%9F%E5%AE%9E%E8%AE%A1%E6%97%B6%E8%BE%B9%E7%95%8C"><span class="toc-number">1.27.</span> <span class="toc-text">20. timeout 的真实计时边界</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#20-1-CSDO"><span class="toc-number">1.27.1.</span> <span class="toc-text">20.1 CSDO</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#20-2-SSDO"><span class="toc-number">1.27.2.</span> <span class="toc-text">20.2 SSDO</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#20-3-%E6%AF%8F%E4%B8%AA-CSDO-SSDO-%E4%B8%80%E4%B8%AA-timer"><span class="toc-number">1.27.3.</span> <span class="toc-text">20.3 每个 CSDO&#x2F;SSDO 一个 timer</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#21-abort-%E6%98%AF%E5%8D%8F%E8%AE%AE%E9%94%99%E8%AF%AF%EF%BC%8C%E4%B9%9F%E6%98%AF%E7%BB%9F%E4%B8%80%E5%AE%8C%E6%88%90%E8%B7%AF%E5%BE%84"><span class="toc-number">1.28.</span> <span class="toc-text">21. abort 是协议错误，也是统一完成路径</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#21-1-CSDO-%E7%9A%84%E4%B8%A4%E7%B1%BB-abort"><span class="toc-number">1.28.1.</span> <span class="toc-text">21.1 CSDO 的两类 abort</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#21-2-SSDO-%E7%9A%84%E4%B8%A4%E7%B1%BB-abort"><span class="toc-number">1.28.2.</span> <span class="toc-text">21.2 SSDO 的两类 abort</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#21-3-%E5%B8%B8%E8%A7%81-abort-%E6%9D%A5%E6%BA%90"><span class="toc-number">1.28.3.</span> <span class="toc-text">21.3 常见 abort 来源</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-%E5%AE%8C%E6%88%90-callback-%E4%B8%8E%E8%BF%9B%E5%BA%A6-indication"><span class="toc-number">1.29.</span> <span class="toc-text">22. 完成 callback 与进度 indication</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-1-%E4%B8%8B%E8%BD%BD%E7%A1%AE%E8%AE%A4"><span class="toc-number">1.30.</span> <span class="toc-text">22.1 下载确认</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-2-%E4%B8%8A%E4%BC%A0%E7%A1%AE%E8%AE%A4"><span class="toc-number">1.31.</span> <span class="toc-text">22.2 上传确认</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-3-%E8%BF%9B%E5%BA%A6-indication"><span class="toc-number">1.32.</span> <span class="toc-text">22.3 进度 indication</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#23-completion-callback-%E7%9A%84%E9%87%8D%E5%85%A5%E8%BE%B9%E7%95%8C"><span class="toc-number">1.33.</span> <span class="toc-text">23. completion callback 的重入边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#24-%E5%8F%82%E6%95%B0%E5%AF%B9%E8%B1%A1%E5%8A%A8%E6%80%81%E6%9B%B4%E6%96%B0"><span class="toc-number">1.34.</span> <span class="toc-text">24. 参数对象动态更新</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#24-1-COB-ID-%E4%BF%AE%E6%94%B9%E9%99%90%E5%88%B6"><span class="toc-number">1.34.1.</span> <span class="toc-text">24.1 COB-ID 修改限制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-2-%E6%89%A9%E5%B1%95%E5%B8%A7%E6%A3%80%E6%9F%A5"><span class="toc-number">1.34.2.</span> <span class="toc-text">24.2 扩展帧检查</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#24-3-%E6%9B%B4%E6%96%B0%E4%BC%9A%E6%89%93%E6%96%AD%E4%BC%A0%E8%BE%93"><span class="toc-number">1.34.3.</span> <span class="toc-text">24.3 更新会打断传输</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#25-CSDO-%E4%B8%8B%E8%BD%BD%E7%BC%93%E5%86%B2%E5%8C%BA%E6%89%80%E6%9C%89%E6%9D%83"><span class="toc-number">1.35.</span> <span class="toc-text">25. CSDO 下载缓冲区所有权</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#26-SSDO-request-buffer-%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.36.</span> <span class="toc-text">26. SSDO request buffer 生命周期</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#27-%E6%97%A0%E5%8A%A8%E6%80%81%E5%86%85%E5%AD%98%E9%85%8D%E7%BD%AE"><span class="toc-number">1.37.</span> <span class="toc-text">27. 无动态内存配置</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#27-1-CSDO"><span class="toc-number">1.37.1.</span> <span class="toc-text">27.1 CSDO</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#27-2-SSDO"><span class="toc-number">1.37.2.</span> <span class="toc-text">27.2 SSDO</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#28-%E6%9D%A1%E4%BB%B6%E7%BC%96%E8%AF%91%E8%BE%B9%E7%95%8C"><span class="toc-number">1.38.</span> <span class="toc-text">28. 条件编译边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#29-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E5%92%8C%E4%B8%B2%E8%A1%8C%E5%8C%96%E8%A6%81%E6%B1%82"><span class="toc-number">1.39.</span> <span class="toc-text">29. 线程安全和串行化要求</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#30-CSDO-%E5%AE%8C%E6%95%B4%E4%B8%8B%E8%BD%BD%E6%B5%81%E7%A8%8B"><span class="toc-number">1.40.</span> <span class="toc-text">30. CSDO 完整下载流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#31-SSDO-%E5%AE%8C%E6%95%B4%E8%AF%B7%E6%B1%82%E5%A4%84%E7%90%86%E6%B5%81%E7%A8%8B"><span class="toc-number">1.41.</span> <span class="toc-text">31. SSDO 完整请求处理流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#38-%E5%AE%8C%E6%95%B4%E6%9C%BA%E5%88%B6%E6%80%BB%E5%9B%BE"><span class="toc-number">1.42.</span> <span class="toc-text">38. 完整机制总图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#39-%E6%9C%80%E7%BB%88%E5%BF%83%E6%99%BA%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.43.</span> <span class="toc-text">39. 最终心智模型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E6%BA%90%E7%A0%81%E4%B8%8E%E8%B5%84%E6%96%99"><span class="toc-number">1.44.</span> <span class="toc-text">参考源码与资料</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E6%BA%90%E7%A0%81"><span class="toc-number">1.44.1.</span> <span class="toc-text">核心源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E8%81%94%E6%BA%90%E7%A0%81"><span class="toc-number">1.44.2.</span> <span class="toc-text">关联源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Lely-%E5%AE%98%E6%96%B9%E7%BD%91%E9%A1%B5"><span class="toc-number">1.44.3.</span> <span class="toc-text">Lely 官方网页</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8D%8F%E8%AE%AE%E5%8F%82%E8%80%83"><span class="toc-number">1.44.4.</span> <span class="toc-text">协议参考</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%89%8D%E7%BD%AE%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0"><span class="toc-number">1.44.5.</span> <span class="toc-text">前置学习笔记</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/29909618/" title="linux学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="linux学习笔记系列"/></a><div class="content"><a class="title" href="/posts/29909618/" title="linux学习笔记系列">linux学习笔记系列</a><time datetime="2026-07-31T07:13:29.578Z" title="更新于 2026-07-31 15:13:29">2026-07-31</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/98557f4f/" title="git学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="git学习笔记系列"/></a><div class="content"><a class="title" href="/posts/98557f4f/" title="git学习笔记系列">git学习笔记系列</a><time datetime="2026-07-31T07:12:01.710Z" title="更新于 2026-07-31 15:12:01">2026-07-31</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/722454e5/" title="MCU学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="MCU学习笔记系列"/></a><div class="content"><a class="title" href="/posts/722454e5/" title="MCU学习笔记系列">MCU学习笔记系列</a><time datetime="2026-07-31T07:12:01.704Z" title="更新于 2026-07-31 15:12:01">2026-07-31</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/9d08c89d/" title="嵌入式面试真题学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="嵌入式面试真题学习笔记系列"/></a><div class="content"><a class="title" href="/posts/9d08c89d/" title="嵌入式面试真题学习笔记系列">嵌入式面试真题学习笔记系列</a><time datetime="2026-07-31T07:11:56.591Z" title="更新于 2026-07-31 15:11:56">2026-07-31</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/95103a74/" title="杂谈学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="杂谈学习笔记系列"/></a><div class="content"><a class="title" href="/posts/95103a74/" title="杂谈学习笔记系列">杂谈学习笔记系列</a><time datetime="2026-07-31T07:11:56.586Z" title="更新于 2026-07-31 15:11:56">2026-07-31</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/06.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '36aa72862d8d4dcdb864ae763598e845'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",13]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":39},{"name":"杂谈","value":37}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":44},{"name":"u-boot分类","value":44},{"name":"MCU","value":39},{"name":"杂谈","value":37}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":44}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"MCU","children":[],"count":39,"path":"MCU"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"git","children":[],"count":13,"path":"git"},{"name":"canopen","children":[],"count":35,"path":"canopen"},{"name":"hpatch","children":[{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"},{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"}],"count":10,"path":"hpatch"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"linux","children":[{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"drivers","children":[{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":44,"path":"rt-thread"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"},{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"杂谈","children":[],"count":36,"path":"杂谈"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>
