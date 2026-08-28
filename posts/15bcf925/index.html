@@ -1,0 +1,1468 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>RT-Thread 如何用 MPU 做线程栈保护 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="RT-Thread 如何用 MPU 做线程栈保护  摘要：结合 RT-Thread 当前 Cortex-M4 实现，拆解 MPU 内存保护、线程双 Guard 区、上下文切换重装载以及 MemManage Fault 的完整运行链路。  在 Cortex-M 系列 MCU 上，线程栈溢出一直是最难排查的一类故障之一。它往往不是在“栈刚好用完”的那一刻表现为明确错误，而是先覆盖相邻内存，再以随机">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RT-Thread 如何用 MPU 做线程栈保护">
+<meta property="og:url" content="https://wdfk-prog.space/posts/15bcf925/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="RT-Thread 如何用 MPU 做线程栈保护  摘要：结合 RT-Thread 当前 Cortex-M4 实现，拆解 MPU 内存保护、线程双 Guard 区、上下文切换重装载以及 MemManage Fault 的完整运行链路。  在 Cortex-M 系列 MCU 上，线程栈溢出一直是最难排查的一类故障之一。它往往不是在“栈刚好用完”的那一刻表现为明确错误，而是先覆盖相邻内存，再以随机">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/06.jpg">
+<meta property="article:published_time" content="2026-08-28T08:56:23.000Z">
+<meta property="article:modified_time" content="2026-08-28T08:57:04.226Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="rt-thread">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/06.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "RT-Thread 如何用 MPU 做线程栈保护",
+  "url": "https://wdfk-prog.space/posts/15bcf925/",
+  "image": "https://wdfk-prog.space/images/covers/06.jpg",
+  "datePublished": "2026-08-28T08:56:23.000Z",
+  "dateModified": "2026-08-28T08:57:04.226Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/15bcf925/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'RT-Thread 如何用 MPU 做线程栈保护',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">574</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/06.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">RT-Thread 如何用 MPU 做线程栈保护</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">RT-Thread 如何用 MPU 做线程栈保护<a class="post-edit-link" href="null_posts/rt-thread/RT-Thread 如何用 MPU 做线程栈保护.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-28T08:56:23.000Z" title="发表于 2026-08-28 16:56:23">2026-08-28</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-28T08:57:04.226Z" title="更新于 2026-08-28 16:57:04">2026-08-28</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/rt-thread/">rt-thread</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>23分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/15bcf925/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-08-28 16:57:04&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="RT-Thread-如何用-MPU-做线程栈保护"><a href="#RT-Thread-如何用-MPU-做线程栈保护" class="headerlink" title="RT-Thread 如何用 MPU 做线程栈保护"></a>RT-Thread 如何用 MPU 做线程栈保护</h1><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/69c48f7f5a4b49748a9ebaffef40263c.png" alt="在这里插入图片描述"></p>
+<blockquote>
+<p>摘要：结合 RT-Thread 当前 Cortex-M4 实现，拆解 MPU 内存保护、线程双 Guard 区、上下文切换重装载以及 MemManage Fault 的完整运行链路。</p>
+</blockquote>
+<p>在 Cortex-M 系列 MCU 上，线程栈溢出一直是最难排查的一类故障之一。它往往不是在“栈刚好用完”的那一刻表现为明确错误，而是先覆盖相邻内存，再以随机变量异常、链表损坏、HardFault、跑飞甚至数分钟后的非确定性故障出现。</p>
+<p>RT-Thread 传统的 <code>RT_USING_OVERFLOW_CHECK</code> 可以对线程栈做软件检查，但软件检查本质上依赖检查时机：如果栈已经越界，在下一次检查发生之前，相邻内存仍可能先被破坏。</p>
+<p>另一条路线是利用 Cortex-M 自带的 MPU（Memory Protection Unit）。RT-Thread 的 <code>RT_USING_MEM_PROTECTION</code> 提供了 MPU 抽象层，而 <code>RT_USING_HW_STACK_GUARD</code> 则进一步利用 MPU，在每个线程栈的上下边界放置不可访问区域。一旦 CPU 真正访问到 Guard 区，就会触发 MemManage Fault。</p>
+<p>截至 2026-08-27，RT-Thread 主线已经加入 Cortex-M4 对这套机制的支持。相关提交为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">e2e6245aace07b545b8dbcef8fbcdb4469f55d9f</span><br><span class="line">[arm][cortex-m4] Add hardware stack guard support</span><br></pre></td></tr></table></figure>
+
+<p>这使得 STM32F407 这类 Cortex-M4F MCU 可以直接使用 RT-Thread 的 MPU 抽象层和硬件线程栈保护。下面从硬件原理、RT-Thread 实现和实际运行过程三个层面把整条链路串起来。</p>
+<hr>
+<h2 id="1-两个配置项分别解决什么问题"><a href="#1-两个配置项分别解决什么问题" class="headerlink" title="1. 两个配置项分别解决什么问题"></a>1. 两个配置项分别解决什么问题</h2><p>先看 Kconfig 里的依赖关系：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">RT_USING_HW_STACK_GUARD</span><br><span class="line">        |</span><br><span class="line">        v</span><br><span class="line">RT_USING_MEM_PROTECTION</span><br><span class="line">        |</span><br><span class="line">        v</span><br><span class="line">RT_USING_HEAP</span><br></pre></td></tr></table></figure>
+
+<p>当前 <code>components/mprotect/Kconfig</code> 中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">config RT_USING_MEM_PROTECTION</span><br><span class="line">    bool &quot;Enable memory protection&quot;</span><br><span class="line">    default n</span><br><span class="line">    select RT_USING_HEAP</span><br><span class="line"></span><br><span class="line">config RT_USING_HW_STACK_GUARD</span><br><span class="line">    bool &quot;Enable hardware stack guard&quot;</span><br><span class="line">    default n</span><br><span class="line">    select RT_USING_MEM_PROTECTION</span><br></pre></td></tr></table></figure>
+
+<p>因此，<code>RT_USING_HW_STACK_GUARD</code> 不是一个独立实现，它是 <code>RT_USING_MEM_PROTECTION</code> 之上的一种具体应用。</p>
+<h3 id="1-1-RT-USING-MEM-PROTECTION"><a href="#1-1-RT-USING-MEM-PROTECTION" class="headerlink" title="1.1 RT_USING_MEM_PROTECTION"></a>1.1 <code>RT_USING_MEM_PROTECTION</code></h3><p>它提供的是一层通用的内存保护抽象。</p>
+<p>在 ARMv7-M Cortex-M4 上，底层对应硬件 MPU。RT-Thread 用统一的 <code>rt_mem_region_t</code> 描述一个受保护区域：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">    <span class="type">void</span> *start;</span><br><span class="line">    <span class="type">rt_size_t</span> size;</span><br><span class="line">    <span class="type">rt_mem_attr_t</span> attr;</span><br><span class="line">&#125; <span class="type">rt_mem_region_t</span>;</span><br></pre></td></tr></table></figure>
+
+<p>应用层可以通过：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">rt_mprotect_add_region();</span><br><span class="line">rt_mprotect_delete_region();</span><br><span class="line">rt_mprotect_update_region();</span><br></pre></td></tr></table></figure>
+
+<p>给某个线程增加、删除或修改 MPU region。</p>
+<p>也可以通过：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rt_mprotect_add_exclusive_region();</span><br><span class="line">rt_mprotect_delete_exclusive_region();</span><br></pre></td></tr></table></figure>
+
+<p>建立“只有 owner 线程能够访问”的区域。</p>
+<p>它可以用来完成：</p>
+<ul>
+<li>Flash 只读、可执行；</li>
+<li>RAM 可读写、不可执行；</li>
+<li>指定线程只能访问指定数据；</li>
+<li>某段内存仅由一个线程拥有；</li>
+<li>线程栈边界保护。</li>
+</ul>
+<p>但要注意，普通 RT-Thread Cortex-M4 系统中的线程和内核仍然共享同一套物理地址空间。这里的 MPU 更准确地说是在共享地址空间上增加访问约束，而不是像 MMU + 虚拟内存那样建立进程级地址空间隔离。</p>
+<h3 id="1-2-RT-USING-HW-STACK-GUARD"><a href="#1-2-RT-USING-HW-STACK-GUARD" class="headerlink" title="1.2 RT_USING_HW_STACK_GUARD"></a>1.2 <code>RT_USING_HW_STACK_GUARD</code></h3><p>这个选项专门解决线程栈越界检测。</p>
+<p>它不会改变 C 编译器生成函数栈帧的方式，也不是 GCC 的 <code>-fstack-protector</code>。它的工作方式更接近硬件“防撞墙”：RT-Thread 在每个线程的栈两端各放置一个 MPU No-Access 区域，一旦 CPU 对这块区域发起访问，就由 MPU 拦截。</p>
+<p>所以它检测的是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">CPU 是否真正访问了线程栈边界之外的受保护区域</span><br></pre></td></tr></table></figure>
+
+<p>而不是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">某个软件标记是否已经被改写</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="2-Cortex-M4-MPU-为什么能实现这种保护"><a href="#2-Cortex-M4-MPU-为什么能实现这种保护" class="headerlink" title="2. Cortex-M4 MPU 为什么能实现这种保护"></a>2. Cortex-M4 MPU 为什么能实现这种保护</h2><p>Cortex-M4 属于 ARMv7E-M 架构，MPU region 具有几个直接影响 RT-Thread 实现的约束：</p>
+<ul>
+<li>region 数量有限；</li>
+<li>最小 region 大小为 32 Byte；</li>
+<li>region size 必须是 2 的幂；</li>
+<li>region base 必须按 region size 自然对齐；</li>
+<li>可以配置读、写、执行权限；</li>
+<li>访问违反权限的地址可以产生 MemManage Fault。</li>
+</ul>
+<p>RT-Thread Cortex-M4 实现中的 <code>rt_hw_mpu_region_valid()</code> 也直接检查这三个条件：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (region-&gt;size &lt; MPU_MIN_REGION_SIZE)</span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> RT_FALSE;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> ((region-&gt;size &amp; (region-&gt;size - <span class="number">1U</span>)) != <span class="number">0U</span>)</span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> RT_FALSE;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (((<span class="type">rt_uint32_t</span>)region-&gt;start &amp; (region-&gt;size - <span class="number">1U</span>)) != <span class="number">0U</span>)</span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> RT_FALSE;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>其中：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> MPU_MIN_REGION_SIZE 32U</span></span><br></pre></td></tr></table></figure>
+
+<p>对于 STM32F407，MPU 提供 8 个 region。因此当前使用这套功能时，典型配置为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">NUM_MEM_REGIONS=8</span><br></pre></td></tr></table></figure>
+
+<p>RT-Thread 不会只相信配置值。<code>rt_hw_mpu_init()</code> 启动时还会读取：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">MPU-&gt;TYPE</span><br></pre></td></tr></table></figure>
+
+<p>获取硬件真实支持的 region 数量，然后与 <code>NUM_MEM_REGIONS</code> 比较。配置和硬件不一致时初始化会失败。</p>
+<p>这个设计很重要，因为 <code>NUM_MEM_REGIONS</code> 不是“想要几个就配置几个”，而是对目标处理器硬件能力的描述。</p>
+<hr>
+<h2 id="3-一个线程的栈实际上被改造成什么样"><a href="#3-一个线程的栈实际上被改造成什么样" class="headerlink" title="3. 一个线程的栈实际上被改造成什么样"></a>3. 一个线程的栈实际上被改造成什么样</h2><p>在 Cortex-M4 上，RT-Thread 线程栈向低地址方向增长。</p>
+<p>打开硬件栈保护以后，原始 stack buffer 不再全部作为可用线程栈，而会被切成三个主要部分：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">低地址</span><br><span class="line"></span><br><span class="line">原始 stack buffer</span><br><span class="line">+--------------------------------------------------+</span><br><span class="line">| 对齐填充                                         |</span><br><span class="line">+--------------------------------------------------+</span><br><span class="line">| Bottom Guard：32 B，MPU No Access                |</span><br><span class="line">+--------------------------------------------------+</span><br><span class="line">|                                                  |</span><br><span class="line">|             可用线程栈                           |</span><br><span class="line">|                                                  |</span><br><span class="line">|           stack 向低地址增长                     |</span><br><span class="line">|                    ↓                             |</span><br><span class="line">+--------------------------------------------------+</span><br><span class="line">| Top Guard：32 B，MPU No Access                   |</span><br><span class="line">+--------------------------------------------------+</span><br><span class="line">| 对齐填充                                         |</span><br><span class="line">+--------------------------------------------------+</span><br><span class="line"></span><br><span class="line">高地址</span><br></pre></td></tr></table></figure>
+
+<p>真正用于捕捉典型线程栈溢出的主要是低地址侧 Bottom Guard，因为 Cortex-M4 的线程栈通常从高地址向低地址增长。</p>
+<p>高地址侧 Top Guard 仍然有意义，它可以覆盖错误 SP、越界访问或者其他破坏栈上边界的情况。</p>
+<p>对应的 Cortex-M4 代码位于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">libcpu/arm/cortex-m4/cpuport.c</span><br></pre></td></tr></table></figure>
+
+<p>核心函数是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">rt_hw_stack_guard_init</span><span class="params">(<span class="type">rt_thread_t</span> thread)</span></span><br></pre></td></tr></table></figure>
+
+<p>其主要逻辑可以概括为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">stack_bottom = thread-&gt;stack_addr;</span><br><span class="line">stack_top = thread-&gt;stack_addr + thread-&gt;stack_size;</span><br><span class="line"></span><br><span class="line">bottom_guard_start = align_up(stack_bottom, <span class="number">32</span>);</span><br><span class="line">top_guard_start = align_down(stack_top - <span class="number">32</span>, <span class="number">32</span>);</span><br><span class="line"></span><br><span class="line">bottom_guard = [bottom_guard_start, bottom_guard_start + <span class="number">32</span>);</span><br><span class="line">top_guard = [top_guard_start, top_guard_start + <span class="number">32</span>);</span><br><span class="line"></span><br><span class="line">rt_mprotect_add_region(thread, &amp;bottom_guard);</span><br><span class="line">rt_mprotect_add_region(thread, &amp;top_guard);</span><br></pre></td></tr></table></figure>
+
+<p>两个 region 的属性都是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">RT_MEM_REGION_P_NA_U_NA</span><br></pre></td></tr></table></figure>
+
+<p>也就是 Privileged No Access &#x2F; Unprivileged No Access。</p>
+<p>随后 RT-Thread 会修改线程控制块：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">thread-&gt;stack_buf = thread-&gt;stack_addr;</span><br><span class="line">thread-&gt;stack_addr = (<span class="type">void</span> *)(bottom_guard_start + <span class="number">32</span>);</span><br><span class="line">thread-&gt;stack_size = top_guard_start - bottom_guard_start - <span class="number">32</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这里的语义变化非常重要：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">stack_buf</span><br><span class="line">    -&gt; 原始分配出来的完整 stack buffer</span><br><span class="line"></span><br><span class="line">stack_addr / stack_size</span><br><span class="line">    -&gt; 排除两个 Guard 后真正允许线程使用的栈</span><br></pre></td></tr></table></figure>
+
+<p>所以开启 Guard 以后，<code>thread-&gt;stack_size</code> 已经不是最初传给 <code>rt_thread_create()</code> 或 <code>rt_thread_init()</code> 的原始大小。</p>
+<hr>
+<h2 id="4-为什么线程创建时还要分配一张-MPU-region-表"><a href="#4-为什么线程创建时还要分配一张-MPU-region-表" class="headerlink" title="4. 为什么线程创建时还要分配一张 MPU region 表"></a>4. 为什么线程创建时还要分配一张 MPU region 表</h2><p>很多人第一次看到 MPU 栈保护时，会自然认为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">每个线程直接占用两个硬件 MPU region</span><br></pre></td></tr></table></figure>
+
+<p>实际上不是。</p>
+<p>Cortex-M4 的硬件 MPU 只有固定数量的 region。例如 STM32F407 只有 8 个，不可能 20 个线程就需要 40 个硬件 region。</p>
+<p>RT-Thread 使用的是“软件表 + 上下文切换时重装载”的方式。</p>
+<p>每个线程的 <code>rt_thread</code> 中都有：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">ifdef</span> RT_USING_MEM_PROTECTION</span></span><br><span class="line">    <span class="type">void</span> *mem_regions;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>开启硬件栈保护时：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> NUM_DYNAMIC_REGIONS (2 + NUM_CONFIGURABLE_REGIONS)</span></span><br></pre></td></tr></table></figure>
+
+<p>这里额外的 <code>2</code> 就是 Bottom Guard 和 Top Guard。</p>
+<p>线程第一次执行 <code>rt_mprotect_add_region()</code> 时，RT-Thread 会为该线程分配自己的 region 表：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">thread-&gt;mem_regions = RT_KERNEL_MALLOC(</span><br><span class="line">    NUM_DYNAMIC_REGIONS * <span class="keyword">sizeof</span>(<span class="type">rt_mem_region_t</span>));</span><br></pre></td></tr></table></figure>
+
+<p>因此整个关系实际上是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    TCB[&quot;rt_thread / TCB&quot;] --&gt; Table[&quot;线程软件 mem_regions 表&quot;]</span><br><span class="line">    Table --&gt; Bottom[&quot;Bottom Guard 配置&quot;]</span><br><span class="line">    Table --&gt; Top[&quot;Top Guard 配置&quot;]</span><br><span class="line">    Table --&gt; Custom[&quot;可选 configurable regions&quot;]</span><br><span class="line">    Table --&gt; Switch[&quot;PendSV 上下文切换&quot;]</span><br><span class="line">    Switch --&gt; MPU[&quot;Cortex-M4 硬件 MPU region slots&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>图里最重要的是最后两步：线程自己的 region 配置长期保存在 RAM 中，真正的硬件 MPU slot 在调度时被当前线程反复复用。</p>
+<p>这也解释了两个现象。</p>
+<p>第一，线程数量增加不会线性消耗硬件 MPU region 数量，但会增加 RAM 占用。</p>
+<p>第二，只要启用 per-thread MPU region，线程切换就需要重新编程 MPU，因此上下文切换路径会增加额外工作。</p>
+<p>还有一个容易忽略的工程语义：即使线程本身通过 <code>rt_thread_init()</code> 使用静态 TCB 和静态 stack，当前硬件 Guard 的 <code>mem_regions</code> 仍由 <code>RT_KERNEL_MALLOC()</code> 分配。因此开启该功能以后，“静态线程”不再意味着整个线程相关数据都完全不使用 heap。</p>
+<p>这也正是 <code>RT_USING_MEM_PROTECTION</code> 在 Kconfig 中主动 <code>select RT_USING_HEAP</code> 的原因之一。</p>
+<hr>
+<h2 id="5-从-rt-thread-create-到-Guard-建立的完整调用链"><a href="#5-从-rt-thread-create-到-Guard-建立的完整调用链" class="headerlink" title="5. 从 rt_thread_create() 到 Guard 建立的完整调用链"></a>5. 从 <code>rt_thread_create()</code> 到 Guard 建立的完整调用链</h2><p>线程初始化核心逻辑位于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">src/thread.c</span><br></pre></td></tr></table></figure>
+
+<p>简化后的调用关系如下：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">rt_thread_create()</span><br><span class="line">    |</span><br><span class="line">    +-- 分配 rt_thread 对象</span><br><span class="line">    |</span><br><span class="line">    +-- RT_KERNEL_MALLOC(stack_size)</span><br><span class="line">    |</span><br><span class="line">    +-- _thread_init()</span><br><span class="line">            |</span><br><span class="line">            +-- thread-&gt;stack_addr = stack_start</span><br><span class="line">            +-- thread-&gt;stack_size = stack_size</span><br><span class="line">            |</span><br><span class="line">            +-- memset(stack, &#x27;#&#x27;, stack_size)</span><br><span class="line">            |</span><br><span class="line">            +-- rt_hw_stack_guard_init()</span><br><span class="line">            |       |</span><br><span class="line">            |       +-- 计算上下两个 32 B Guard</span><br><span class="line">            |       +-- rt_mprotect_add_region(bottom)</span><br><span class="line">            |       +-- rt_mprotect_add_region(top)</span><br><span class="line">            |       +-- 保存 stack_buf</span><br><span class="line">            |       +-- 重写 stack_addr / stack_size</span><br><span class="line">            |</span><br><span class="line">            +-- rt_hw_stack_init()</span><br><span class="line">                    |</span><br><span class="line">                    +-- 在“可用栈”顶部构造初始异常栈帧</span><br></pre></td></tr></table></figure>
+
+<p>注意顺序：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">先调整 Guard 和有效 stack 边界</span><br><span class="line">再建立线程初始上下文</span><br></pre></td></tr></table></figure>
+
+<p>这保证 <code>rt_hw_stack_init()</code> 不会把初始寄存器栈帧放进 Top Guard。</p>
+<p>整个运行过程可以用下面的时序表示：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant APP as &quot;线程创建者&quot;</span><br><span class="line">    participant THR as &quot;RT-Thread thread.c&quot;</span><br><span class="line">    participant GUARD as &quot;Cortex-M4 stack guard&quot;</span><br><span class="line">    participant MPRO as &quot;mprotect&quot;</span><br><span class="line">    participant RAM as &quot;线程 mem_regions 表&quot;</span><br><span class="line"></span><br><span class="line">    APP-&gt;&gt;THR: rt_thread_create(stack_size)</span><br><span class="line">    THR-&gt;&gt;THR: 分配 TCB 和原始 stack buffer</span><br><span class="line">    THR-&gt;&gt;GUARD: rt_hw_stack_guard_init(thread)</span><br><span class="line">    GUARD-&gt;&gt;MPRO: add bottom No-Access region</span><br><span class="line">    MPRO-&gt;&gt;RAM: 首次需要时分配并保存 region</span><br><span class="line">    GUARD-&gt;&gt;MPRO: add top No-Access region</span><br><span class="line">    MPRO-&gt;&gt;RAM: 保存 region</span><br><span class="line">    GUARD-&gt;&gt;THR: 更新 stack_buf / stack_addr / stack_size</span><br><span class="line">    THR-&gt;&gt;THR: rt_hw_stack_init()</span><br><span class="line">    THR--&gt;&gt;APP: 返回 thread handle</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="6-MPU-本身什么时候启用"><a href="#6-MPU-本身什么时候启用" class="headerlink" title="6. MPU 本身什么时候启用"></a>6. MPU 本身什么时候启用</h2><p>通用 MPU 组件位于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">components/mprotect/</span><br></pre></td></tr></table></figure>
+
+<p>在 STM32 BSP 的启动路径中，这个初始化发生得比普通线程创建更早。当前调用关系是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">rtthread_startup()</span><br><span class="line">    -&gt; rt_hw_board_init()</span><br><span class="line">        -&gt; rt_system_heap_init()</span><br><span class="line">        -&gt; rt_components_board_init()</span><br><span class="line">            -&gt; INIT_BOARD_EXPORT(rt_mprotect_init)</span><br><span class="line">                -&gt; rt_hw_mpu_init()</span><br><span class="line">    -&gt; rt_system_scheduler_init()</span><br><span class="line">    -&gt; rt_application_init()</span><br><span class="line">        -&gt; rt_thread_create(&quot;main&quot;, ...)</span><br></pre></td></tr></table></figure>
+
+<p>这条顺序很关键：<code>RT_USING_MEM_PROTECTION</code> 会使用 heap 保存 per-thread region 表，因此 STM32 BSP 先完成 heap 初始化，再执行 Board Export 中的 MPU 初始化；随后 <code>rt_application_init()</code> 才创建 main 线程并建立它的 Guard。</p>
+<p>初始化入口：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">rt_mprotect_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">return</span> (<span class="type">int</span>)rt_hw_mpu_init();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">INIT_BOARD_EXPORT(rt_mprotect_init);</span><br></pre></td></tr></table></figure>
+
+<p>在 Cortex-M4 上，最终进入：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">libcpu/arm/cortex-m4/mpu.c</span><br></pre></td></tr></table></figure>
+
+<p>的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">rt_hw_mpu_init()</span><br></pre></td></tr></table></figure>
+
+<p>这个函数主要做四件事。</p>
+<p>第一，读取 MPU 硬件能力：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">MPU-&gt;TYPE.DREGION</span><br></pre></td></tr></table></figure>
+
+<p>确认处理器确实有 MPU，并校验它与 <code>NUM_MEM_REGIONS</code> 一致。</p>
+<p>第二，检查 region 预算：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">NUM_STATIC_REGIONS</span><br><span class="line">+ NUM_CONFIGURABLE_REGIONS</span><br><span class="line">+ NUM_EXCLUSIVE_REGIONS</span><br><span class="line">+ 2 个 Stack Guard</span><br><span class="line">&lt;= NUM_MEM_REGIONS</span><br></pre></td></tr></table></figure>
+
+<p>第三，关闭 MPU 并写入 BSP 定义的 static regions。</p>
+<p>第四，重新启用 MPU：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ARM_MPU_Enable(MPU_CTRL_PRIVDEFENA_Msk);</span><br></pre></td></tr></table></figure>
+
+<p><code>PRIVDEFENA</code> 表示 privileged code 对未被 MPU region 显式覆盖的地址仍采用默认内存映射。这样 BSP 不需要一开始就把整个 4 GB 地址空间全部拆成 MPU region。</p>
+<p>CMSIS 的 <code>ARM_MPU_Enable()</code> 同时会打开 MemManage Fault：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">SCB-&gt;SHCSR |= SCB_SHCSR_MEMFAULTENA_Msk;</span><br></pre></td></tr></table></figure>
+
+<p>因此 MPU 权限违规能够进入 <code>MemManage_Handler()</code>，而不是所有问题都只表现为 HardFault。</p>
+<hr>
+<h2 id="7-BSP-为什么还需要-static-regions"><a href="#7-BSP-为什么还需要-static-regions" class="headerlink" title="7. BSP 为什么还需要 static_regions[]"></a>7. BSP 为什么还需要 <code>static_regions[]</code></h2><p><code>NUM_MEM_REGIONS</code> 是处理器总共有多少 MPU slot，而 <code>NUM_STATIC_REGIONS</code> 则由 BSP 决定要永久占用多少个 MPU region。</p>
+<p>当前 STM32F407 参考 BSP：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">bsp/stm32/stm32f407-fk407m2-zgt6</span><br></pre></td></tr></table></figure>
+
+<p>在 <code>board.h</code> 中定义：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">ifdef</span> RT_USING_MEM_PROTECTION</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NUM_STATIC_REGIONS 1</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>在 <code>board.c</code> 中提供：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">rt_mem_region_t</span> static_regions[NUM_STATIC_REGIONS] = &#123;</span><br><span class="line">    &#123;</span><br><span class="line">        .start = (<span class="type">void</span> *)STM32_FLASH_START_ADRESS,</span><br><span class="line">        .size = (<span class="type">rt_size_t</span>)STM32_FLASH_SIZE,</span><br><span class="line">        .attr = RT_MEM_REGION_P_RX_U_RX,</span><br><span class="line">    &#125;,</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>含义是把整个 Flash 配置成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Read + Execute</span><br><span class="line">No Write</span><br></pre></td></tr></table></figure>
+
+<p>对于 STM32F407，如果只做线程 Guard，可以用这样的 region 预算：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">硬件 MPU region 总数：        8</span><br><span class="line">static Flash region：          1</span><br><span class="line">per-thread configurable：      0</span><br><span class="line">exclusive region：             0</span><br><span class="line">stack guard：                  2</span><br><span class="line">---------------------------------</span><br><span class="line">当前线程运行时使用：           3 / 8</span><br></pre></td></tr></table></figure>
+
+<p>关键是“当前线程运行时”。</p>
+<p>两个 Guard 并不是每个线程永久占用硬件 slot，而是每个线程保留自己的配置，调度时装进相同的硬件动态 slot。</p>
+<hr>
+<h2 id="8-PendSV-为什么必须参与-MPU-保护"><a href="#8-PendSV-为什么必须参与-MPU-保护" class="headerlink" title="8. PendSV 为什么必须参与 MPU 保护"></a>8. PendSV 为什么必须参与 MPU 保护</h2><p>如果只在线程创建时写一次 MPU，会出现一个根本问题：不同线程需要不同的栈 Guard 地址。</p>
+<p>线程 A 的栈可能位于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0x20001000 ~ 0x20001400</span><br></pre></td></tr></table></figure>
+
+<p>线程 B 的栈可能位于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0x20002000 ~ 0x20002800</span><br></pre></td></tr></table></figure>
+
+<p>CPU 从 A 切到 B 以后，如果 MPU 仍然保留 A 的 Guard，那么 B 的栈根本没有受到正确保护。</p>
+<p>因此 MPU region 必须成为“线程上下文”的一部分。</p>
+<p>Cortex-M4 当前 GCC 上下文切换代码在 PendSV 切换路径中加入：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rt_thread_self()</span><br><span class="line">    -&gt; rt_hw_mpu_table_switch(current_thread)</span><br></pre></td></tr></table></figure>
+
+<p><code>rt_hw_mpu_table_switch()</code> 会：</p>
+<ol>
+<li>读取当前线程的 <code>mem_regions</code>；</li>
+<li>把 dynamic regions 写入 MPU；</li>
+<li>根据 exclusive region owner 关系写入需要隔离的区域；</li>
+<li>清空没有使用的 MPU slot。</li>
+</ol>
+<p>运行链路如下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant PEND as &quot;PendSV&quot;</span><br><span class="line">    participant SCHED as &quot;RT-Thread 调度上下文&quot;</span><br><span class="line">    participant TCB as &quot;新线程 TCB&quot;</span><br><span class="line">    participant SW as &quot;rt_hw_mpu_table_switch&quot;</span><br><span class="line">    participant MPU as &quot;Cortex-M4 MPU&quot;</span><br><span class="line"></span><br><span class="line">    PEND-&gt;&gt;SCHED: 完成线程上下文选择</span><br><span class="line">    SCHED-&gt;&gt;TCB: current_thread 指向新线程</span><br><span class="line">    PEND-&gt;&gt;SW: rt_hw_mpu_table_switch(current_thread)</span><br><span class="line">    SW-&gt;&gt;TCB: 读取 mem_regions</span><br><span class="line">    SW-&gt;&gt;MPU: 写入当前线程 dynamic regions</span><br><span class="line">    SW-&gt;&gt;MPU: 写入适用的 exclusive regions</span><br><span class="line">    SW-&gt;&gt;MPU: 清除剩余动态 slot</span><br><span class="line">    SW--&gt;&gt;PEND: MPU 已匹配新线程</span><br><span class="line">    PEND-&gt;&gt;PEND: 恢复新线程寄存器并返回</span><br></pre></td></tr></table></figure>
+
+<p>这一步决定了硬件 Guard 能否随着线程真正“移动”。</p>
+<p>也正因为如此，启用内存保护以后，线程切换路径会增加 MPU register programming 开销。这个开销能从源码确认存在，但具体增加多少 cycle 不能只靠代码静态推导；它取决于 CPU 主频、编译优化、动态 region 数量、Flash wait state、FPU 上下文等因素，需要在具体目标板上测量。</p>
+<hr>
+<h2 id="9-栈真正越界时，CPU-和-RT-Thread-会发生什么"><a href="#9-栈真正越界时，CPU-和-RT-Thread-会发生什么" class="headerlink" title="9. 栈真正越界时，CPU 和 RT-Thread 会发生什么"></a>9. 栈真正越界时，CPU 和 RT-Thread 会发生什么</h2><p>假设一个线程可用栈已经接近 Bottom Guard：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">高地址</span><br><span class="line"></span><br><span class="line">Top Guard</span><br><span class="line">+----------------------+</span><br><span class="line">|                      |</span><br><span class="line">|      可用 stack      |</span><br><span class="line">|                      |</span><br><span class="line">|        ↓ SP          |</span><br><span class="line">|        ↓             |</span><br><span class="line">|        ↓             |</span><br><span class="line">+----------------------+</span><br><span class="line">Bottom Guard  No Access</span><br><span class="line"></span><br><span class="line">低地址</span><br></pre></td></tr></table></figure>
+
+<p>随着函数调用、局部变量分配或者寄存器压栈继续消耗 stack，SP 最终进入 Bottom Guard。</p>
+<p>接下来 CPU 对 Guard 地址发起真实读写访问时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">线程执行</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">SP / 内存访问进入 Guard</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">Cortex-M4 MPU 权限检查</span><br><span class="line">   |</span><br><span class="line">   +-- 允许 --&gt; 正常访问</span><br><span class="line">   |</span><br><span class="line">   +-- No Access</span><br><span class="line">           |</span><br><span class="line">           v</span><br><span class="line">      MemManage Fault</span><br><span class="line">           |</span><br><span class="line">           v</span><br><span class="line">   MemManage_Handler()</span><br><span class="line">           |</span><br><span class="line">           v</span><br><span class="line">   构造 rt_mem_exception_info_t</span><br><span class="line">           |</span><br><span class="line">           +-- thread</span><br><span class="line">           +-- addr</span><br><span class="line">           +-- region</span><br><span class="line">           +-- mmfsr</span><br><span class="line">           |</span><br><span class="line">           v</span><br><span class="line">   用户注册的 exception hook</span><br><span class="line">           |</span><br><span class="line">           v</span><br><span class="line">       while (1)</span><br></pre></td></tr></table></figure>
+
+<p>当前 Cortex-M4 <code>MemManage_Handler()</code> 会组织：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">    <span class="type">rt_thread_t</span> thread;</span><br><span class="line">    <span class="type">void</span> *addr;</span><br><span class="line">    <span class="type">rt_mem_region_t</span> region;</span><br><span class="line">    <span class="type">rt_uint8_t</span> mmfsr;</span><br><span class="line">&#125; <span class="type">rt_mem_exception_info_t</span>;</span><br></pre></td></tr></table></figure>
+
+<p>应用可以通过：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">rt_hw_mpu_exception_set_hook(...);</span><br></pre></td></tr></table></figure>
+
+<p>注册诊断 hook。</p>
+<p>当前实现中，hook 返回后 handler 最终进入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">while</span> (<span class="number">1</span>);</span><br></pre></td></tr></table></figure>
+
+<p>所以这里的 hook 应理解为故障诊断入口，而不是通用 fault recovery 接口。</p>
+<p>也就是说，当前主线不能简单理解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">某个线程越界</span><br><span class="line">-&gt; MPU 捕获</span><br><span class="line">-&gt; 删除线程</span><br><span class="line">-&gt; 从异常返回</span><br><span class="line">-&gt; 系统继续运行</span><br></pre></td></tr></table></figure>
+
+<p>如果产品希望做这种“单线程故障恢复”，还要进一步处理 faulting instruction、异常堆栈、PSP&#x2F;MSP、调度器状态和 MPU 状态，不能仅依赖当前 hook。</p>
+<hr>
+<h2 id="10-为什么真实栈溢出不一定总有有效的-MMFAR"><a href="#10-为什么真实栈溢出不一定总有有效的-MMFAR" class="headerlink" title="10. 为什么真实栈溢出不一定总有有效的 MMFAR"></a>10. 为什么真实栈溢出不一定总有有效的 MMFAR</h2><p>如果线程通过普通 C 语句访问 Guard，例如写入一个位于 Guard 内的地址，MemManage Status Register 常见表现是普通数据访问违规，同时 MMFAR 可能提供有效地址。</p>
+<p>但真正的栈溢出可能发生在更多场景：</p>
+<ul>
+<li>函数 prologue 压栈；</li>
+<li>异常进入时硬件自动 stacking；</li>
+<li>异常返回时 unstacking；</li>
+<li>FPU 上下文保存；</li>
+<li>嵌套异常。</li>
+</ul>
+<p>如果故障发生在异常压栈或出栈过程，MMFSR 可能出现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">MSTKERR</span><br><span class="line">MUNSTKERR</span><br></pre></td></tr></table></figure>
+
+<p>此时不能无条件使用 MMFAR。</p>
+<p>正确的 Fault 分析规则仍然是：只有当 CFSR 中对应的 <code>MMARVALID</code> 置位时，MMFAR 才能作为有效 fault address 使用。</p>
+<p>这属于 ARMv7-M Fault 语义，而不是 RT-Thread 自己定义的规则。</p>
+<hr>
+<h2 id="11-开启以后，原来的线程栈会少多少"><a href="#11-开启以后，原来的线程栈会少多少" class="headerlink" title="11. 开启以后，原来的线程栈会少多少"></a>11. 开启以后，原来的线程栈会少多少</h2><p>两个固定 Guard 一共占：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">32 B + 32 B = 64 B</span><br></pre></td></tr></table></figure>
+
+<p>但当前实现还会把上下边界按 32 Byte 对齐。</p>
+<p>因此实际损失不仅是固定 64 Byte，还要考虑原始 stack buffer 地址和大小带来的 alignment padding。</p>
+<p>按当前算法分析，最坏情况下有效 stack 损失可以接近：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">64 ~ 126 Byte</span><br></pre></td></tr></table></figure>
+
+<p>这里的范围来自源码中的 32 Byte Guard 与上下边界对齐关系，是实现层面的推导，不是官方规定“所有线程固定损失 126 Byte”。</p>
+<p>如果是静态线程，比较理想的做法是让 stack 本身 32 Byte 对齐，并把总大小设计成 32 Byte 的整数倍。例如：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rt_align(<span class="number">32</span>)</span><br><span class="line"><span class="type">static</span> <span class="type">rt_uint8_t</span> worker_stack[<span class="number">1024</span> + <span class="number">64</span>];</span><br></pre></td></tr></table></figure>
+
+<p>在边界完全对齐时，两个 32 Byte Guard 消耗 64 Byte，可以给线程保留约 1024 Byte 有效 stack。</p>
+<p>对于 <code>rt_thread_create()</code> 动态 stack，因为实际 heap 返回地址未必正好 32 Byte 对齐，如果希望原来 1024 Byte 的有效空间大致保持不变，工程上可以先保守额外预留约 128 Byte，再结合实际 stack watermark 调整。</p>
+<p>这个“增加约 128 Byte”是基于当前实现的工程估算，而不是 RT-Thread API 的硬性要求。</p>
+<hr>
+<h2 id="12-RAM-开销不仅来自两个-Guard"><a href="#12-RAM-开销不仅来自两个-Guard" class="headerlink" title="12. RAM 开销不仅来自两个 Guard"></a>12. RAM 开销不仅来自两个 Guard</h2><p>Guard region 本身只是权限描述，不会额外分配两块独立 32 Byte RAM；它们实际上占用了原始 stack buffer 的两段空间。</p>
+<p>额外 RAM 开销主要来自每线程 MPU region table 和 TCB 新字段。</p>
+<p>只启用硬件 Guard、且：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">NUM_CONFIGURABLE_REGIONS = 0</span><br></pre></td></tr></table></figure>
+
+<p>时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">NUM_DYNAMIC_REGIONS = 2</span><br></pre></td></tr></table></figure>
+
+<p>在 32-bit Cortex-M4 上，<code>rt_mem_region_t</code> 通常包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">start pointer    4 B</span><br><span class="line">size             4 B</span><br><span class="line">attr.rasr        4 B</span><br><span class="line">--------------------</span><br><span class="line">约              12 B</span><br></pre></td></tr></table></figure>
+
+<p>两个 region 的纯结构体数据大约 24 Byte&#x2F;线程。</p>
+<p>TCB 还会额外保存：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">mem_regions</span><br><span class="line">stack_buf</span><br></pre></td></tr></table></figure>
+
+<p>两个指针通常再增加约 8 Byte。</p>
+<p>最终实际 heap 增量还要叠加 allocator metadata 和 alignment，所以应以目标工程的 <code>sizeof()</code>、map 文件和 heap 统计为准，而不能把 32 Byte 左右当成绝对值。</p>
+<hr>
+<h2 id="13-RT-USING-OVERFLOW-CHECK-和硬件-Guard-是替代关系吗"><a href="#13-RT-USING-OVERFLOW-CHECK-和硬件-Guard-是替代关系吗" class="headerlink" title="13. RT_USING_OVERFLOW_CHECK 和硬件 Guard 是替代关系吗"></a>13. <code>RT_USING_OVERFLOW_CHECK</code> 和硬件 Guard 是替代关系吗</h2><p>不是完全替代。</p>
+<p>软件 overflow check 和 MPU Guard 解决的是同一个大问题，但检测机制不同。</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th><code>RT_USING_OVERFLOW_CHECK</code></th>
+<th><code>RT_USING_HW_STACK_GUARD</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>检测方式</td>
+<td>软件检查栈边界&#x2F;填充值</td>
+<td>MPU 访问权限</td>
+</tr>
+<tr>
+<td>触发时机</td>
+<td>到达软件检查点时</td>
+<td>CPU 第一次访问 Guard 时</td>
+</tr>
+<tr>
+<td>是否占 MPU region</td>
+<td>否</td>
+<td>是，每线程配置中占 2 个动态 region</td>
+</tr>
+<tr>
+<td>是否减少有效 stack</td>
+<td>通常没有 Guard 固定损失</td>
+<td>有，至少两个 32 B Guard</td>
+</tr>
+<tr>
+<td>上下文切换额外工作</td>
+<td>很小或无 MPU 重装载</td>
+<td>需要切换 MPU dynamic regions</td>
+</tr>
+<tr>
+<td>故障表现</td>
+<td>软件检测逻辑</td>
+<td>MemManage Fault</td>
+</tr>
+<tr>
+<td>适合用途</td>
+<td>watermark、常规溢出检测</td>
+<td>快速阻断越界继续扩散</td>
+</tr>
+</tbody></table>
+<p>所以在调试版本或高可靠 MCU 系统中，两者可以同时开启：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">RT_USING_OVERFLOW_CHECK=y</span><br><span class="line">RT_USING_HW_STACK_GUARD=y</span><br></pre></td></tr></table></figure>
+
+<p>软件检查继续提供栈使用情况和传统检测能力，MPU Guard 则提供硬件访问边界。</p>
+<hr>
+<h2 id="14-STM32F407-上一个最小而清晰的配置"><a href="#14-STM32F407-上一个最小而清晰的配置" class="headerlink" title="14. STM32F407 上一个最小而清晰的配置"></a>14. STM32F407 上一个最小而清晰的配置</h2><p>如果目标只是先把硬件线程栈保护跑起来，而不做复杂的 per-thread 内存隔离，可以把动态 MPU 功能压到最小：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">CONFIG_RT_USING_MEM_PROTECTION=y</span><br><span class="line">CONFIG_RT_USING_HW_STACK_GUARD=y</span><br><span class="line">CONFIG_USE_MEM_PROTECTION_EXAMPLES=n</span><br><span class="line"></span><br><span class="line">CONFIG_NUM_MEM_REGIONS=8</span><br><span class="line">CONFIG_NUM_EXCLUSIVE_REGIONS=0</span><br><span class="line">CONFIG_NUM_CONFIGURABLE_REGIONS=0</span><br></pre></td></tr></table></figure>
+
+<p>对应的 <code>rtconfig.h</code> 概念上类似：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> RT_USING_MEM_PROTECTION</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> RT_USING_HW_STACK_GUARD</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NUM_MEM_REGIONS 8</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NUM_EXCLUSIVE_REGIONS 0</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NUM_CONFIGURABLE_REGIONS 0</span></span><br></pre></td></tr></table></figure>
+
+<p>BSP 再提供：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">ifdef</span> RT_USING_MEM_PROTECTION</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NUM_STATIC_REGIONS 1</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>以及一条 Flash RX static region。</p>
+<p>这个配置下，一个正在运行的线程所需 MPU slot 为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">1 个 static Flash region</span><br><span class="line">2 个当前线程 Stack Guard region</span><br><span class="line">= 3 个 MPU region</span><br></pre></td></tr></table></figure>
+
+<p>对于 STM32F407 的 8-region MPU 来说空间充足，也让第一次引入这项功能时的变量尽可能少。</p>
+<hr>
+<h2 id="15-当前-Cortex-M4-实现还有哪些明确边界"><a href="#15-当前-Cortex-M4-实现还有哪些明确边界" class="headerlink" title="15. 当前 Cortex-M4 实现还有哪些明确边界"></a>15. 当前 Cortex-M4 实现还有哪些明确边界</h2><p>这套支持已经进入主线，但它仍是非常新的 Cortex-M4 port 功能。理解下面几个边界，有助于避免把“功能已存在”误解成“所有工程配置都已成熟覆盖”。</p>
+<h3 id="15-1-当前构建脚本限制-GCC-llvm-arm"><a href="#15-1-当前构建脚本限制-GCC-llvm-arm" class="headerlink" title="15.1 当前构建脚本限制 GCC &#x2F; llvm-arm"></a>15.1 当前构建脚本限制 GCC &#x2F; llvm-arm</h3><p><code>libcpu/arm/cortex-m4/SConscript</code> 当前逻辑为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">using_mpu = RT_USING_MEM_PROTECTION || RT_USING_HW_STACK_GUARD</span><br></pre></td></tr></table></figure>
+
+<p>启用后只允许：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">gcc</span><br><span class="line">llvm-arm</span><br></pre></td></tr></table></figure>
+
+<p>其他工具链会直接抛出错误。</p>
+<p>因此使用 Keil ARMCC、ArmClang 或 IAR 的工程不能只打开 Kconfig 就认为当前实现可以直接工作。</p>
+<h3 id="15-2-rt-hw-stack-guard-init-当前不向上处理-region-添加失败"><a href="#15-2-rt-hw-stack-guard-init-当前不向上处理-region-添加失败" class="headerlink" title="15.2 rt_hw_stack_guard_init() 当前不向上处理 region 添加失败"></a>15.2 <code>rt_hw_stack_guard_init()</code> 当前不向上处理 region 添加失败</h3><p>当前函数会连续调用两个：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">rt_mprotect_add_region()</span><br></pre></td></tr></table></figure>
+
+<p>然后修改 <code>stack_addr/stack_size</code>。</p>
+<p>从当前源码看，它没有把 <code>rt_mprotect_add_region()</code> 的错误状态返回给 <code>_thread_init()</code>。</p>
+<p>因此如果内部 <code>mem_regions</code> heap 分配失败，或者添加 region 失败，错误传播链仍值得产品工程进一步审查。</p>
+<p>这是根据当前源码得到的实现事实，不表示已确认存在某个线上故障。</p>
+<h3 id="15-3-通用-MPU-配置-peripheral-时要继续核对-memory-type"><a href="#15-3-通用-MPU-配置-peripheral-时要继续核对-memory-type" class="headerlink" title="15.3 通用 MPU 配置 peripheral 时要继续核对 memory type"></a>15.3 通用 MPU 配置 peripheral 时要继续核对 memory type</h3><p>当前 Cortex-M4 <code>rt_hw_mpu_region_default_attr()</code> 对大部分低于 <code>0xE0000000</code> 的地址使用 <code>NORMAL_NON_CACHEABLE_SHAREABLE</code> 作为默认 memory type。</p>
+<p>对于线程栈所在 SRAM，这条路径没有明显冲突。</p>
+<p>但如果未来把通用 <code>rt_mprotect_add_region()</code> 用到 <code>0x40000000</code> 一类 peripheral&#x2F;MMIO 地址，只看 AP&#x2F;XN 权限还不够，还需要结合具体 MCU memory map 复核 Device&#x2F;Normal memory type 是否正确。</p>
+<p>该函数被声明为 <code>rt_weak</code>，因此 BSP 可以根据芯片地址空间覆盖默认策略。</p>
+<p>这也是使用 MPU 时一个很重要的原则：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">访问权限正确，不等于 memory type 一定正确。</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="16-从启动到-Fault-的整条运行链路"><a href="#16-从启动到-Fault-的整条运行链路" class="headerlink" title="16. 从启动到 Fault 的整条运行链路"></a>16. 从启动到 Fault 的整条运行链路</h2><p>把前面的实现合并起来，RT-Thread Cortex-M4 硬件栈保护可以理解成四个阶段。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    Boot[&quot;系统启动&quot;] --&gt; MPUInit[&quot;rt_mprotect_init -&gt; rt_hw_mpu_init&quot;]</span><br><span class="line">    MPUInit --&gt; Static[&quot;配置 static MPU regions 并启用 MPU&quot;]</span><br><span class="line">    Static --&gt; ThreadCreate[&quot;线程初始化&quot;]</span><br><span class="line">    ThreadCreate --&gt; GuardInit[&quot;rt_hw_stack_guard_init&quot;]</span><br><span class="line">    GuardInit --&gt; RegionTable[&quot;保存上下两个 Guard 到线程 mem_regions&quot;]</span><br><span class="line">    RegionTable --&gt; Run[&quot;线程进入调度&quot;]</span><br><span class="line">    Run --&gt; PendSV[&quot;PendSV 线程切换&quot;]</span><br><span class="line">    PendSV --&gt; TableSwitch[&quot;rt_hw_mpu_table_switch&quot;]</span><br><span class="line">    TableSwitch --&gt; ProgramMPU[&quot;把当前线程 Guard 写入硬件 MPU&quot;]</span><br><span class="line">    ProgramMPU --&gt; Execute[&quot;线程运行&quot;]</span><br><span class="line">    Execute --&gt;|&quot;访问正常 stack&quot;| Execute</span><br><span class="line">    Execute --&gt;|&quot;访问 Guard&quot;| MemFault[&quot;MemManage Fault&quot;]</span><br><span class="line">    MemFault --&gt; Handler[&quot;MemManage_Handler&quot;]</span><br><span class="line">    Handler --&gt; Hook[&quot;用户 exception hook&quot;]</span><br><span class="line">    Hook --&gt; Stop[&quot;当前实现最终停在 while(1)&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>这张图可以概括成一句话：</p>
+<blockquote>
+<p>Guard 是在线程创建时计算和保存的，在上下文切换时装入硬件，在真正越界访问时由 MPU 触发 Fault。</p>
+</blockquote>
+<p>理解这三个时间点，就基本理解了 RT-Thread 这套设计。</p>
+<hr>
+<h2 id="17-为什么这种设计适合-MCU-RTOS"><a href="#17-为什么这种设计适合-MCU-RTOS" class="headerlink" title="17. 为什么这种设计适合 MCU RTOS"></a>17. 为什么这种设计适合 MCU RTOS</h2><p>在没有 MMU 的 Cortex-M4 上，RTOS 很难像 Linux 那样给每个线程建立独立虚拟地址空间，但 MPU 仍然能提供一种非常实用的“有限硬件边界”。</p>
+<p>RT-Thread 当前设计没有试图让每个线程永久独占一套硬件 region，而是把：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">线程自己的保护策略</span><br></pre></td></tr></table></figure>
+
+<p>保存在软件结构中，再把：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">当前正在运行线程的保护策略</span><br></pre></td></tr></table></figure>
+
+<p>映射进有限的 MPU hardware slots。</p>
+<p>这是典型的 MCU 资源复用思路：用少量硬件 region 换取任意数量线程的时分复用保护。</p>
+<p>代价也很明确：</p>
+<ul>
+<li>TCB 和 heap 增加少量 RAM；</li>
+<li>线程有效 stack 减少；</li>
+<li>PendSV 增加 MPU register programming；</li>
+<li>Fault 默认是终止性诊断路径，而不是自动恢复机制。</li>
+</ul>
+<p>因此它更适合被理解成“提高故障发现确定性和系统内存边界强度”的机制，而不是零成本的安全隔离方案。</p>
+<p>对于 STM32F407 这类具有 MPU、但没有 MMU 的 Cortex-M4 MCU，这种取舍是合理且实用的。</p>
+<hr>
+<h2 id="18-结语"><a href="#18-结语" class="headerlink" title="18. 结语"></a>18. 结语</h2><p><code>RT_USING_MEM_PROTECTION</code> 和 <code>RT_USING_HW_STACK_GUARD</code> 的核心并不复杂：前者建立 RT-Thread 的 MPU 抽象层，后者利用这层能力，为每个线程栈生成两个 No-Access region。</p>
+<p>真正值得理解的是 RT-Thread 如何把有限的 Cortex-M4 MPU region 和多线程调度结合起来：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">线程创建</span><br><span class="line">    -&gt; 建立 Guard 描述</span><br><span class="line">    -&gt; 保存到 per-thread mem_regions</span><br><span class="line"></span><br><span class="line">线程切换</span><br><span class="line">    -&gt; 根据 current_thread 重装 MPU</span><br><span class="line"></span><br><span class="line">线程运行</span><br><span class="line">    -&gt; MPU 实时检查访问权限</span><br><span class="line"></span><br><span class="line">栈越界</span><br><span class="line">    -&gt; MemManage Fault</span><br><span class="line">    -&gt; 收集线程、地址、region 和 MMFSR</span><br></pre></td></tr></table></figure>
+
+<p>它不是软件 canary，也不是完整的进程内存隔离，而是一套与 RTOS 上下文切换绑定的硬件访问边界机制。</p>
+<p>如果目标只是在线程栈失控时尽可能早地阻止内存继续被覆盖，那么 Cortex-M4 MPU Guard 相比单纯依赖软件检查提供了更直接的硬件故障边界；同时，软件 overflow check 仍可以继续承担 watermark 和传统检测职责，两者并不冲突。</p>
+<p>对于使用 STM32F407、GCC 和当前 RT-Thread 主线的项目，先从 <code>static Flash RX + 双 Stack Guard</code> 这一最小组合开始，是目前最容易理解和控制的使用方式。等这一层稳定以后，再扩展到 per-thread RAM、exclusive region 或 MMIO 权限，会更容易区分权限设计、内存属性和调度开销各自带来的影响。</p>
+<hr>
+<h2 id="参考源码与资料"><a href="#参考源码与资料" class="headerlink" title="参考源码与资料"></a>参考源码与资料</h2><p>RT-Thread 主线源码：</p>
+<ul>
+<li><code>components/mprotect/Kconfig</code></li>
+<li><code>components/mprotect/mprotect.c</code></li>
+<li><code>components/mprotect/mprotect.h</code></li>
+<li><code>components/mprotect/README.md</code></li>
+<li><code>libcpu/arm/cortex-m4/mpu.c</code></li>
+<li><code>libcpu/arm/cortex-m4/mpu.h</code></li>
+<li><code>libcpu/arm/cortex-m4/mputype.h</code></li>
+<li><code>libcpu/arm/cortex-m4/cpuport.c</code></li>
+<li><code>libcpu/arm/cortex-m4/context_gcc.S</code></li>
+<li><code>libcpu/arm/cortex-m4/SConscript</code></li>
+<li><code>src/thread.c</code></li>
+<li><code>bsp/stm32/stm32f407-fk407m2-zgt6/board/board.h</code></li>
+<li><code>bsp/stm32/stm32f407-fk407m2-zgt6/board/board.c</code></li>
+</ul>
+<p>相关提交：</p>
+<ul>
+<li>RT-Thread commit <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/RT-Thread/rt-thread/commit/e2e6245aace07b545b8dbcef8fbcdb4469f55d9f"><code>e2e6245aace07b545b8dbcef8fbcdb4469f55d9f</code></a>：<code>[arm][cortex-m4] Add hardware stack guard support</code></li>
+<li>RT-Thread <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/RT-Thread/rt-thread/tree/master/components/mprotect"><code>components/mprotect</code></a></li>
+<li>RT-Thread <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/RT-Thread/rt-thread/tree/master/libcpu/arm/cortex-m4"><code>libcpu/arm/cortex-m4</code></a></li>
+<li>STM32 公共 BSP 初始化路径 <a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/RT-Thread/rt-thread/blob/master/bsp/stm32/libraries/HAL_Drivers/drv_common.c"><code>drv_common.c</code></a></li>
+</ul>
+<p>硬件资料：</p>
+<ul>
+<li>ST <a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.st.com/resource/en/application_note/an4838-introduction-to-memory-protection-unit-management-on-stm32-mcus-stmicroelectronics.pdf">AN4838：Introduction to memory protection unit management on STM32 MCUs</a></li>
+<li>ST <a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.st.com/resource/en/programming_manual/dm00046982-stm32-cortexm4-mcus-and-mpus-programming-manual-stmicroelectronics.pdf">PM0214：STM32 Cortex-M4 MCUs and MPUs programming manual</a></li>
+<li>Arm Cortex-M4 Processor Technical Reference &#x2F; Architecture documentation</li>
+</ul>
+<blockquote>
+<p>版本说明：文章依据截至 2026-08-27 的 RT-Thread <code>master</code> 实现整理。Cortex-M4 MPU&#x2F;Stack Guard 支持属于近期新增功能，旧版 RT-Thread 即使存在同名 Kconfig，也应检查 <code>libcpu/arm/cortex-m4/</code> 是否已经包含完整 MPU port、PendSV MPU table switch 和 <code>rt_hw_stack_guard_init()</code>。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/15bcf925/">https://wdfk-prog.space/posts/15bcf925/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/rt-thread/">rt-thread</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/06.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/posts/c38fc09/" title="GitHub push 失败：如何扫描并清理 Git 历史中的大文件"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">GitHub push 失败：如何扫描并清理 Git 历史中的大文件</div></div><div class="info-2"><div class="info-item-1">  GitHub push 失败：如何扫描并清理 Git 历史中的大文件@[toc]  摘要：从 GitHub 100 MiB 大文件拒绝问题出发，说明为何删除文件后仍无法推送，并给出 PowerShell 扫描、历史清理、Git LFS 与防复发方案。  在把一个已有 Git 项目首次推送到 GitHub 时，可能会遇到如下错误： 1234remote: error: File vendor/example/.git.zip is 151.91 MB;remote: error: this exceeds GitHub&#x27;s file size limit of 100.00 MBremote: error: GH001: Large files detected.! [remote rejected] master -&gt; master (pre-receive hook declined)  这里最容易产生的误解是：既然问题文件已经不需要了，那么再新增一个 commit 把它删除，然后重新 git push 不就可以了吗？ 答案是否定的。 GitHub 检查的不...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/fa99c9bd/" title="fatfs"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">fatfs</div></div><div class="info-2"><div class="info-item-1">fatfs[TOC] 硬盘的物理结构：概述 盘片（platter） 磁头（head） 磁道（track） 扇区（sector） 柱面（cylinder）  盘片 片面 和 磁头硬盘中一般会有多个盘片组成，每个盘片包含两个面，每个盘面都对应地有一个读&#x2F;写磁头。受到硬盘整体体积和生产成本的限制，盘片数量都受到限制，一般都在5片以内。盘片的编号自下向上从0开始，如最下边的盘片有0面和1面，再上一个盘片就编号为2面和3面。如下图：  图1 扇区 和 磁道下图显示的是一个盘面，盘面中一圈圈灰色同心圆为一条条磁道，从圆心向外画直线，可以将磁道划分为若干个弧段，每个磁道上一个弧段被称之为一个扇区（图中绿色部分），对于老式磁盘，每个扇区存储容量是相同的（也就是每个磁道的容量是相同的，但不同磁道的数据密度是不同的，半径越小的磁道的密度越大，这个是怎么做到的，还不清楚，但我个人猜测是因为旋转角度，转动相同的角度，外部扇区移动的距离更长，而内部扇区移动距离短，就是通过磁头每次移动是固定角度的，但由于磁臂的长度不同，分别对应不同的磁道，那对于外围的扇区，由于磁臂较长，每次移动固定角度，则划过的...</div></div></div></a><a class="pagination-related" href="/posts/310df896/" title="rt-thread学习笔记系列"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-31</div><div class="info-item-2">rt-thread学习笔记系列</div></div><div class="info-2"><div class="info-item-1">rt-thread学习笔记系列  其他资料   1.1. fatfs 1.1.1. fatfs (个人博客链接)     2. ARM指针寄存器 (个人博客链接) 3. CAN驱动 (个人博客链接) 4. completion (个人博客链接) 5. condvar (个人博客链接) 6. dataqueue (个人博客链接) 7. DFS (个人博客链接) 8. fal (个人博客链接) 9. fatfs (个人博客链接) 10. FINSH模块 (个人博客链接) 11. I2C驱动 (个人博客链接) 12. IDLE线程 (个人博客链接) 13. IPC (个人博客链接) 14. littlefs (个人博客链接) 15. map文件分析 (个人博客链接) 16. pipe (个人博客链接) 17. PM电源管理 (个人博客链接) 18. RT-Thread 学习笔记 (个人博客链接) 19. ringblock (个人博客链接) 20. ringbuffer (个人博客链接) 21. romfs (个人博客链接) 22. RT-LINK (个人博客链接) 23. RTC (...</div></div></div></a><a class="pagination-related" href="/posts/7cb92c08/" title="ringblock"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">ringblock</div></div><div class="info-2"><div class="info-item-1">环形缓冲块 ringblock环形块状缓冲区简称为：rbb。与传统的环形缓冲区不同的是，rbb 是一个由很多不定长度的块组成的环形缓冲区，而传统的环形缓冲区是由很多个单字节的 char 组成。rbb 支持 零字节拷贝 。所以 rbb 非常适合用于生产者顺序 put 数据块，消费者顺序 get 数据块的场景，例如：DMA 传输，通信帧的接收与发送等等 ringblk: 是由 多个不同长度 的 block 组成的，ringbuff : 是由单字节的数据组成的。ringblk 每一个 block 有多少个字节可以由用户自己设定。 ringblk 支持零字节拷贝(不需要额外的 memcpy 操作)。所以 rbb 非常适合用于生产者顺序 put 数据块，消费者顺序 get 数据块的场景，例如：DMA 传输，通信帧的接收与发送等等。 初始化 初始化块链表和释放链表 对每一个块链表进行初始化,并插入到释放链表中  PUT &amp; GET 块 put  123block-&gt;status = RT_RBB_BLK_PUT;   get   判断块链表为空,则返回NULL 遍历链表,找到具...</div></div></div></a><a class="pagination-related" href="/posts/427ac97f/" title="map文件分析"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">map文件分析</div></div><div class="info-2"><div class="info-item-1">map文件分析1234567891011121314151617181920212223242526272829303132333435363738394041424344454647Image$$ER_IROM1$$Base                    0x90000000   Number         0  anon$$obj.o ABSOLUTE__Vectors                                0x90000000   Data           4  startup_stm32h750xx.o(RESET)__Vectors_End                            0x90000298   Data           0  startup_stm32h750xx.o(RESET)__main                                   0x90000299   Thumb Code     0  entry.o(.ARM.Collect$$$$00000000)_main_st...</div></div></div></a><a class="pagination-related" href="/posts/1f9a630e/" title="pipe"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">pipe</div></div><div class="info-2"><div class="info-item-1">pipepipe： 匿名管道。pipe 是一种 IPC 机制，他的作用是用作有血缘进程间完成数据传递，只能从一端写入，从另外一端读出。为了解决 pipe 的弊端，linux 又引入了 mkfifo(实名管道)。 创建管道12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455rt_pipe_t *rt_pipe_create(constchar *name, intbufsz)&#123;    //分配管道内存,初始化锁,初始化等待队列,初始化条件变量    rt_mutex_init(&amp;pipe-&gt;lock, name, RT_IPC_FLAG_FIFO);    rt_wqueue_init(&amp;pipe-&gt;reader_queue);    rt_wqueue_init(&amp;pipe-&gt;writer_queue);    rt_condvar_init(&amp;pipe-&gt;waitf...</div></div></div></a><a class="pagination-related" href="/posts/a5eec7a4/" title="littlefs"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">littlefs</div></div><div class="info-2"><div class="info-item-1">littlefs123456789101112131415161718192021// Users can override lfs_util.h with their own configuration by defining// LFS_CONFIG as a header file to include (-DLFS_CONFIG=lfs_config.h).//// If LFS_CONFIG is used, none of the default utils will be emitted and must be// provided by the config file. To start, I would suggest copying lfs_util.h// and modifying as needed.#ifdef LFS_CONFIG#define LFS_STRINGIZE(x) LFS_STRINGIZE2(x)#define LFS_STRINGIZE2(x) #x#include LFS_STRINGIZE(LFS_CONFIG)  机制 断电恢...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">574</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">61</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#RT-Thread-%E5%A6%82%E4%BD%95%E7%94%A8-MPU-%E5%81%9A%E7%BA%BF%E7%A8%8B%E6%A0%88%E4%BF%9D%E6%8A%A4"><span class="toc-number">1.</span> <span class="toc-text">RT-Thread 如何用 MPU 做线程栈保护</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%B8%A4%E4%B8%AA%E9%85%8D%E7%BD%AE%E9%A1%B9%E5%88%86%E5%88%AB%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E9%97%AE%E9%A2%98"><span class="toc-number">1.1.</span> <span class="toc-text">1. 两个配置项分别解决什么问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-RT-USING-MEM-PROTECTION"><span class="toc-number">1.1.1.</span> <span class="toc-text">1.1 RT_USING_MEM_PROTECTION</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-RT-USING-HW-STACK-GUARD"><span class="toc-number">1.1.2.</span> <span class="toc-text">1.2 RT_USING_HW_STACK_GUARD</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-Cortex-M4-MPU-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%83%BD%E5%AE%9E%E7%8E%B0%E8%BF%99%E7%A7%8D%E4%BF%9D%E6%8A%A4"><span class="toc-number">1.2.</span> <span class="toc-text">2. Cortex-M4 MPU 为什么能实现这种保护</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E4%B8%80%E4%B8%AA%E7%BA%BF%E7%A8%8B%E7%9A%84%E6%A0%88%E5%AE%9E%E9%99%85%E4%B8%8A%E8%A2%AB%E6%94%B9%E9%80%A0%E6%88%90%E4%BB%80%E4%B9%88%E6%A0%B7"><span class="toc-number">1.3.</span> <span class="toc-text">3. 一个线程的栈实际上被改造成什么样</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E4%B8%BA%E4%BB%80%E4%B9%88%E7%BA%BF%E7%A8%8B%E5%88%9B%E5%BB%BA%E6%97%B6%E8%BF%98%E8%A6%81%E5%88%86%E9%85%8D%E4%B8%80%E5%BC%A0-MPU-region-%E8%A1%A8"><span class="toc-number">1.4.</span> <span class="toc-text">4. 为什么线程创建时还要分配一张 MPU region 表</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E4%BB%8E-rt-thread-create-%E5%88%B0-Guard-%E5%BB%BA%E7%AB%8B%E7%9A%84%E5%AE%8C%E6%95%B4%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-number">1.5.</span> <span class="toc-text">5. 从 rt_thread_create() 到 Guard 建立的完整调用链</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-MPU-%E6%9C%AC%E8%BA%AB%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E5%90%AF%E7%94%A8"><span class="toc-number">1.6.</span> <span class="toc-text">6. MPU 本身什么时候启用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-BSP-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%98%E9%9C%80%E8%A6%81-static-regions"><span class="toc-number">1.7.</span> <span class="toc-text">7. BSP 为什么还需要 static_regions[]</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-PendSV-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BF%85%E9%A1%BB%E5%8F%82%E4%B8%8E-MPU-%E4%BF%9D%E6%8A%A4"><span class="toc-number">1.8.</span> <span class="toc-text">8. PendSV 为什么必须参与 MPU 保护</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E6%A0%88%E7%9C%9F%E6%AD%A3%E8%B6%8A%E7%95%8C%E6%97%B6%EF%BC%8CCPU-%E5%92%8C-RT-Thread-%E4%BC%9A%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88"><span class="toc-number">1.9.</span> <span class="toc-text">9. 栈真正越界时，CPU 和 RT-Thread 会发生什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E4%B8%BA%E4%BB%80%E4%B9%88%E7%9C%9F%E5%AE%9E%E6%A0%88%E6%BA%A2%E5%87%BA%E4%B8%8D%E4%B8%80%E5%AE%9A%E6%80%BB%E6%9C%89%E6%9C%89%E6%95%88%E7%9A%84-MMFAR"><span class="toc-number">1.10.</span> <span class="toc-text">10. 为什么真实栈溢出不一定总有有效的 MMFAR</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%BC%80%E5%90%AF%E4%BB%A5%E5%90%8E%EF%BC%8C%E5%8E%9F%E6%9D%A5%E7%9A%84%E7%BA%BF%E7%A8%8B%E6%A0%88%E4%BC%9A%E5%B0%91%E5%A4%9A%E5%B0%91"><span class="toc-number">1.11.</span> <span class="toc-text">11. 开启以后，原来的线程栈会少多少</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-RAM-%E5%BC%80%E9%94%80%E4%B8%8D%E4%BB%85%E6%9D%A5%E8%87%AA%E4%B8%A4%E4%B8%AA-Guard"><span class="toc-number">1.12.</span> <span class="toc-text">12. RAM 开销不仅来自两个 Guard</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-RT-USING-OVERFLOW-CHECK-%E5%92%8C%E7%A1%AC%E4%BB%B6-Guard-%E6%98%AF%E6%9B%BF%E4%BB%A3%E5%85%B3%E7%B3%BB%E5%90%97"><span class="toc-number">1.13.</span> <span class="toc-text">13. RT_USING_OVERFLOW_CHECK 和硬件 Guard 是替代关系吗</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-STM32F407-%E4%B8%8A%E4%B8%80%E4%B8%AA%E6%9C%80%E5%B0%8F%E8%80%8C%E6%B8%85%E6%99%B0%E7%9A%84%E9%85%8D%E7%BD%AE"><span class="toc-number">1.14.</span> <span class="toc-text">14. STM32F407 上一个最小而清晰的配置</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E5%BD%93%E5%89%8D-Cortex-M4-%E5%AE%9E%E7%8E%B0%E8%BF%98%E6%9C%89%E5%93%AA%E4%BA%9B%E6%98%8E%E7%A1%AE%E8%BE%B9%E7%95%8C"><span class="toc-number">1.15.</span> <span class="toc-text">15. 当前 Cortex-M4 实现还有哪些明确边界</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#15-1-%E5%BD%93%E5%89%8D%E6%9E%84%E5%BB%BA%E8%84%9A%E6%9C%AC%E9%99%90%E5%88%B6-GCC-llvm-arm"><span class="toc-number">1.15.1.</span> <span class="toc-text">15.1 当前构建脚本限制 GCC &#x2F; llvm-arm</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-2-rt-hw-stack-guard-init-%E5%BD%93%E5%89%8D%E4%B8%8D%E5%90%91%E4%B8%8A%E5%A4%84%E7%90%86-region-%E6%B7%BB%E5%8A%A0%E5%A4%B1%E8%B4%A5"><span class="toc-number">1.15.2.</span> <span class="toc-text">15.2 rt_hw_stack_guard_init() 当前不向上处理 region 添加失败</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-3-%E9%80%9A%E7%94%A8-MPU-%E9%85%8D%E7%BD%AE-peripheral-%E6%97%B6%E8%A6%81%E7%BB%A7%E7%BB%AD%E6%A0%B8%E5%AF%B9-memory-type"><span class="toc-number">1.15.3.</span> <span class="toc-text">15.3 通用 MPU 配置 peripheral 时要继续核对 memory type</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-%E4%BB%8E%E5%90%AF%E5%8A%A8%E5%88%B0-Fault-%E7%9A%84%E6%95%B4%E6%9D%A1%E8%BF%90%E8%A1%8C%E9%93%BE%E8%B7%AF"><span class="toc-number">1.16.</span> <span class="toc-text">16. 从启动到 Fault 的整条运行链路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%99%E7%A7%8D%E8%AE%BE%E8%AE%A1%E9%80%82%E5%90%88-MCU-RTOS"><span class="toc-number">1.17.</span> <span class="toc-text">17. 为什么这种设计适合 MCU RTOS</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-%E7%BB%93%E8%AF%AD"><span class="toc-number">1.18.</span> <span class="toc-text">18. 结语</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E6%BA%90%E7%A0%81%E4%B8%8E%E8%B5%84%E6%96%99"><span class="toc-number">1.19.</span> <span class="toc-text">参考源码与资料</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/15bcf925/" title="RT-Thread 如何用 MPU 做线程栈保护"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="RT-Thread 如何用 MPU 做线程栈保护"/></a><div class="content"><a class="title" href="/posts/15bcf925/" title="RT-Thread 如何用 MPU 做线程栈保护">RT-Thread 如何用 MPU 做线程栈保护</a><time datetime="2026-08-28T08:57:04.226Z" title="更新于 2026-08-28 16:57:04">2026-08-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/c38fc09/" title="GitHub push 失败：如何扫描并清理 Git 历史中的大文件"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="GitHub push 失败：如何扫描并清理 Git 历史中的大文件"/></a><div class="content"><a class="title" href="/posts/c38fc09/" title="GitHub push 失败：如何扫描并清理 Git 历史中的大文件">GitHub push 失败：如何扫描并清理 Git 历史中的大文件</a><time datetime="2026-08-28T01:51:26.839Z" title="更新于 2026-08-28 09:51:26">2026-08-28</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/95191e5/" title="ai"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="ai"/></a><div class="content"><a class="title" href="/posts/95191e5/" title="ai">ai</a><time datetime="2026-08-17T03:00:19.483Z" title="更新于 2026-08-17 11:00:19">2026-08-17</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/bc2ab244/" title="canopen学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="canopen学习笔记系列"/></a><div class="content"><a class="title" href="/posts/bc2ab244/" title="canopen学习笔记系列">canopen学习笔记系列</a><time datetime="2026-08-03T05:32:51.907Z" title="更新于 2026-08-03 13:32:51">2026-08-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/dea69d33/" title="Lely CANopen 启动与从机联机后的运行机制"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="Lely CANopen 启动与从机联机后的运行机制"/></a><div class="content"><a class="title" href="/posts/dea69d33/" title="Lely CANopen 启动与从机联机后的运行机制">Lely CANopen 启动与从机联机后的运行机制</a><time datetime="2026-08-03T05:32:27.435Z" title="更新于 2026-08-03 13:32:27">2026-08-03</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/06.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '5354af45b62128cc1eaff52d712b95a2'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",15],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,51,8],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":45},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":39}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":45},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":39}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":45}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":45}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":45,"path":"rt-thread"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"MCU","children":[],"count":39,"path":"MCU"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"杂谈","children":[],"count":36,"path":"杂谈"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
