@@ -1,0 +1,1238 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩 | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="大型 Docker 镜像导出导入工程化：可靠性、磁盘与压缩 摘要：分析二十多 GiB Docker 镜像在 save&#x2F;load、临时 TAR、流式压缩、SHA256 和 zstd 之间的工程取舍，并给出更省磁盘的脚本结构。  @[toc]普通镜像只有几百 MB 时，docker save 和 docker load 很少让人关心磁盘峰值。 但开发镜像如果包含完整 Yocto SDK，">
+<meta property="og:type" content="article">
+<meta property="og:title" content="07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩">
+<meta property="og:url" content="https://wdfk-prog.space/posts/41987210/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="大型 Docker 镜像导出导入工程化：可靠性、磁盘与压缩 摘要：分析二十多 GiB Docker 镜像在 save&#x2F;load、临时 TAR、流式压缩、SHA256 和 zstd 之间的工程取舍，并给出更省磁盘的脚本结构。  @[toc]普通镜像只有几百 MB 时，docker save 和 docker load 很少让人关心磁盘峰值。 但开发镜像如果包含完整 Yocto SDK，">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/07.jpg">
+<meta property="article:published_time" content="2026-09-04T08:30:09.000Z">
+<meta property="article:modified_time" content="2026-09-04T08:39:09.408Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="docker">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/07.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩",
+  "url": "https://wdfk-prog.space/posts/41987210/",
+  "image": "https://wdfk-prog.space/images/covers/07.jpg",
+  "datePublished": "2026-09-04T08:30:09.000Z",
+  "dateModified": "2026-09-04T08:39:09.408Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/41987210/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">585</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">62</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">67</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/07.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩<a class="post-edit-link" href="null_posts/docker/07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-04T08:30:09.000Z" title="发表于 2026-09-04 16:30:09">2026-09-04</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-04T08:39:09.408Z" title="更新于 2026-09-04 16:39:09">2026-09-04</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/docker/">docker</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">2.1k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>8分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/41987210/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-09-04 16:39:09&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="大型-Docker-镜像导出导入工程化：可靠性、磁盘与压缩"><a href="#大型-Docker-镜像导出导入工程化：可靠性、磁盘与压缩" class="headerlink" title="大型 Docker 镜像导出导入工程化：可靠性、磁盘与压缩"></a>大型 Docker 镜像导出导入工程化：可靠性、磁盘与压缩</h1><blockquote>
+<p>摘要：分析二十多 GiB Docker 镜像在 save&#x2F;load、临时 TAR、流式压缩、SHA256 和 zstd 之间的工程取舍，并给出更省磁盘的脚本结构。<br><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/0375e7ddafab4ac7a10f2e0fa922d5c5.png" alt="在这里插入图片描述"></p>
+</blockquote>
+<p>@[toc]<br>普通镜像只有几百 MB 时，<code>docker save</code> 和 <code>docker load</code> 很少让人关心磁盘峰值。</p>
+<p>但开发镜像如果包含完整 Yocto SDK，规模达到二十多 GiB，导出本身就会变成一个值得设计的流程。</p>
+<p>真正的问题不再只是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">怎么导出？</span><br></pre></td></tr></table></figure>
+
+<p>而是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">失败时会不会留下假成功文件？</span><br><span class="line">Ctrl+C 会不会留下几十 GiB 垃圾？</span><br><span class="line">临时 TAR 会占多少磁盘？</span><br><span class="line">压缩包是否需要先解压才能 docker load？</span><br><span class="line">如何校验传输完整性？</span><br></pre></td></tr></table></figure>
+
+<h2 id="1-save-load-的基本数据流"><a href="#1-save-load-的基本数据流" class="headerlink" title="1. save&#x2F;load 的基本数据流"></a>1. save&#x2F;load 的基本数据流</h2><p>导出：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker save -o cross-dev.tar cross-dev:20.04</span><br></pre></td></tr></table></figure>
+
+<p>导入：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker load -i cross-dev.tar</span><br></pre></td></tr></table></figure>
+
+<p>可以理解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Docker image</span><br><span class="line">    ↓ docker save</span><br><span class="line">TAR archive</span><br><span class="line">    ↓ docker load</span><br><span class="line">Docker image</span><br></pre></td></tr></table></figure>
+
+<p>Docker 官方还明确说明，当前 <code>docker load</code> 可以直接读取：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">tar</span><br><span class="line">gzip</span><br><span class="line">bzip2</span><br><span class="line">xz</span><br><span class="line">zstd</span><br></pre></td></tr></table></figure>
+
+<p>因此导入压缩包时，并不要求先手工解出完整 tar。</p>
+<h2 id="2-为什么一个可靠的-POSIX-sh-脚本会先生成-TAR"><a href="#2-为什么一个可靠的-POSIX-sh-脚本会先生成-TAR" class="headerlink" title="2. 为什么一个可靠的 POSIX sh 脚本会先生成 TAR"></a>2. 为什么一个可靠的 POSIX sh 脚本会先生成 TAR</h2><p>一个常见实现是：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">TMP_TAR=$(<span class="built_in">mktemp</span> <span class="string">&quot;.image.XXXXXX.tar&quot;</span>)</span><br><span class="line">TMP_GZ=$(<span class="built_in">mktemp</span> <span class="string">&quot;.image.XXXXXX.gz&quot;</span>)</span><br><span class="line"></span><br><span class="line"><span class="built_in">trap</span> cleanup EXIT HUP INT TERM</span><br><span class="line"></span><br><span class="line">docker save -o <span class="string">&quot;<span class="variable">$TMP_TAR</span>&quot;</span> <span class="string">&quot;<span class="variable">$IMAGE</span>&quot;</span></span><br><span class="line">gzip -1 -c <span class="string">&quot;<span class="variable">$TMP_TAR</span>&quot;</span> &gt; <span class="string">&quot;<span class="variable">$TMP_GZ</span>&quot;</span></span><br><span class="line"><span class="built_in">mv</span> <span class="string">&quot;<span class="variable">$TMP_GZ</span>&quot;</span> <span class="string">&quot;<span class="variable">$OUTPUT</span>&quot;</span></span><br><span class="line"><span class="built_in">sha256sum</span> <span class="string">&quot;<span class="variable">$OUTPUT</span>&quot;</span> &gt; <span class="string">&quot;<span class="variable">$OUTPUT</span>.sha256&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>看起来比：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker save <span class="string">&quot;<span class="variable">$IMAGE</span>&quot;</span> | gzip -1 &gt; <span class="string">&quot;<span class="variable">$OUTPUT</span>&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>麻烦很多。</p>
+<p>但它在保护一个很重要的东西：<strong>失败语义</strong>。</p>
+<p>标准 POSIX <code>sh</code> 没有 Bash 那样常用的 <code>pipefail</code>。对于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">A | B</span><br></pre></td></tr></table></figure>
+
+<p>pipeline 最终通常以最后一个命令 B 的退出状态为主。</p>
+<p>因此理论上可能出现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">docker save 失败</span><br><span class="line">    ↓</span><br><span class="line">gzip 正常结束</span><br><span class="line">    ↓</span><br><span class="line">脚本误认为 pipeline 成功</span><br></pre></td></tr></table></figure>
+
+<p>先把 <code>docker save -o</code> 单独完成，就能明确知道镜像导出是否成功。</p>
+<p>所以“临时 TAR”不是错误设计，它是在用磁盘换可靠性。</p>
+<h2 id="3-问题在于大型镜像的磁盘峰值"><a href="#3-问题在于大型镜像的磁盘峰值" class="headerlink" title="3. 问题在于大型镜像的磁盘峰值"></a>3. 问题在于大型镜像的磁盘峰值</h2><p>假设一次导出实际产生：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">临时 TAR：约 27 GiB</span><br><span class="line">最终 gzip：约 12 GiB</span><br></pre></td></tr></table></figure>
+
+<p>压缩过程中可能同时存在：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">27 GiB TAR</span><br><span class="line">+</span><br><span class="line">逐渐增长到 12 GiB 的 GZ</span><br></pre></td></tr></table></figure>
+
+<p>仅导出目录峰值就可能接近：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">39 GiB</span><br></pre></td></tr></table></figure>
+
+<p>Docker 自己保存镜像的数据还没有计算在内。</p>
+<p>因此大镜像导出前必须同时看：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">df</span> -h /path/to/export-dir</span><br><span class="line">docker system <span class="built_in">df</span></span><br></pre></td></tr></table></figure>
+
+<p>而不是只确认镜像“存在”。</p>
+<p>上面的数字只是示例。镜像 SIZE、<code>docker save</code> TAR 和压缩归档大小不是固定比例，真正规划空间要看实际文件。</p>
+<h2 id="4-mktemp、trap-和最后-mv-都值得保留"><a href="#4-mktemp、trap-和最后-mv-都值得保留" class="headerlink" title="4. mktemp、trap 和最后 mv 都值得保留"></a>4. mktemp、trap 和最后 mv 都值得保留</h2><p>这类脚本里最值得保留的是：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">mktemp</span></span><br><span class="line"><span class="built_in">trap</span> cleanup EXIT HUP INT TERM</span><br></pre></td></tr></table></figure>
+
+<p>因为大型临时文件一旦异常残留，代价非常高。</p>
+<p>用户执行到一半按 <code>Ctrl+C</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">SIGINT</span><br><span class="line">  ↓</span><br><span class="line">trap</span><br><span class="line">  ↓</span><br><span class="line">删除临时文件</span><br></pre></td></tr></table></figure>
+
+<p>比几天后才发现根分区多了一个 20 GiB 隐藏文件好得多。</p>
+<p>同样，最终最好：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">生成 .partial</span><br><span class="line">    ↓</span><br><span class="line">全部成功</span><br><span class="line">    ↓</span><br><span class="line"><span class="built_in">mv</span> 成最终文件名</span><br></pre></td></tr></table></figure>
+
+<p>不要从一开始就直接写：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">cross-dev.tar.gz</span><br></pre></td></tr></table></figure>
+
+<p>否则半截压缩包看起来也像正式交付物。</p>
+<h2 id="5-导入端其实可以简单很多"><a href="#5-导入端其实可以简单很多" class="headerlink" title="5. 导入端其实可以简单很多"></a>5. 导入端其实可以简单很多</h2><p>一种保守导入方式是：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">gzip -dc <span class="string">&quot;<span class="variable">$ARCHIVE</span>&quot;</span> &gt; <span class="string">&quot;<span class="variable">$TMP_TAR</span>&quot;</span></span><br><span class="line">docker load -i <span class="string">&quot;<span class="variable">$TMP_TAR</span>&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>对于 20+ GiB 镜像，它的问题很直接：接收方 <code>/tmp</code> 还得额外容纳完整 TAR。</p>
+<p>而当前 Docker 官方支持直接：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker load -i cross-dev.tar.gz</span><br></pre></td></tr></table></figure>
+
+<p>或者：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker load -i cross-dev.tar.zst</span><br></pre></td></tr></table></figure>
+
+<p>因此可以去掉：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">gzip -dc</span><br><span class="line">/tmp/巨大临时 TAR</span><br></pre></td></tr></table></figure>
+
+<p>这通常是现有导入脚本最值得做的第一项优化。</p>
+<h2 id="6-SHA256-最好自动检查"><a href="#6-SHA256-最好自动检查" class="headerlink" title="6. SHA256 最好自动检查"></a>6. SHA256 最好自动检查</h2><p>导出端生成：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sha256sum</span> <span class="string">&quot;<span class="variable">$OUTPUT</span>&quot;</span> &gt; <span class="string">&quot;<span class="variable">$OUTPUT</span>.sha256&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>接收端应该在 <code>docker load</code> 之前验证：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sha256sum</span> -c cross-dev.tar.zst.sha256</span><br></pre></td></tr></table></figure>
+
+<p>如果想让导入脚本更完整，可以自动查找：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">CHECKSUM=<span class="string">&quot;<span class="variable">$ARCHIVE</span>.sha256&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> [ -f <span class="string">&quot;<span class="variable">$CHECKSUM</span>&quot;</span> ]; <span class="keyword">then</span></span><br><span class="line">    <span class="built_in">sha256sum</span> -c <span class="string">&quot;<span class="variable">$CHECKSUM</span>&quot;</span></span><br><span class="line"><span class="keyword">fi</span></span><br></pre></td></tr></table></figure>
+
+<p>正式离线交付甚至可以规定：没有 <code>.sha256</code> 就拒绝导入。</p>
+<p>这样交付链变成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">导出</span><br><span class="line">  ↓</span><br><span class="line">SHA256</span><br><span class="line">  ↓</span><br><span class="line">传输</span><br><span class="line">  ↓</span><br><span class="line">SHA256 验证</span><br><span class="line">  ↓</span><br><span class="line">docker load</span><br></pre></td></tr></table></figure>
+
+<p>每一步都有明确完成条件。</p>
+<h2 id="7-gzip-1-并不是坏选择"><a href="#7-gzip-1-并不是坏选择" class="headerlink" title="7. gzip -1 并不是坏选择"></a>7. gzip -1 并不是坏选择</h2><p><code>gzip -1</code> 的思路是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">更重视压缩速度</span><br><span class="line">牺牲一些压缩率</span><br><span class="line">保持极高兼容性</span><br></pre></td></tr></table></figure>
+
+<p>对于大型 SDK 镜像，目标往往不是把文件压到理论最小，而是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">不要压几个小时</span><br><span class="line">不要吃满磁盘</span><br><span class="line">接收端容易使用</span><br></pre></td></tr></table></figure>
+
+<p>所以把 <code>-1</code> 直接改成 <code>-9</code> 通常不是最有价值的优化。</p>
+<p>真正应该先优化的是临时文件和数据流。</p>
+<h2 id="8-zstd-适合什么场景"><a href="#8-zstd-适合什么场景" class="headerlink" title="8. zstd 适合什么场景"></a>8. zstd 适合什么场景</h2><p>如果团队环境允许安装 zstd，可以考虑：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">zstd -T0 -3</span><br></pre></td></tr></table></figure>
+
+<p>其中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">-T0   使用所有可用线程</span><br><span class="line">-3    常用压缩级别</span><br></pre></td></tr></table></figure>
+
+<p>zstd 是否一定比 gzip 更小、更快，取决于镜像内容、CPU 和磁盘，不应该绝对化。</p>
+<p>但有一个确定优势：</p>
+<blockquote>
+<p>当前 Docker <code>load</code> 官方支持 zstd 压缩归档。</p>
+</blockquote>
+<p>所以：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">cross-dev.tar.zst</span><br></pre></td></tr></table></figure>
+
+<p>可以直接作为 Docker 导入文件，不要求先解压。</p>
+<h2 id="9-真正省磁盘的是流式压缩"><a href="#9-真正省磁盘的是流式压缩" class="headerlink" title="9. 真正省磁盘的是流式压缩"></a>9. 真正省磁盘的是流式压缩</h2><p>理想数据链是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    Image[&quot;Docker Image&quot;] --&gt;|&quot;docker save stdout&quot;| Compressor[&quot;gzip / zstd&quot;]</span><br><span class="line">    Compressor --&gt; Partial[&quot;压缩临时文件&quot;]</span><br><span class="line">    Partial --&gt;|&quot;成功后 mv&quot;| Final[&quot;最终归档&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>也就是不再落盘完整 TAR。</p>
+<p>如果允许使用 Bash，可以：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#!/usr/bin/env bash</span></span><br><span class="line"><span class="built_in">set</span> -Eeuo pipefail</span><br><span class="line"></span><br><span class="line">IMAGE=<span class="variable">$&#123;IMAGE:-cross-dev:20.04&#125;</span></span><br><span class="line">OUTPUT=<span class="variable">$&#123;1:-cross-dev-20.04.tar.zst&#125;</span></span><br><span class="line">PARTIAL=<span class="string">&quot;<span class="variable">$&#123;OUTPUT&#125;</span>.partial&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="title">cleanup</span></span>() &#123;</span><br><span class="line">    <span class="built_in">rm</span> -f <span class="string">&quot;<span class="variable">$PARTIAL</span>&quot;</span></span><br><span class="line">&#125;</span><br><span class="line"><span class="built_in">trap</span> cleanup EXIT HUP INT TERM</span><br><span class="line"></span><br><span class="line">docker image inspect <span class="string">&quot;<span class="variable">$IMAGE</span>&quot;</span> &gt;/dev/null</span><br><span class="line"></span><br><span class="line">docker save <span class="string">&quot;<span class="variable">$IMAGE</span>&quot;</span> | zstd -T0 -3 -o <span class="string">&quot;<span class="variable">$PARTIAL</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">mv</span> <span class="string">&quot;<span class="variable">$PARTIAL</span>&quot;</span> <span class="string">&quot;<span class="variable">$OUTPUT</span>&quot;</span></span><br><span class="line"><span class="built_in">trap</span> - EXIT</span><br><span class="line"><span class="built_in">sha256sum</span> <span class="string">&quot;<span class="variable">$OUTPUT</span>&quot;</span> &gt; <span class="string">&quot;<span class="variable">$OUTPUT</span>.sha256&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>这里关键是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">set -o pipefail</span><br></pre></td></tr></table></figure>
+
+<p>它让 <code>docker save</code> 或 zstd 任意一端失败时，pipeline 都能返回失败。</p>
+<p>这解决了 POSIX sh 简单管道的主要可靠性问题。</p>
+<h2 id="10-如果必须坚持-POSIX-sh-呢"><a href="#10-如果必须坚持-POSIX-sh-呢" class="headerlink" title="10. 如果必须坚持 POSIX sh 呢"></a>10. 如果必须坚持 POSIX sh 呢</h2><p>可以继续使用当前“临时 TAR”方案，它虽然占磁盘，但逻辑简单、容易审计。</p>
+<p>也可以设计 named pipe &#x2F; FIFO：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker save -&gt; FIFO -&gt; compressor</span><br></pre></td></tr></table></figure>
+
+<p>然后分别记录两个后台进程 PID，再分别 <code>wait</code>，从而获取双方退出状态。</p>
+<p>这可以同时做到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">POSIX sh</span><br><span class="line">流式压缩</span><br><span class="line">独立失败检测</span><br></pre></td></tr></table></figure>
+
+<p>但代码复杂度会上升不少。</p>
+<p>如果脚本只是团队内部 Linux 开发环境使用，与其为了“纯 POSIX”写复杂同步代码，不如明确要求 Bash，通常更容易维护。</p>
+<h2 id="11-导入脚本可以保持-POSIX-sh"><a href="#11-导入脚本可以保持-POSIX-sh" class="headerlink" title="11. 导入脚本可以保持 POSIX sh"></a>11. 导入脚本可以保持 POSIX sh</h2><p>导入端没有复杂 pipeline，可以很简单：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#!/usr/bin/env sh</span></span><br><span class="line"><span class="built_in">set</span> -eu</span><br><span class="line"></span><br><span class="line">ARCHIVE=<span class="variable">$&#123;1:?usage: import-image.sh IMAGE_ARCHIVE&#125;</span></span><br><span class="line">CHECKSUM=<span class="string">&quot;<span class="variable">$ARCHIVE</span>.sha256&quot;</span></span><br><span class="line"></span><br><span class="line">[ -f <span class="string">&quot;<span class="variable">$ARCHIVE</span>&quot;</span> ] || <span class="built_in">exit</span> 1</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> [ -f <span class="string">&quot;<span class="variable">$CHECKSUM</span>&quot;</span> ]; <span class="keyword">then</span></span><br><span class="line">    <span class="built_in">sha256sum</span> -c <span class="string">&quot;<span class="variable">$CHECKSUM</span>&quot;</span></span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    <span class="built_in">printf</span> <span class="string">&#x27;WARNING: checksum missing: %s\n&#x27;</span> <span class="string">&quot;<span class="variable">$CHECKSUM</span>&quot;</span> &gt;&amp;2</span><br><span class="line"><span class="keyword">fi</span></span><br><span class="line"></span><br><span class="line">docker load -i <span class="string">&quot;<span class="variable">$ARCHIVE</span>&quot;</span></span><br><span class="line">docker image <span class="built_in">ls</span></span><br></pre></td></tr></table></figure>
+
+<p>无论文件是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">.tar</span><br><span class="line">.tar.gz</span><br><span class="line">.tar.zst</span><br></pre></td></tr></table></figure>
+
+<p>都可以直接交给 <code>docker load</code>，前提是格式属于 Docker 官方支持类型。</p>
+<h2 id="12-扩展名必须和格式一致"><a href="#12-扩展名必须和格式一致" class="headerlink" title="12. 扩展名必须和格式一致"></a>12. 扩展名必须和格式一致</h2><p>如果脚本内部永远执行 gzip，却允许用户指定：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">./export-image.sh image.tar</span><br></pre></td></tr></table></figure>
+
+<p>那就可能得到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">名字：image.tar</span><br><span class="line">实际：gzip 数据</span><br></pre></td></tr></table></figure>
+
+<p>更合理的是明确：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">.tar      不压缩</span><br><span class="line">.tar.gz   gzip</span><br><span class="line">.tar.zst  zstd</span><br></pre></td></tr></table></figure>
+
+<p>或者干脆固定输出格式，不接受任意后缀。</p>
+<p>交付脚本最怕的不是“功能少”，而是文件名和真实行为不一致。</p>
+<h2 id="13-传输也要考虑中断恢复"><a href="#13-传输也要考虑中断恢复" class="headerlink" title="13. 传输也要考虑中断恢复"></a>13. 传输也要考虑中断恢复</h2><p>大型归档生成以后，局域网更适合：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rsync -avP cross-dev-20.04.tar.zst \</span><br><span class="line">    devuser@host:~/images/</span><br></pre></td></tr></table></figure>
+
+<p>接收端：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sha256sum</span> -c cross-dev-20.04.tar.zst.sha256</span><br><span class="line">docker load -i cross-dev-20.04.tar.zst</span><br></pre></td></tr></table></figure>
+
+<p>最后：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">docker image <span class="built_in">ls</span> cross-dev:20.04</span><br></pre></td></tr></table></figure>
+
+<p>整个流程的重点不是“命令少”，而是每一步都能明确知道有没有成功。</p>
+<h2 id="14-几种方案怎么选"><a href="#14-几种方案怎么选" class="headerlink" title="14. 几种方案怎么选"></a>14. 几种方案怎么选</h2><table>
+<thead>
+<tr>
+<th>方案</th>
+<th align="right">临时磁盘</th>
+<th>失败判断</th>
+<th>依赖</th>
+<th>适合场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>先 TAR 再 gzip</td>
+<td align="right">很高</td>
+<td>清晰</td>
+<td>POSIX sh</td>
+<td>最保守、磁盘足够</td>
+</tr>
+<tr>
+<td>&#96;save</td>
+<td align="right">gzip&#96;</td>
+<td>低</td>
+<td>POSIX sh 下较弱</td>
+<td>POSIX sh</td>
+</tr>
+<tr>
+<td>Bash <code>pipefail</code> + gzip</td>
+<td align="right">低</td>
+<td>清晰</td>
+<td>Bash</td>
+<td>通用团队环境</td>
+</tr>
+<tr>
+<td>Bash <code>pipefail</code> + zstd</td>
+<td align="right">低</td>
+<td>清晰</td>
+<td>Bash + zstd</td>
+<td>大镜像、重视吞吐</td>
+</tr>
+</tbody></table>
+<p>对于二十多 GiB 开发镜像，更推荐的方向是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">导出：流式压缩 + pipefail + partial + SHA256</span><br><span class="line">导入：SHA256 + docker load 直接读压缩包</span><br></pre></td></tr></table></figure>
+
+<p>这样既不需要额外落一个巨大 TAR，又没有牺牲错误检测。</p>
+<h3 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h3><ul>
+<li>Docker Docs：docker image save — <a target="_blank" rel="noopener external nofollow noreferrer" href="https://docs.docker.com/reference/cli/docker/image/save/">https://docs.docker.com/reference/cli/docker/image/save/</a></li>
+<li>Docker Docs：docker image load — <a target="_blank" rel="noopener external nofollow noreferrer" href="https://docs.docker.com/reference/cli/docker/image/load/">https://docs.docker.com/reference/cli/docker/image/load/</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/41987210/">https://wdfk-prog.space/posts/41987210/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/docker/">docker</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/07.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/posts/d837d65a/" title="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划</div></div><div class="info-2"><div class="info-item-1">  大型 Docker 开发镜像磁盘排查：containerd、缓存与容量规划 摘要：给出大型开发镜像的磁盘排查顺序，区分 containerd 镜像数据、snapshot、BuildKit cache、导出归档和源码构建输出。   @[toc] 当一个二十多 GiB 的开发镜像运行在 Docker Engine 29+ 新主机上时，磁盘问题往往比容器运行问题更早出现。 例如根分区只有约 80 GiB，却同时存在： 123456大型开发镜像containerd contentunpacked snapshotBuildKit cache源码 build 输出镜像导出归档  这时如果只看到： 1/dev/sdaX 90%  然后立刻运行 docker system prune -a，很容易删掉重新构建代价很高的开发镜像。 更好的方式是先回答：  空间到底被哪一类数据占用了？  1. 第一层先看文件系统1df -h /  它回答的是： 1整个根文件系统还剩多少空间？  它不会告诉你 Docker 哪个对象在占空间。 如果镜像归档放在其他分区，还要分别看： 1df -h /path/t...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c8696f76/" title="06-Docker开发环境到底要交付什么：镜像、源码与运行脚本"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-04</div><div class="info-item-2">06-Docker开发环境到底要交付什么：镜像、源码与运行脚本</div></div><div class="info-2"><div class="info-item-1">  Docker 开发环境到底要交付什么：镜像、源码与运行脚本 摘要：从团队交付角度区分 Docker 镜像、bind mount 源码、entrypoint、Compose 和 dev.sh，明确哪些需要随镜像一起交给使用者。   @[toc]开发镜像自己能运行以后，下一个问题往往不是“怎么构建”，而是：  我要把这套环境给另一个开发者，他到底需要拿到哪些文件？  最容易产生误解的是 entrypoint.sh、compose.yaml 和 dev.sh。 它们看起来都和“启动容器”有关，但所处层次完全不同。 1. 先把开发环境分成三层可以先用一张图建立边界： 123456flowchart TB    User[&quot;开发者&quot;] --&gt; Dev[&quot;dev.sh&quot;]    Dev --&gt; Compose[&quot;compose.yaml / docker run 参数&quot;]    Compose --&gt; Image[&quot;Docker Image&quot;]    Image --&gt; Entry[&...</div></div></div></a><a class="pagination-related" href="/posts/67b8cf6d/" title="05-Docker开发镜像跨主机迁移：从Ubuntu20"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-04</div><div class="info-item-2">05-Docker开发镜像跨主机迁移：从Ubuntu20</div></div><div class="info-2"><div class="info-item-1">  Docker 开发镜像跨主机迁移：从 Ubuntu 20.04 到 24.04 摘要：说明如何把已验证的 Ubuntu 20.04 开发镜像迁移到 Ubuntu 24.04，并逐层验证 Docker、镜像、源码挂载和真实构建。   @[toc]旧开发机长期使用 Ubuntu 20.04，交叉编译 SDK、CMake 和各种依赖已经调通；新机器升级到 Ubuntu 24.04 后，最稳妥的做法往往不是重装整套依赖，而是继续运行已经验证过的开发镜像。 1. 宿主机升级，不等于容器也升级假设我们已经有一张镜像： 1cross-dev:20.04  它内部包含： 123456Ubuntu 20.04 用户空间Yocto SDK交叉编译器CMake / Make / Python代码生成工具entrypoint  把它迁移到 Ubuntu 24.04 后，结构是： 123456flowchart TB    Host[&quot;Ubuntu 24.04 宿主机&quot;] --&gt; Engine[&quot;Docker Engine&quot;]    Engine --&g...</div></div></div></a><a class="pagination-related" href="/posts/3a37ea37/" title="08-Docker29与containerd-image-store：镜像为什么会保存两种形态"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-04</div><div class="info-item-2">08-Docker29与containerd-image-store：镜像为什么会保存两种形态</div></div><div class="info-2"><div class="info-item-1">  Docker 29 与 containerd image store：镜像为什么会保存两种形态 摘要：从 content store 与 snapshotter 两个角色解释 Docker Engine 29 的 containerd image store，以及大型镜像为什么比传统 overlay2 更占磁盘。   @[toc] 把一个大型开发镜像迁移到新的 Ubuntu 主机后，有时会看到一个很反直觉的结果： 12镜像内容大约 27 GiBDocker 相关磁盘却接近 50 GiB  如果新机器使用 Docker Engine 29+ 的全新安装，这个现象很可能与 containerd image store 有关。 Docker 官方当前文档明确说明：Docker Engine 29.0 及以后版本的全新安装，默认使用 containerd image store；从较早版本升级的系统则可能继续使用传统 graph driver。 1. 先确认当前后端Docker 官方提供的检查命令是： 1docker info -f &#x27;&#123;&#123; .Drive...</div></div></div></a><a class="pagination-related" href="/posts/d837d65a/" title="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-04</div><div class="info-item-2">09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划</div></div><div class="info-2"><div class="info-item-1">  大型 Docker 开发镜像磁盘排查：containerd、缓存与容量规划 摘要：给出大型开发镜像的磁盘排查顺序，区分 containerd 镜像数据、snapshot、BuildKit cache、导出归档和源码构建输出。   @[toc] 当一个二十多 GiB 的开发镜像运行在 Docker Engine 29+ 新主机上时，磁盘问题往往比容器运行问题更早出现。 例如根分区只有约 80 GiB，却同时存在： 123456大型开发镜像containerd contentunpacked snapshotBuildKit cache源码 build 输出镜像导出归档  这时如果只看到： 1/dev/sdaX 90%  然后立刻运行 docker system prune -a，很容易删掉重新构建代价很高的开发镜像。 更好的方式是先回答：  空间到底被哪一类数据占用了？  1. 第一层先看文件系统1df -h /  它回答的是： 1整个根文件系统还剩多少空间？  它不会告诉你 Docker 哪个对象在占空间。 如果镜像归档放在其他分区，还要分别看： 1df -h /path/t...</div></div></div></a><a class="pagination-related" href="/posts/ff462634/" title="01-Docker开发环境容器化：从基本概念到Ubuntu20"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">01-Docker开发环境容器化：从基本概念到Ubuntu20</div></div><div class="info-2"><div class="info-item-1">  Docker 开发环境容器化：从基本概念到 Ubuntu 20.04 安装排查 摘要：从 Image、Container、Dockerfile 和挂载建立 Docker 心智模型，并结合 Ubuntu 20.04 的安装冲突说明为什么要把旧开发环境容器化。  @[toc]学习 Docker 最容易走偏的方式，是先背几十条命令，再去想这些命令解决什么问题。对于开发环境容器化，更合理的顺序正好相反：先明确工程为什么需要 Docker，再理解 Image、Container、Dockerfile、挂载和权限这些概念，最后才把命令放进实际场景。 本文从一个典型的嵌入式交叉编译环境出发：旧工程长期依赖 Ubuntu 20.04、厂商 Yocto SDK、固定 CMake、代码生成工具和若干宿主机软件。旧机器能稳定构建，但一旦换电脑、升级系统或让其他开发者接手，就很难准确复刻环境。 Docker 在这里的目标不是“把 Linux 再装一遍”，而是：  把构建环境固定成可重复生成的镜像，把日常修改的源码继续留在宿主机。  1. 为什么开发环境值得容器化传统开发机往往随着项目迭代逐渐变成这样...</div></div></div></a><a class="pagination-related" href="/posts/83a8516e/" title="03-交叉编译开发容器故障排查：从CMakeCache到目标库链接"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">03-交叉编译开发容器故障排查：从CMakeCache到目标库链接</div></div><div class="info-2"><div class="info-item-1">  交叉编译开发容器故障排查：从 CMakeCache 到目标库链接 摘要：按真实首次失败点复盘旧 CMakeCache、host&#x2F;target Thrift、SDK 权限、编译参数冲突和目标库链接，说明怎样沿证据链逐层收敛问题。  @[toc]  Docker 能启动、交叉编译器能执行，只能证明环境最外层入口正常。历史 C&#x2F;C++ 工程仍可能依次暴露旧 CMake 缓存、宿主工具、目标库、权限和编译参数策略。 这次排查最重要的原则是：围绕当前第一次失败收集证据，证明后再继续向后。 最终故障链可以概括为： 1234567flowchart TD    Cache[&quot;旧 CMakeCache\n编译器路径属于旧 Host&quot;] --&gt;|干净 build tree| Compiler[&quot;交叉 GCC 正确识别&quot;]    Compiler --&gt; Thrift[&quot;host Thrift 查找失败&quot;]    Thrift --&gt;|确认 host generator| Header[&quot;...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">585</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">62</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">67</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E5%A4%A7%E5%9E%8B-Docker-%E9%95%9C%E5%83%8F%E5%AF%BC%E5%87%BA%E5%AF%BC%E5%85%A5%E5%B7%A5%E7%A8%8B%E5%8C%96%EF%BC%9A%E5%8F%AF%E9%9D%A0%E6%80%A7%E3%80%81%E7%A3%81%E7%9B%98%E4%B8%8E%E5%8E%8B%E7%BC%A9"><span class="toc-number">1.</span> <span class="toc-text">大型 Docker 镜像导出导入工程化：可靠性、磁盘与压缩</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-save-load-%E7%9A%84%E5%9F%BA%E6%9C%AC%E6%95%B0%E6%8D%AE%E6%B5%81"><span class="toc-number">1.1.</span> <span class="toc-text">1. save&#x2F;load 的基本数据流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%80%E4%B8%AA%E5%8F%AF%E9%9D%A0%E7%9A%84-POSIX-sh-%E8%84%9A%E6%9C%AC%E4%BC%9A%E5%85%88%E7%94%9F%E6%88%90-TAR"><span class="toc-number">1.2.</span> <span class="toc-text">2. 为什么一个可靠的 POSIX sh 脚本会先生成 TAR</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E9%97%AE%E9%A2%98%E5%9C%A8%E4%BA%8E%E5%A4%A7%E5%9E%8B%E9%95%9C%E5%83%8F%E7%9A%84%E7%A3%81%E7%9B%98%E5%B3%B0%E5%80%BC"><span class="toc-number">1.3.</span> <span class="toc-text">3. 问题在于大型镜像的磁盘峰值</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-mktemp%E3%80%81trap-%E5%92%8C%E6%9C%80%E5%90%8E-mv-%E9%83%BD%E5%80%BC%E5%BE%97%E4%BF%9D%E7%95%99"><span class="toc-number">1.4.</span> <span class="toc-text">4. mktemp、trap 和最后 mv 都值得保留</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E5%AF%BC%E5%85%A5%E7%AB%AF%E5%85%B6%E5%AE%9E%E5%8F%AF%E4%BB%A5%E7%AE%80%E5%8D%95%E5%BE%88%E5%A4%9A"><span class="toc-number">1.5.</span> <span class="toc-text">5. 导入端其实可以简单很多</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-SHA256-%E6%9C%80%E5%A5%BD%E8%87%AA%E5%8A%A8%E6%A3%80%E6%9F%A5"><span class="toc-number">1.6.</span> <span class="toc-text">6. SHA256 最好自动检查</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-gzip-1-%E5%B9%B6%E4%B8%8D%E6%98%AF%E5%9D%8F%E9%80%89%E6%8B%A9"><span class="toc-number">1.7.</span> <span class="toc-text">7. gzip -1 并不是坏选择</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-zstd-%E9%80%82%E5%90%88%E4%BB%80%E4%B9%88%E5%9C%BA%E6%99%AF"><span class="toc-number">1.8.</span> <span class="toc-text">8. zstd 适合什么场景</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E7%9C%9F%E6%AD%A3%E7%9C%81%E7%A3%81%E7%9B%98%E7%9A%84%E6%98%AF%E6%B5%81%E5%BC%8F%E5%8E%8B%E7%BC%A9"><span class="toc-number">1.9.</span> <span class="toc-text">9. 真正省磁盘的是流式压缩</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E5%A6%82%E6%9E%9C%E5%BF%85%E9%A1%BB%E5%9D%9A%E6%8C%81-POSIX-sh-%E5%91%A2"><span class="toc-number">1.10.</span> <span class="toc-text">10. 如果必须坚持 POSIX sh 呢</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%AF%BC%E5%85%A5%E8%84%9A%E6%9C%AC%E5%8F%AF%E4%BB%A5%E4%BF%9D%E6%8C%81-POSIX-sh"><span class="toc-number">1.11.</span> <span class="toc-text">11. 导入脚本可以保持 POSIX sh</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E6%89%A9%E5%B1%95%E5%90%8D%E5%BF%85%E9%A1%BB%E5%92%8C%E6%A0%BC%E5%BC%8F%E4%B8%80%E8%87%B4"><span class="toc-number">1.12.</span> <span class="toc-text">12. 扩展名必须和格式一致</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-%E4%BC%A0%E8%BE%93%E4%B9%9F%E8%A6%81%E8%80%83%E8%99%91%E4%B8%AD%E6%96%AD%E6%81%A2%E5%A4%8D"><span class="toc-number">1.13.</span> <span class="toc-text">13. 传输也要考虑中断恢复</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-%E5%87%A0%E7%A7%8D%E6%96%B9%E6%A1%88%E6%80%8E%E4%B9%88%E9%80%89"><span class="toc-number">1.14.</span> <span class="toc-text">14. 几种方案怎么选</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.14.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/b8fb0325/" title="docker学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="docker学习笔记系列"/></a><div class="content"><a class="title" href="/posts/b8fb0325/" title="docker学习笔记系列">docker学习笔记系列</a><time datetime="2026-09-04T08:40:38.704Z" title="更新于 2026-09-04 16:40:38">2026-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/d837d65a/" title="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划"/></a><div class="content"><a class="title" href="/posts/d837d65a/" title="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划">09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划</a><time datetime="2026-09-04T08:39:09.655Z" title="更新于 2026-09-04 16:39:09">2026-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3a37ea37/" title="08-Docker29与containerd-image-store：镜像为什么会保存两种形态"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="08-Docker29与containerd-image-store：镜像为什么会保存两种形态"/></a><div class="content"><a class="title" href="/posts/3a37ea37/" title="08-Docker29与containerd-image-store：镜像为什么会保存两种形态">08-Docker29与containerd-image-store：镜像为什么会保存两种形态</a><time datetime="2026-09-04T08:39:09.520Z" title="更新于 2026-09-04 16:39:09">2026-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/41987210/" title="07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩"/></a><div class="content"><a class="title" href="/posts/41987210/" title="07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩">07-大型Docker镜像导出导入工程化：可靠性、磁盘与压缩</a><time datetime="2026-09-04T08:39:09.408Z" title="更新于 2026-09-04 16:39:09">2026-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/c8696f76/" title="06-Docker开发环境到底要交付什么：镜像、源码与运行脚本"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="06-Docker开发环境到底要交付什么：镜像、源码与运行脚本"/></a><div class="content"><a class="title" href="/posts/c8696f76/" title="06-Docker开发环境到底要交付什么：镜像、源码与运行脚本">06-Docker开发环境到底要交付什么：镜像、源码与运行脚本</a><time datetime="2026-09-04T08:39:09.321Z" title="更新于 2026-09-04 16:39:09">2026-09-04</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/07.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'dfe041250978fa7f12e9f4c554adc32b'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",15],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",5],["2026-09-04",5]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,51,8,11],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":46},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":39}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":46},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":39}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":46}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":46}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"docker","children":[],"count":9,"path":"docker"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":46,"path":"rt-thread"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"MCU","children":[],"count":39,"path":"MCU"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"杂谈","children":[],"count":36,"path":"杂谈"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
