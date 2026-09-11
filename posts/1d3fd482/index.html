@@ -1,0 +1,1419 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>dma-buf | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="[TOC] Linux 内核 dma-buf 核心实现（drivers&#x2F;dma-buf&#x2F;dma-buf.c）全面解析[drivers&#x2F;dma-buf&#x2F;dma-buf.c] [dma-buf 共享缓冲区框架核心] [跨子系统&#x2F;设备共享 DMA 缓冲区 + 同步与 CPU 访问支持的核心对象与文件接口]介绍dma-buf 子系统提供一种跨多个驱动">
+<meta property="og:type" content="article">
+<meta property="og:title" content="dma-buf">
+<meta property="og:url" content="https://wdfk-prog.space/posts/1d3fd482/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="[TOC] Linux 内核 dma-buf 核心实现（drivers&#x2F;dma-buf&#x2F;dma-buf.c）全面解析[drivers&#x2F;dma-buf&#x2F;dma-buf.c] [dma-buf 共享缓冲区框架核心] [跨子系统&#x2F;设备共享 DMA 缓冲区 + 同步与 CPU 访问支持的核心对象与文件接口]介绍dma-buf 子系统提供一种跨多个驱动">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/05.jpg">
+<meta property="article:published_time" content="2025-10-03T01:01:49.000Z">
+<meta property="article:modified_time" content="2026-09-01T13:43:51.140Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="dma">
+<meta property="article:tag" content="drivers">
+<meta property="article:tag" content="linux">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/05.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "dma-buf",
+  "url": "https://wdfk-prog.space/posts/1d3fd482/",
+  "image": "https://wdfk-prog.space/images/covers/05.jpg",
+  "datePublished": "2025-10-03T01:01:49.000Z",
+  "dateModified": "2026-09-01T13:43:51.140Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/1d3fd482/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'dma-buf',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">585</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">62</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/05.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">dma-buf</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">dma-buf<a class="post-edit-link" href="null_posts/linux/drivers/dma/dma-buf.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-10-03T01:01:49.000Z" title="发表于 2025-10-03 09:01:49">2025-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-01T13:43:51.140Z" title="更新于 2026-09-01 21:43:51">2026-09-01</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/">linux</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/drivers/">drivers</a><i class="fas fa-angle-right post-meta-separator"></i><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/linux/drivers/dma/">dma</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">10.3k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>35分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/1d3fd482/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-09-01 21:43:51&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/3ff7719c11d24ac1989c1325627e52ac.png" alt="在这里插入图片描述"></p>
+<p>[TOC]</p>
+<h1 id="Linux-内核-dma-buf-核心实现（drivers-dma-buf-dma-buf-c）全面解析"><a href="#Linux-内核-dma-buf-核心实现（drivers-dma-buf-dma-buf-c）全面解析" class="headerlink" title="Linux 内核 dma-buf 核心实现（drivers&#x2F;dma-buf&#x2F;dma-buf.c）全面解析"></a>Linux 内核 dma-buf 核心实现（drivers&#x2F;dma-buf&#x2F;dma-buf.c）全面解析</h1><h1 id="drivers-dma-buf-dma-buf-c-dma-buf-共享缓冲区框架核心-跨子系统-设备共享-DMA-缓冲区-同步与-CPU-访问支持的核心对象与文件接口"><a href="#drivers-dma-buf-dma-buf-c-dma-buf-共享缓冲区框架核心-跨子系统-设备共享-DMA-缓冲区-同步与-CPU-访问支持的核心对象与文件接口" class="headerlink" title="[drivers&#x2F;dma-buf&#x2F;dma-buf.c] [dma-buf 共享缓冲区框架核心] [跨子系统&#x2F;设备共享 DMA 缓冲区 + 同步与 CPU 访问支持的核心对象与文件接口]"></a>[drivers&#x2F;dma-buf&#x2F;dma-buf.c] [dma-buf 共享缓冲区框架核心] [跨子系统&#x2F;设备共享 DMA 缓冲区 + 同步与 CPU 访问支持的核心对象与文件接口]</h1><h2 id="介绍"><a href="#介绍" class="headerlink" title="介绍"></a>介绍</h2><p><code>dma-buf</code> 子系统提供一种<strong>跨多个驱动&#x2F;子系统共享同一块底层缓冲区</strong>的内核框架，并配套处理<strong>异步硬件访问的同步</strong>（基于 <code>dma-resv</code>&#x2F;<code>dma-fence</code>）以及<strong>CPU 访问一致性</strong>（begin&#x2F;end CPU access、mmap、poll&#x2F;notify 等）。官方文档把其定位为：共享用于硬件（DMA）访问的缓冲区，并同步异步硬件访问。<br><code>drivers/dma-buf/dma-buf.c</code> 则是**dma-buf 核心对象（struct dma_buf）与其“文件描述符语义”**的主要实现：全局跟踪、fd 导出、attachment 管理、map&#x2F;unmap、CPU access、poll、ioctl 等。</p>
+<hr>
+<h2 id="历史与背景"><a href="#历史与背景" class="headerlink" title="历史与背景"></a>历史与背景</h2><h3 id="这项技术是为了解决什么特定问题而诞生的？"><a href="#这项技术是为了解决什么特定问题而诞生的？" class="headerlink" title="这项技术是为了解决什么特定问题而诞生的？"></a>这项技术是为了解决什么特定问题而诞生的？</h3><p>在图形、多媒体、相机、编解码等场景中，常见“一个子系统分配 buffer，另一个子系统&#x2F;设备使用同一 buffer 做 DMA”。若各驱动各自定义共享方式，会导致：</p>
+<ul>
+<li>缓冲区传递机制碎片化（每对驱动一套接口）</li>
+<li>同步机制不统一（谁负责等待&#x2F;信号？）</li>
+<li>缓冲区生命周期难以管理（引用计数&#x2F;关闭 fd&#x2F;释放顺序）</li>
+</ul>
+<p>dma-buf 用<strong>统一的文件描述符（fd）载体</strong>来传递 buffer，并用 <code>dma-resv</code>&#x2F;<code>dma-fence</code> 体系做隐式同步，降低跨子系统互操作成本。 </p>
+<h3 id="发展里程碑或版本迭代（从代码-文档可直接看到的能力点）"><a href="#发展里程碑或版本迭代（从代码-文档可直接看到的能力点）" class="headerlink" title="发展里程碑或版本迭代（从代码&#x2F;文档可直接看到的能力点）"></a>发展里程碑或版本迭代（从代码&#x2F;文档可直接看到的能力点）</h3><p>不在这里强行给出“某版本引入某特性”的时间线（那需要进一步查 git log 才严谨），但从当前主线实现可确认这些关键能力已经稳定存在：</p>
+<ul>
+<li><strong>全局 dma-buf 列表与迭代接口</strong>：<code>dmabuf_list</code> + <code>dma_buf_iter_begin()/dma_buf_iter_next()</code>，并强调 list mutex 不保护 refcount，需要 <code>file_ref_get()</code> 方式安全拿引用。)</li>
+<li><strong>明确的锁定约定</strong>：文档化说明“哪些 API 调用方必须&#x2F;必须不持有 reservation lock”，将 deadlock 风险前置到接口契约层。)</li>
+<li><strong>map_attachment 路径集成 pin 语义</strong>：<code>dma_buf_map_attachment()</code> 里 <code>might_sleep()</code>、<code>dma_resv_assert_held()</code>，并在需要时走 <code>ops-&gt;pin()</code>，对导出者错误行为做 <code>WARN</code>。)</li>
+<li><strong>CPU 访问路径显式等待隐式 fence</strong>：在 <code>dma_buf_begin_cpu_access()</code> 相关逻辑里，会等待隐式渲染 fences（通过 <code>dma_resv_wait_timeout</code>）。)</li>
+<li>官方文档持续更新（发布时间为近一周），说明仍是活跃维护的主流框架。</li>
+</ul>
+<h3 id="社区活跃度与主流应用情况"><a href="#社区活跃度与主流应用情况" class="headerlink" title="社区活跃度与主流应用情况"></a>社区活跃度与主流应用情况</h3><p>dma-buf 是 Linux 图形&#x2F;多媒体栈里的核心基础设施，DRM、V4L2 等广泛依赖它进行 buffer 交换与同步（官方文档也明确点到这些典型使用）。 </p>
+<hr>
+<h2 id="核心原理与设计"><a href="#核心原理与设计" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h2><h3 id="核心工作原理是什么？"><a href="#核心工作原理是什么？" class="headerlink" title="核心工作原理是什么？"></a>核心工作原理是什么？</h3><p>可以按“对象模型 + 文件语义 + 同步模型 + 映射模型”来理解：</p>
+<ol>
+<li><strong>对象模型：struct dma_buf 作为共享对象</strong></li>
+</ol>
+<ul>
+<li>导出者（exporter）实现 <code>struct dma_buf_ops</code>，决定底层内存如何分配、如何 map 成 sg_table、如何处理 CPU access 等。</li>
+<li>导入者（importer&#x2F;user）通过 attachment 把该 dma-buf 绑定到某个设备，再把它映射成该设备可 DMA 的形式。</li>
+</ul>
+<ol start="2">
+<li><strong>文件语义：dma-buf 作为 fd 传递</strong></li>
+</ol>
+<ul>
+<li>dma-buf 通过匿名 inode&#x2F;伪文件系统的 file 对象呈现为 fd，从而在进程&#x2F;子系统之间传递。代码中可以看到创建 pseudo file 的路径（<code>alloc_file_pseudo</code>），并设置 inode size 等信息。)</li>
+<li>代码维护全局 dmabuf 列表，并提供迭代：迭代时需要安全地“提升引用计数以防销毁”。)</li>
+</ul>
+<ol start="3">
+<li><strong>同步模型：dma-resv &#x2F; dma-fence 隐式同步</strong></li>
+</ol>
+<ul>
+<li>dma-buf 的 <code>resv</code>（reservation object）聚合 fences：读&#x2F;写访问顺序由 fences 表达。</li>
+<li>CPU 访问路径会等待隐式 fences，确保 CPU 读写看到一致数据（至少在指定范围&#x2F;方向语义内）。)</li>
+</ul>
+<ol start="4">
+<li><strong>映射模型：attachment + map&#x2F;unmap</strong></li>
+</ol>
+<ul>
+<li><code>dma_buf_map_attachment()</code> 要求调用方持有 reservation lock（代码里 <code>dma_resv_assert_held</code>），并可能 sleep。)</li>
+<li>它通过 exporter 的 <code>ops-&gt;map_dma_buf()</code> 返回 <code>sg_table</code>，供设备 DMA 使用；并在需要时结合 <code>pin</code> 语义提升“底层存储不可迁移&#x2F;可访问性”约束。)</li>
+</ul>
+<ol start="5">
+<li><strong>锁定约定（非常关键）</strong><br>源码中专门列出导入者约定：例如 <code>dma_buf_map_attachment()/vmap()</code> 这类需要持有 reservation lock，而 <code>dma_buf_attach()/export()/fd/get/put</code> 等则要求不持有。这个约定是排查死锁的第一优先级依据。)</li>
+</ol>
+<h3 id="主要优势体现在哪些方面？"><a href="#主要优势体现在哪些方面？" class="headerlink" title="主要优势体现在哪些方面？"></a>主要优势体现在哪些方面？</h3><ul>
+<li><strong>跨子系统统一共享模型</strong>：fd 传递 + 统一 attachment&#x2F;map 语义，降低耦合（官方文档描述的核心目标）。 </li>
+<li><strong>统一的隐式同步基础设施</strong>：围绕 <code>dma-resv</code>&#x2F;<code>dma-fence</code> 组织同步，CPU 访问路径也能通过等待 fences 保证一致性。)</li>
+<li><strong>明确的调用方锁约束</strong>：把“谁持锁调用什么”写进契约，降低系统集成时的不可控并发问题。)</li>
+</ul>
+<h3 id="劣势、局限性或不适用性"><a href="#劣势、局限性或不适用性" class="headerlink" title="劣势、局限性或不适用性"></a>劣势、局限性或不适用性</h3><ul>
+<li><strong>复杂度高</strong>：必须正确处理 exporter&#x2F;importer 角色、reservation lock、fence 语义、CPU access begin&#x2F;end、mmap&#x2F;ioctl&#x2F;poll 等一整套机制；错误通常表现为隐式同步失效或死锁。)</li>
+<li><strong>不是“通用共享内存”接口</strong>：它面向 DMA buffer 共享与同步；若只是 CPU 侧共享数据结构，可能更适合其他 IPC&#x2F;共享内存机制（取决于需求）。这一点需要你基于目标场景做判断。</li>
+<li><strong>关键路径可能 sleep</strong>：例如 <code>dma_buf_map_attachment()</code> 明确 <code>might_sleep()</code>，因此调用上下文要满足可睡眠条件。)</li>
+</ul>
+<hr>
+<h2 id="使用场景"><a href="#使用场景" class="headerlink" title="使用场景"></a>使用场景</h2><h3 id="首选场景（举例）"><a href="#首选场景（举例）" class="headerlink" title="首选场景（举例）"></a>首选场景（举例）</h3><ul>
+<li><strong>DRM ↔ V4L2 &#x2F; 编解码器 &#x2F; ISP &#x2F; 显示</strong>：图形与多媒体流水线中，一个组件产出帧缓冲，另一个组件消费；dma-buf 用 fd 传递 buffer，fence 做隐式同步，是典型路径（官方文档点名 DRM、V4L2 等互通）。 </li>
+<li><strong>跨设备共享同一底层存储</strong>：例如 GPU 渲染结果直接给显示&#x2F;视频编码设备 DMA 使用，通过 attachment&#x2F;map 取 sg_table。</li>
+</ul>
+<h3 id="不推荐使用的场景（原因）"><a href="#不推荐使用的场景（原因）" class="headerlink" title="不推荐使用的场景（原因）"></a>不推荐使用的场景（原因）</h3><ul>
+<li><strong>不涉及 DMA 的纯 CPU 数据共享</strong>：dma-buf 引入的同步&#x2F;映射语义与实现复杂度可能是负担。</li>
+<li><strong>无法接受隐式同步模型的系统</strong>：如果你需要显式控制每一步同步、或系统中同步策略与 dma-resv 机制冲突，使用 dma-buf 可能会增加调试难度（需要你对 fence&#x2F;resv 语义非常熟）。</li>
+</ul>
+<hr>
+<h2 id="对比分析"><a href="#对比分析" class="headerlink" title="对比分析"></a>对比分析</h2><p>这里选 3 类“相似但定位不同”的技术路线做对比（你学习时容易混淆的点）：</p>
+<h3 id="1-dma-buf-vs-“普通共享内存-文件（memfd-shm-tmpfs）”"><a href="#1-dma-buf-vs-“普通共享内存-文件（memfd-shm-tmpfs）”" class="headerlink" title="1) dma-buf vs “普通共享内存&#x2F;文件（memfd&#x2F;shm&#x2F;tmpfs）”"></a>1) dma-buf vs “普通共享内存&#x2F;文件（memfd&#x2F;shm&#x2F;tmpfs）”</h3><ul>
+<li><p><strong>实现方式</strong></p>
+<ul>
+<li>dma-buf：面向 DMA 缓冲区共享，核心是 exporter ops + attachment + sg_table + fence&#x2F;resv。 </li>
+<li>memfd&#x2F;shm：面向 CPU 地址空间共享，不提供统一的设备 DMA 映射与隐式同步语义。</li>
+</ul>
+</li>
+<li><p><strong>性能开销</strong></p>
+<ul>
+<li>dma-buf：在 map&#x2F;unmap、同步等待、poll&#x2F;notify 上有额外机制成本，但换来跨设备共享与正确同步。)</li>
+</ul>
+</li>
+<li><p><strong>资源占用</strong></p>
+<ul>
+<li>dma-buf：底层存储由 exporter 决定（可能是 pages、carveout、IOMMU 映射等），并伴随 resv&#x2F;fence 元数据。</li>
+</ul>
+</li>
+<li><p><strong>隔离级别</strong></p>
+<ul>
+<li>dma-buf：以 fd 为句柄，权限由 fd 传递控制；设备访问能力通过 attachment 绑定设备。</li>
+</ul>
+</li>
+<li><p><strong>启动速度</strong></p>
+<ul>
+<li>dma-buf：建立共享关系通常要 export→fd→get→attach→map，多步骤；但这是为了明确控制共享与同步。</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-dma-buf-vs-“每设备独立分配-自定义传递”"><a href="#2-dma-buf-vs-“每设备独立分配-自定义传递”" class="headerlink" title="2) dma-buf vs “每设备独立分配 + 自定义传递”"></a>2) dma-buf vs “每设备独立分配 + 自定义传递”</h3><ul>
+<li>dma-buf 的主要优势就是避免 N×M 的私有接口组合；并统一同步。 </li>
+<li>代价是所有参与者都要遵循锁定约定与同步模型，否则系统性问题更隐蔽。)</li>
+</ul>
+<h3 id="3-dma-buf-vs-dma-heap（补充理解边界）"><a href="#3-dma-buf-vs-dma-heap（补充理解边界）" class="headerlink" title="3) dma-buf vs dma-heap（补充理解边界）"></a>3) dma-buf vs dma-heap（补充理解边界）</h3><ul>
+<li>dma-heap 更像“面向用户态申请 dma-buf 的分配入口&#x2F;内存池策略”，而 dma-buf.c 是“共享对象与语义核心”。两者经常一起出现，但职责不同。你在继续读源码时会很快感受到这一点（<code>drivers/dma-buf/dma-heap.c</code> 是另一条线）。</li>
+</ul>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><h3 id="关键特性"><a href="#关键特性" class="headerlink" title="关键特性"></a>关键特性</h3><ul>
+<li><code>dma_buf</code> 作为<strong>可通过 fd 传递的共享 DMA 缓冲区对象</strong>，并支持跨设备 attachment、映射为 sg_table。 </li>
+<li>以 <code>dma-resv</code>&#x2F;<code>dma-fence</code> 为核心的<strong>隐式同步</strong>，CPU 访问路径会等待相关 fences。)</li>
+<li>明确的<strong>锁定约定</strong>，是正确使用与排障的第一要点。)</li>
+<li>核心实现还包含全局列表迭代、poll 支持、命名与统计等工程性能力。</li>
+</ul>
+<h2 id="dma-heap-与-dma-buf-的职责关系：分配入口-内存池策略-vs-共享对象-语义核心"><a href="#dma-heap-与-dma-buf-的职责关系：分配入口-内存池策略-vs-共享对象-语义核心" class="headerlink" title="dma-heap 与 dma-buf 的职责关系：分配入口&#x2F;内存池策略 vs 共享对象&#x2F;语义核心"></a><code>dma-heap</code> 与 <code>dma-buf</code> 的职责关系：分配入口&#x2F;内存池策略 vs 共享对象&#x2F;语义核心</h2><h3 id="1-dma-buf-是“共享对象与语义核心”"><a href="#1-dma-buf-是“共享对象与语义核心”" class="headerlink" title="1) dma-buf 是“共享对象与语义核心”"></a>1) <code>dma-buf</code> 是“共享对象与语义核心”</h3><p><code>dma-buf.c</code> 这类代码主要在做两件事：</p>
+<ul>
+<li><strong>定义共享对象 <code>struct dma_buf</code> 的生命周期与规则</strong><br>例如：引用计数、release 路径、attachments 管理、fence&#x2F;同步语义、统计与 debug 导出等。</li>
+<li><strong>提供跨驱动共享的通用接口</strong><br>例如：导出（export）、导入（attach&#x2F;map&#x2F;detach）、文件描述符关联、dentry&#x2F;vfs 相关回调等。</li>
+</ul>
+<p>也就是说：<br><code>dma-buf</code> 不关心“这块内存来自哪个池子、怎么分配出来的”，它关心的是：<br><strong>一旦你给我一个 buffer，我怎么把它变成一个可共享、可同步、可回收的‘共享对象’</strong>。</p>
+<hr>
+<h3 id="2-dma-heap-更像“面向用户态申请-dma-buf-的分配入口-内存池策略”"><a href="#2-dma-heap-更像“面向用户态申请-dma-buf-的分配入口-内存池策略”" class="headerlink" title="2) dma-heap 更像“面向用户态申请 dma-buf 的分配入口&#x2F;内存池策略”"></a>2) <code>dma-heap</code> 更像“面向用户态申请 dma-buf 的分配入口&#x2F;内存池策略”</h3><p><code>dma-heap</code> 的定位更偏“上游入口 + 策略”：</p>
+<ul>
+<li>它提供给用户态一个标准入口（通常是 <code>/dev/dma_heap/&lt;heap&gt;</code> 这样的设备节点）<br>用户态通过 ioctl 之类请求“给我分配一个 dma-buf”。</li>
+<li>它把“分配策略”抽象成不同 heap<br>例如：system heap、cma heap、carveout heap（具体有哪些取决于内核实现&#x2F;配置）。</li>
+<li>它最终会<strong>创建一个 dma-buf</strong>（或者包装成 dma-buf 导出的对象）返回给用户态。</li>
+</ul>
+<p>也就是说：<br><code>dma-heap</code> 的职责是：<br><strong>决定从哪里分配、用什么策略分配、给用户态一个可用的 dma-buf fd</strong>。</p>
+<hr>
+<h3 id="3-两者如何“经常一起出现”"><a href="#3-两者如何“经常一起出现”" class="headerlink" title="3) 两者如何“经常一起出现”"></a>3) 两者如何“经常一起出现”</h3><p>典型链路（概念上）是：</p>
+<ol>
+<li>用户态：打开某个 heap 设备节点，请求分配</li>
+<li><code>dma-heap</code>：选择对应 heap 的分配器，分配物理&#x2F;页面&#x2F;SG 列表等底层内存</li>
+<li><code>dma-heap</code>：把分配结果“导出”为一个 <code>dma-buf</code> 对象（绑定 ops，形成共享语义）</li>
+<li>返回给用户态：一个 dma-buf 的 fd</li>
+<li>后续共享：别的驱动&#x2F;子系统通过 dma-buf attach&#x2F;map 等使用同一份底层内存</li>
+</ol>
+<p>这里的分工就是：</p>
+<ul>
+<li><strong>dma-heap：分配与池化策略</strong>（入口、选择、分配）</li>
+<li><strong>dma-buf：共享与生命周期语义</strong>（对象、同步、引用、回收）</li>
+</ul>
+<hr>
+<h1 id="DMA-BUF-初始化与生命周期管理：dma-buf-init-dmabuffs-dname-dma-buf-release-dma-buf-file-release"><a href="#DMA-BUF-初始化与生命周期管理：dma-buf-init-dmabuffs-dname-dma-buf-release-dma-buf-file-release" class="headerlink" title="DMA-BUF 初始化与生命周期管理：dma_buf_init &#x2F; dmabuffs_dname &#x2F; dma_buf_release &#x2F; dma_buf_file_release"></a>DMA-BUF 初始化与生命周期管理：<code>dma_buf_init</code> &#x2F; <code>dmabuffs_dname</code> &#x2F; <code>dma_buf_release</code> &#x2F; <code>dma_buf_file_release</code></h1><blockquote>
+<p>先说明适用边界（与你要求的 STM32H750 单核无 MMU 视角直接相关）：<br>这段代码属于 <strong>Linux 内核 dma-buf 子系统 + VFS（挂载、dentry、文件释放）+ sysfs&#x2F;debugfs</strong>。它依赖内核的挂载体系、dentry 生命周期、模块引用计数、以及通常与虚拟内存映射相关的约束（例如 <code>vmapping_counter</code>）。因此在 <strong>STM32H750（ARMv7-M、无 MMU、裸机&#x2F;RTOS）</strong> 场景中<strong>无法直接运行</strong>；但其中的“资源生命周期一致性”“引用计数与不变量检查”“并发保护（spinlock）”思想仍可用于你在嵌入式驱动&#x2F;中间件里设计资源管理。</p>
+</blockquote>
+<hr>
+<h2 id="dma-buf-init-在子系统初始化阶段建立-dma-buf-的-sysfs-debugfs-与伪文件系统挂载"><a href="#dma-buf-init-在子系统初始化阶段建立-dma-buf-的-sysfs-debugfs-与伪文件系统挂载" class="headerlink" title="dma_buf_init: 在子系统初始化阶段建立 dma-buf 的 sysfs&#x2F;debugfs 与伪文件系统挂载"></a><code>dma_buf_init</code>: 在子系统初始化阶段建立 dma-buf 的 sysfs&#x2F;debugfs 与伪文件系统挂载</h2><p>此函数是<strong>dma-buf 子系统的启动入口</strong>，通过 <code>subsys_initcall</code> 在内核子系统初始化阶段执行。它的核心动作是：</p>
+<ol>
+<li><strong>初始化统计 sysfs 节点</strong>：<code>dma_buf_init_sysfs_statistics()</code> 负责把 dma-buf 的统计信息以 sysfs 形式对外发布（失败即直接退出，避免半初始化状态）。</li>
+<li><strong>挂载 dma-buf 专用伪文件系统</strong>：<code>kern_mount(&amp;dma_buf_fs_type)</code> 创建并挂载一个仅供内核使用的 mount，用于承载 dma-buf 的匿名文件&#x2F;dentry 管理（这是后续 dentry 回调能够生效的前提）。</li>
+<li><strong>初始化 debugfs</strong>：<code>dma_buf_init_debugfs()</code> 用于调试信息导出；此处不影响核心功能但方便定位问题。</li>
+</ol>
+<p>该函数体现的关键技巧是：<strong>把一个核心资源（<code>dma_buf_mnt</code> 挂载点）作为全局根对象建立起来</strong>，后续所有 dma-buf 文件对象的 dentry 生命周期都依赖它。</p>
+<hr>
+<h2 id="dmabuffs-dname-为-dma-buf-dentry-动态生成可读的路径名称"><a href="#dmabuffs-dname-为-dma-buf-dentry-动态生成可读的路径名称" class="headerlink" title="dmabuffs_dname: 为 dma-buf dentry 动态生成可读的路径名称"></a><code>dmabuffs_dname</code>: 为 dma-buf dentry 动态生成可读的路径名称</h2><p>此函数是 dentry 的 <code>.d_dname</code> 回调，用于<strong>按需生成 dentry 的显示名称</strong>。其核心机制是：</p>
+<ol>
+<li><strong>从 <code>dentry-&gt;d_fsdata</code> 取回 <code>struct dma_buf</code></strong>：驱动&#x2F;子系统把私有对象指针挂在 dentry 上，VFS 回调时再取回，这是典型的“对象挂接”模式。</li>
+<li><strong>用 <code>spin_lock</code> 保护 name 读取</strong>：<code>dmabuf-&gt;name</code> 可能被并发更新或释放，因此通过 <code>dmabuf-&gt;name_lock</code> 在读取期间保持一致性。</li>
+<li><strong>使用 <code>dynamic_dname</code> 输出格式化名称</strong>：返回值不是静态缓冲区，而是通过 <code>dynamic_dname</code> 在 VFS 需要时格式化输出（避免长期保存字符串导致额外生命周期管理复杂度）。</li>
+</ol>
+<hr>
+<h2 id="dma-buf-release-dentry-释放时销毁-dma-buf-对象并回收所有关联资源"><a href="#dma-buf-release-dentry-释放时销毁-dma-buf-对象并回收所有关联资源" class="headerlink" title="dma_buf_release: dentry 释放时销毁 dma-buf 对象并回收所有关联资源"></a><code>dma_buf_release</code>: dentry 释放时销毁 dma-buf 对象并回收所有关联资源</h2><p>此函数是 dentry 的 <code>.d_release</code> 回调，是 <strong>dma-buf 对象最终销毁路径</strong> 的关键部分。它的核心原则是：<strong>在释放前强制验证不变量，防止“仍在使用的对象被释放”</strong>。</p>
+<p>关键点（只讲关键技巧，不讲“代码怎么跑”的基础）：</p>
+<ol>
+<li><p><strong>不变量检查（BUG_ON）</strong></p>
+<ul>
+<li><code>BUG_ON(dmabuf-&gt;vmapping_counter);</code>：要求不存在仍在进行的 vmap 映射计数，否则释放会导致地址空间&#x2F;引用悬挂。</li>
+<li><code>BUG_ON(dmabuf-&gt;cb_in.active || dmabuf-&gt;cb_out.active);</code>：要求不存在仍活跃的 fence 回调状态，否则说明异步完成路径存在引用不平衡或状态机错误。</li>
+</ul>
+</li>
+<li><p><strong>先拆统计与驱动资源，再拆通用资源</strong></p>
+<ul>
+<li><code>dma_buf_stats_teardown(dmabuf)</code>：撤销统计信息，避免 sysfs&#x2F;debugfs 仍引用已释放对象。</li>
+<li><code>dmabuf-&gt;ops-&gt;release(dmabuf)</code>：调用导出方提供的 release，释放与底层 exporter 相关的资源。</li>
+</ul>
+</li>
+<li><p><strong>处理内嵌 resv 对象的析构</strong></p>
+<ul>
+<li>若 <code>dmabuf-&gt;resv</code> 指向 <code>&amp;dmabuf[1]</code>（即紧随主结构体的内嵌对象），则需要 <code>dma_resv_fini()</code> 做对象析构。</li>
+</ul>
+</li>
+<li><p><strong>确保附件链表为空并维护模块引用计数</strong></p>
+<ul>
+<li><code>WARN_ON(!list_empty(&amp;dmabuf-&gt;attachments));</code>：释放时不应仍有 attachment。</li>
+<li><code>module_put(dmabuf-&gt;owner);</code>：归还 exporter 模块引用，保证模块可卸载性与引用一致性。</li>
+</ul>
+</li>
+<li><p><strong>最终释放内存</strong>：释放 name 字符串与 dmabuf 本体。</p>
+</li>
+</ol>
+<hr>
+<h2 id="dma-buf-file-release-dma-buf-文件关闭路径中的全局列表摘除"><a href="#dma-buf-file-release-dma-buf-文件关闭路径中的全局列表摘除" class="headerlink" title="dma_buf_file_release: dma-buf 文件关闭路径中的全局列表摘除"></a><code>dma_buf_file_release</code>: dma-buf 文件关闭路径中的全局列表摘除</h2><p>此函数是 file 的释放路径（通常由 <code>file_operations-&gt;release</code> 触发），它的核心动作很集中：</p>
+<ol>
+<li><code>is_dma_buf_file(file)</code>：确认该 file 确实是 dma-buf 文件，避免误删。</li>
+<li><code>__dma_buf_list_del(file-&gt;private_data)</code>：从 dma-buf 的全局跟踪链表中移除该对象（属于“框架侧 bookkeeping”）。</li>
+</ol>
+<hr>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief dma-buf 子系统初始化入口函数</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 通过 subsys_initcall 在内核子系统初始化阶段执行，用于：</span></span><br><span class="line"><span class="comment"> * - 初始化 sysfs 统计导出</span></span><br><span class="line"><span class="comment"> * - 挂载 dma-buf 伪文件系统并保存挂载点</span></span><br><span class="line"><span class="comment"> * - 初始化 debugfs 调试导出</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @return 成功返回 0，失败返回负错误码</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __init <span class="title function_">dma_buf_init</span><span class="params">(<span class="type">void</span>)</span> <span class="comment">/* 子系统初始化函数，仅在 init 阶段使用 */</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">int</span> ret; <span class="comment">/* 保存各初始化步骤的返回值 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 初始化 dma-buf 统计的 sysfs 导出；失败则终止，避免进入半初始化状态 */</span></span><br><span class="line">	ret = dma_buf_init_sysfs_statistics(); <span class="comment">/* 建立 sysfs 统计节点 */</span></span><br><span class="line">	<span class="keyword">if</span> (ret) <span class="comment">/* 若失败则直接返回错误码 */</span></span><br><span class="line">		<span class="keyword">return</span> ret; <span class="comment">/* 向上层传播错误 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 挂载 dma-buf 的伪文件系统；该挂载点承载 dma-buf 文件对象的 dentry 生命周期 */</span></span><br><span class="line">	dma_buf_mnt = kern_mount(&amp;dma_buf_fs_type); <span class="comment">/* 创建并挂载内核私有 mount */</span></span><br><span class="line">	<span class="keyword">if</span> (IS_ERR(dma_buf_mnt)) <span class="comment">/* 若挂载返回错误指针 */</span></span><br><span class="line">		<span class="keyword">return</span> PTR_ERR(dma_buf_mnt); <span class="comment">/* 返回对应负错误码 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 初始化 debugfs 导出；用于调试观测，不影响核心功能语义 */</span></span><br><span class="line">	dma_buf_init_debugfs(); <span class="comment">/* 建立 debugfs 节点 */</span></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>; <span class="comment">/* 初始化成功 */</span></span><br><span class="line">&#125;</span><br><span class="line">subsys_initcall(dma_buf_init); <span class="comment">/* 指定在 subsys 初始化阶段调用 dma_buf_init */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief 生成 dma-buf dentry 的动态显示名称</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该函数被 VFS 在需要展示 dentry 名称时调用，通过 dentry-&gt;d_fsdata 取回 dmabuf，</span></span><br><span class="line"><span class="comment"> * 并在 name_lock 保护下读取 dmabuf-&gt;name，最终使用 dynamic_dname 格式化输出。</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @param dentry 需要生成名称的目录项</span></span><br><span class="line"><span class="comment"> * @param buffer 输出缓冲区</span></span><br><span class="line"><span class="comment"> * @param buflen 输出缓冲区长度</span></span><br><span class="line"><span class="comment"> * @return 返回由 dynamic_dname 生成的名称指针</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">char</span> *<span class="title function_">dmabuffs_dname</span><span class="params">(<span class="keyword">struct</span> dentry *dentry, <span class="type">char</span> *buffer, <span class="type">int</span> buflen)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">dma_buf</span> *<span class="title">dmabuf</span>;</span> <span class="comment">/* dma-buf 核心对象指针（挂在 dentry-&gt;d_fsdata） */</span></span><br><span class="line">	<span class="type">char</span> name[DMA_BUF_NAME_LEN]; <span class="comment">/* 临时名称缓冲，用于拷贝 dmabuf-&gt;name */</span></span><br><span class="line">	<span class="type">ssize_t</span> ret = <span class="number">0</span>; <span class="comment">/* strscpy 返回值：&gt;0 表示成功拷贝长度，&lt;=0 表示失败或空 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 从 dentry 私有数据取回 dmabuf 对象 */</span></span><br><span class="line">	dmabuf = dentry-&gt;d_fsdata; <span class="comment">/* d_fsdata 由创建 dentry 时设置，指向 struct dma_buf */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 读取 dmabuf-&gt;name 需要并发保护，避免与更新/释放竞争 */</span></span><br><span class="line">	spin_lock(&amp;dmabuf-&gt;name_lock); <span class="comment">/* 自旋锁保护 name 指针与其内容的一致性 */</span></span><br><span class="line">	<span class="keyword">if</span> (dmabuf-&gt;name) <span class="comment">/* 若名称存在则拷贝到本地缓冲 */</span></span><br><span class="line">		ret = strscpy(name, dmabuf-&gt;name, <span class="keyword">sizeof</span>(name)); <span class="comment">/* 拷贝名称，避免直接暴露指针生命周期 */</span></span><br><span class="line">	spin_unlock(&amp;dmabuf-&gt;name_lock); <span class="comment">/* 结束保护区 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 生成形如 &quot;/&lt;dentry-name&gt;:&lt;dmabuf-name&gt;&quot; 的动态名称；若无 dmabuf-&gt;name 则使用空串 */</span></span><br><span class="line">	<span class="keyword">return</span> dynamic_dname(buffer, buflen, <span class="string">&quot;/%s:%s&quot;</span>,</span><br><span class="line">			     dentry-&gt;d_name.name, ret &gt; <span class="number">0</span> ? name : <span class="string">&quot;&quot;</span>); <span class="comment">/* ret&gt;0 才认为 name 有效 */</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief dentry 释放回调：销毁 dma-buf 对象并回收资源</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该回调在 dentry 生命周期结束时触发。释放前必须满足关键不变量：</span></span><br><span class="line"><span class="comment"> * - 不存在仍在进行的 vmap 计数</span></span><br><span class="line"><span class="comment"> * - 不存在仍活跃的回调状态（cb_in/cb_out）</span></span><br><span class="line"><span class="comment"> * - attachments 列表应为空（否则说明仍被外部持有）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @param dentry 被释放的目录项</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">dma_buf_release</span><span class="params">(<span class="keyword">struct</span> dentry *dentry)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">dma_buf</span> *<span class="title">dmabuf</span>;</span> <span class="comment">/* 待释放的 dma-buf 对象 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 从 dentry 私有数据取回 dmabuf */</span></span><br><span class="line">	dmabuf = dentry-&gt;d_fsdata; <span class="comment">/* d_fsdata 指向 struct dma_buf */</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(!dmabuf)) <span class="comment">/* 若为空则无需处理（防御性检查） */</span></span><br><span class="line">		<span class="keyword">return</span>; <span class="comment">/* 直接返回 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 强制要求不存在仍在进行的 vmap 映射引用 */</span></span><br><span class="line">	BUG_ON(dmabuf-&gt;vmapping_counter); <span class="comment">/* 若非 0，说明映射引用不平衡，释放会导致严重错误 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 强制要求不存在仍活跃的 fence 回调状态 */</span></span><br><span class="line">	BUG_ON(dmabuf-&gt;cb_in.active || dmabuf-&gt;cb_out.active); <span class="comment">/* 若为真，说明异步状态机不一致 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 拆除统计信息导出，避免外部观测接口继续引用该对象 */</span></span><br><span class="line">	dma_buf_stats_teardown(dmabuf); <span class="comment">/* 释放与统计相关的资源 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 调用 exporter 提供的 release，用于释放底层导出方持有的资源 */</span></span><br><span class="line">	dmabuf-&gt;ops-&gt;release(dmabuf); <span class="comment">/* exporter 释放：通常涉及底层 buffer/fence/映射等 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 若 resv 对象为内嵌（紧随 dmabuf 分配），则需要在此执行析构 */</span></span><br><span class="line">	<span class="keyword">if</span> (dmabuf-&gt;resv == (<span class="keyword">struct</span> dma_resv *)&amp;dmabuf[<span class="number">1</span>]) <span class="comment">/* 判断 resv 是否指向内嵌区域 */</span></span><br><span class="line">		dma_resv_fini(dmabuf-&gt;resv); <span class="comment">/* 完成 resv 对象析构 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 释放时不应仍存在 attachment；若存在，提示严重生命周期错误 */</span></span><br><span class="line">	WARN_ON(!list_empty(&amp;dmabuf-&gt;attachments)); <span class="comment">/* attachment 非空意味着仍有外部引用关系未解除 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 归还 exporter 模块引用，维护模块卸载语义一致性 */</span></span><br><span class="line">	module_put(dmabuf-&gt;owner); <span class="comment">/* owner 为 exporter 模块，释放对应引用 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 释放名称字符串（若存在） */</span></span><br><span class="line">	kfree(dmabuf-&gt;name); <span class="comment">/* dmabuf-&gt;name 由 kmalloc 分配 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 释放 dmabuf 主对象内存 */</span></span><br><span class="line">	kfree(dmabuf); <span class="comment">/* dmabuf 本体释放，生命周期结束 */</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief file release 回调：从 dma-buf 全局列表中摘除该文件关联对象</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @param inode 文件 inode</span></span><br><span class="line"><span class="comment"> * @param file  文件对象</span></span><br><span class="line"><span class="comment"> * @return 成功返回 0；若 file 不是 dma-buf 文件则返回 -EINVAL</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">dma_buf_file_release</span><span class="params">(<span class="keyword">struct</span> inode *inode, <span class="keyword">struct</span> file *file)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 确认该 file 为 dma-buf file，避免误删 */</span></span><br><span class="line">	<span class="keyword">if</span> (!is_dma_buf_file(file)) <span class="comment">/* 检查 file 类型 */</span></span><br><span class="line">		<span class="keyword">return</span> -EINVAL; <span class="comment">/* 非 dma-buf 文件，拒绝处理 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 从 dma-buf 全局列表中移除与该 file 关联的对象 */</span></span><br><span class="line">	__dma_buf_list_del(file-&gt;private_data); <span class="comment">/* private_data 持有列表节点或关联对象指针 */</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>; <span class="comment">/* 释放流程完成 */</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @brief dma-buf dentry 操作集</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 将 dentry 的动态命名与释放回调绑定到 dma-buf 的 dentry 上：</span></span><br><span class="line"><span class="comment"> * - d_dname：用于动态生成显示名称</span></span><br><span class="line"><span class="comment"> * - d_release：用于在 dentry 释放时销毁 dmabuf</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">dentry_operations</span> <span class="title">dma_buf_dentry_ops</span> =</span> &#123;</span><br><span class="line">	.d_dname = dmabuffs_dname, <span class="comment">/* 动态名称生成回调 */</span></span><br><span class="line">	.d_release = dma_buf_release, <span class="comment">/* dentry 释放回调 */</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">/** @brief dma-buf 伪文件系统的挂载点，全局唯一，用于承载 dma-buf 的 dentry/文件对象 */</span></span><br><span class="line"><span class="type">static</span> <span class="class"><span class="keyword">struct</span> <span class="title">vfsmount</span> *<span class="title">dma_buf_mnt</span>;</span> <span class="comment">/* 由 dma_buf_init 中 kern_mount 初始化 */</span></span><br></pre></td></tr></table></figure>
+
+<h1 id="drivers-dma-buf-dma-fence-c-DMA-Fence（DMA-栅栏）同步机制"><a href="#drivers-dma-buf-dma-fence-c-DMA-Fence（DMA-栅栏）同步机制" class="headerlink" title="drivers&#x2F;dma-buf&#x2F;dma-fence.c DMA Fence（DMA 栅栏）同步机制"></a>drivers&#x2F;dma-buf&#x2F;dma-fence.c DMA Fence（DMA 栅栏）同步机制</h1><p><strong>[功能概述]</strong> 为异步 DMA 硬件操作提供内核内的统一同步原语（可跨驱动、可跨进程边界通过用户态载体传递），并与 dma-buf&#x2F;dma-resv 形成显式&#x2F;隐式同步体系。 </p>
+<h2 id="介绍-1"><a href="#介绍-1" class="headerlink" title="介绍"></a>介绍</h2><p>dma-fence 用 <code>struct dma_fence</code> 表示，是 Linux 内核中面向异步硬件工作（GPU 渲染、视频编解码、显示等）的同步原语：通过 <code>dma_fence_init()</code> 初始化，通过 <code>dma_fence_signal()</code>（或带时间戳的变体）标记完成；同一 context 上的 fence 具有全序关系，并可用于显式 fencing（sync_file）、子系统封装（如 DRM syncobj），以及隐式 fencing（挂在 dma_buf 的 <code>dma_resv</code> 上）。 </p>
+<hr>
+<h3 id="历史与背景-1"><a href="#历史与背景-1" class="headerlink" title="历史与背景"></a>历史与背景</h3><h4 id="这项技术为了解决什么问题而诞生"><a href="#这项技术为了解决什么问题而诞生" class="headerlink" title="这项技术为了解决什么问题而诞生"></a>这项技术为了解决什么问题而诞生</h4><p>核心问题是：<strong>共享 buffer 的多设备&#x2F;多驱动异步访问需要统一的“完成信号”语义</strong>，否则容易出现数据竞争、重复写、读到未完成结果等问题。dma-buf 文档明确把 dma-fence 定义为“指示异步硬件操作何时完成”的机制，并与 dma-resv 一起实现隐式同步。 </p>
+<h4 id="重要里程碑或迭代点（从源码注释与近期讨论归纳）"><a href="#重要里程碑或迭代点（从源码注释与近期讨论归纳）" class="headerlink" title="重要里程碑或迭代点（从源码注释与近期讨论归纳）"></a>重要里程碑或迭代点（从源码注释与近期讨论归纳）</h4><ul>
+<li><strong>2012 年左右进入主线生态</strong>：源码头部版权与作者信息显示该机制至少在 2012 年已形成并由多方维护。 </li>
+<li><strong>跨驱动契约（cross-driver contract）与 lockdep 注解体系</strong>：源码文档强调“跨驱动一致规则”、超时&#x2F;恢复、以及用 <code>dma_fence_begin_signalling()/dma_fence_end_signalling()</code> 标注可能影响 <code>dma_fence_signal()</code> 路径的临界区，以便 lockdep 检查死锁风险。 </li>
+<li><strong>显式同步用户态载体 sync_file 成熟</strong>：sync_file 文档把它定义为 fences 的载体，用于驱动与用户态之间传递同步点，从而实现跨进程边界的显式 fencing。 </li>
+<li><strong>新增“deadline hint”提示机制（优化调度&#x2F;等待体验）</strong>：源码中专门描述了可通过 <code>dma_fence_set_deadline</code>（以及用户态 ioctl 间接路径）提供“紧迫性提示”。 </li>
+<li><strong>2025 年关于 dma_fence 模块卸载&#x2F;RCU 保护的持续改进</strong>：LWN 转发的补丁讨论指出：fence 可能泄漏到外部驱动并在 signaled 后仍延迟释放，导致发行者模块卸载后 <code>dma_fence_ops</code> 不可用而崩溃，补丁集尝试用 RCU 保护 ops 并允许 fence 更“自包含”。</li>
+</ul>
+<h4 id="社区活跃度与主流应用情况-1"><a href="#社区活跃度与主流应用情况-1" class="headerlink" title="社区活跃度与主流应用情况"></a>社区活跃度与主流应用情况</h4><ul>
+<li><strong>主流应用</strong>：dma-buf 文档点名 DRM 大量使用 dma-buf 交换 buffer，并与 V4L2 等子系统交互；其中同步体系的三大原语就包含 dma-fence。 </li>
+<li><strong>活跃度</strong>：内核官方文档页面近期仍在更新（docs.kernel.org 页面显示近期发布&#x2F;抓取），并且 2025 年仍有围绕 dma_fence 的设计问题在 dri-devel 等社区持续讨论。</li>
+</ul>
+<hr>
+<h3 id="核心原理与设计-1"><a href="#核心原理与设计-1" class="headerlink" title="核心原理与设计"></a>核心原理与设计</h3><h4 id="核心工作原理"><a href="#核心工作原理" class="headerlink" title="核心工作原理"></a>核心工作原理</h4><ol>
+<li><strong>对象模型</strong>：<code>struct dma_fence</code> 表示一个同步点，具有“未完成&#x2F;已完成”状态；初始化用 <code>dma_fence_init()</code>，完成用 <code>dma_fence_signal()</code>（或 <code>dma_fence_signal_timestamp()</code> 记录完成时间戳）。 </li>
+<li><strong>context + seqno 的全序语义</strong>：通过 <code>dma_fence_context_alloc()</code> 分配 context，同一 context 上 fence 全序。源码用一个全局 <code>atomic64</code> 计数器分配 context。 </li>
+<li><strong>等待与唤醒路径</strong>：<code>dma_fence_wait_timeout()</code> 会进行可睡眠检查，并在等待前调用 <code>dma_fence_enable_sw_signaling()</code> 触发“尽快完成”的软件信号支持（内部会调用 <code>dma_fence_ops.enable_signaling</code>）。 </li>
+<li><strong>回调机制</strong>：fence 支持注册 callback；源码也明确警告取消 callback 风险高（容易引入死锁&#x2F;竞态），通常仅用于硬件卡死恢复等场景。 </li>
+<li><strong>跨驱动契约约束</strong>：源码文档强调“必须在合理时间内完成”“需要 hang recovery”“等待场景下的锁&#x2F;内存分配限制”等，目的是避免跨子系统组合时产生不可控死锁与回收路径问题。</li>
+</ol>
+<h4 id="主要优势"><a href="#主要优势" class="headerlink" title="主要优势"></a>主要优势</h4><ul>
+<li><strong>跨驱动同步契约统一</strong>：把“异步硬件完成”抽象成跨驱动可理解的对象，降低多子系统协作成本。 </li>
+<li><strong>显式&#x2F;隐式同步都能承载</strong>：既能通过 <code>sync_file</code> 走显式 fencing（跨进程传递），也能通过 <code>dma_resv</code> 走隐式 fencing（buffer 附带同步点）。 </li>
+<li><strong>调试与可观测性</strong>：源码导出 tracepoint（如 <code>dma_fence_emit</code>&#x2F;<code>dma_fence_signaled</code> 等），便于跟踪同步行为。</li>
+</ul>
+<h4 id="已知劣势、局限性与不适用点"><a href="#已知劣势、局限性与不适用点" class="headerlink" title="已知劣势、局限性与不适用点"></a>已知劣势、局限性与不适用点</h4><ul>
+<li><strong>设计上强依赖“发行者必须可靠完成&#x2F;恢复”</strong>：如果硬件&#x2F;驱动无法保证 fence 在合理时间完成，或缺失 hang recovery，系统整体等待链条会放大风险。 </li>
+<li><strong>回调取消与复杂锁层级容易出错</strong>：源码对取消 callback 的风险做了强提示；此外还需要遵循锁注解与 dma_resv 锁层级规则。 </li>
+<li><strong>模块卸载边界问题</strong>：共享 buffer 会让 fence “流入外部驱动”，signaled 后仍可能延迟释放，导致发行者模块卸载带来 ops 指针失效风险；社区仍在通过 RCU 等手段改进。</li>
+</ul>
+<hr>
+<h3 id="使用场景-1"><a href="#使用场景-1" class="headerlink" title="使用场景"></a>使用场景</h3><h4 id="首选场景（举例）-1"><a href="#首选场景（举例）-1" class="headerlink" title="首选场景（举例）"></a>首选场景（举例）</h4><ul>
+<li><strong>图形&#x2F;显示管线</strong>：DRM 在进程&#x2F;上下文之间交换 buffer，需要用 fence 表达“GPU 渲染完成&#x2F;scanout 完成”等同步点。 </li>
+<li><strong>媒体处理</strong>：与 V4L2 等协作时，在 producer&#x2F;consumer 间传递 buffer，并用 fence 保证读写顺序。 </li>
+<li><strong>用户态显式同步（Vulkan&#x2F;OpenGL&#x2F;媒体栈互操作）</strong>：用 <code>sync_file</code> 把 fence 作为 fd 传递，实现跨进程显式 fencing。</li>
+</ul>
+<h4 id="不推荐使用的场景"><a href="#不推荐使用的场景" class="headerlink" title="不推荐使用的场景"></a>不推荐使用的场景</h4><ul>
+<li><strong>纯驱动内部、无跨设备共享需求的简单同步</strong>：优先用 completion&#x2F;waitqueue 等更直接的内核同步原语（更少契约约束、更少与 dma_resv&#x2F;用户态交互复杂度）。</li>
+<li><strong>无法提供可靠超时与恢复路径的硬件任务</strong>：因为跨驱动等待链条会把“不可完成 fence”的风险放大到系统层面。</li>
+</ul>
+<hr>
+<h3 id="对比分析-1"><a href="#对比分析-1" class="headerlink" title="对比分析"></a>对比分析</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>dma_fence</th>
+<th>completion &#x2F; waitqueue（典型内核同步）</th>
+<th>sync_file</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>定位</td>
+<td>异步 DMA 同步点（跨驱动契约）</td>
+<td>通用内核同步（多用于同一子系统&#x2F;驱动内部）</td>
+<td>fence 的用户态载体（fd 传递）</td>
+</tr>
+<tr>
+<td>实现方式</td>
+<td><code>struct dma_fence</code> + ops + callback + wait</td>
+<td>waitqueue&#x2F;completion 结构 + 唤醒</td>
+<td>file 对象包装一个&#x2F;多个 fence，并提供导入导出流程</td>
+</tr>
+<tr>
+<td>性能开销</td>
+<td>创建轻量，但启用 signalling&#x2F;等待会触发 ops 与回调管理；强调可观测性与契约约束</td>
+<td>通常更直接、更少跨子系统约束</td>
+<td>增加 file&#x2F;fd 管理与跨进程传递成本</td>
+</tr>
+<tr>
+<td>资源占用</td>
+<td>fence 对象 + 回调链 + 可能的追踪&#x2F;注解；共享场景下生命周期更复杂</td>
+<td>一般更少对象间外溢</td>
+<td>额外的 file 结构与 fd 生命周期</td>
+</tr>
+<tr>
+<td>隔离级别</td>
+<td>可跨驱动、可跨进程边界（借助载体）</td>
+<td>通常局限在内核内部调用关系</td>
+<td>面向用户态边界的显式同步</td>
+</tr>
+<tr>
+<td>“启动速度”（可理解为创建&#x2F;投入使用的时延）</td>
+<td><code>dma_fence_init()</code> 初始化即可发布；但要遵循发布时机与 lockdep 注解规则</td>
+<td>通常更快更直接</td>
+<td>需要创建 file、安装 fd 等步骤</td>
+</tr>
+</tbody></table>
+<p>补充：<code>drm_syncobj</code> 属于 DRM 子系统提供的显式 fencing 原语，相比 <code>sync_file</code>，其特点是允许底层 fence 被更新（源码在 overview 中点到这一差异）。 </p>
+<hr>
+<h2 id="总结-1"><a href="#总结-1" class="headerlink" title="总结"></a>总结</h2><h3 id="关键特性-1"><a href="#关键特性-1" class="headerlink" title="关键特性"></a>关键特性</h3><ul>
+<li><code>struct dma_fence</code> 作为异步 DMA 完成信号的统一抽象；context 保证同一执行序列全序。 </li>
+<li>支持等待&#x2F;回调；等待前可触发软件 signalling；取消回调需极谨慎。 </li>
+<li>面向跨驱动组合的严格契约：超时与恢复、锁与内存分配上下文约束、lockdep 注解。 </li>
+<li>与 dma-buf&#x2F;dma-resv 形成显式（sync_file）与隐式同步体系。</li>
+</ul>
+<h2 id="dma-fence-init-stub-初始化并立即完成一个全局-stub-fence，用于提供可用的默认同步对象"><a href="#dma-fence-init-stub-初始化并立即完成一个全局-stub-fence，用于提供可用的默认同步对象" class="headerlink" title="dma_fence_init_stub: 初始化并立即完成一个全局 stub fence，用于提供可用的默认同步对象"></a><code>dma_fence_init_stub</code>: 初始化并立即完成一个全局 stub fence，用于提供可用的默认同步对象</h2><p>在内核子系统初始化阶段，构造一个<strong>全局的“stub fence”</strong>，并把它<strong>立即 signal（完成）</strong>。这样做的目的不是表示真实的异步 DMA 工作，而是提供一个<strong>始终已完成</strong>、且具备合法 <code>dma_fence</code> 语义的默认对象，供框架在某些“需要 fence 但当前没有真实 fence”或“需要一个占位且永不阻塞”的路径中使用。</p>
+<p>这段代码背后的关键点是 <code>dma_fence</code> 的跨驱动契约：</p>
+<ul>
+<li>fence 必须可等待、可 signal、可识别（driver&#x2F;timeline 名称）</li>
+<li>fence 必须遵循统一的锁与回调规则，以便跨设备、跨子系统进行同步<br>stub fence 的存在可以让框架在缺省情况下仍保持这些规则成立。</li>
+</ul>
+<hr>
+<h3 id="核心原理概述"><a href="#核心原理概述" class="headerlink" title="核心原理概述"></a>核心原理概述</h3><ol>
+<li><p><strong>提供最小可用的 <code>dma_fence_ops</code></strong><br>通过 <code>dma_fence_stub_ops</code> 提供 <code>.get_driver_name</code> 与 <code>.get_timeline_name</code>，确保该 fence 在调试&#x2F;追踪时具备可识别的名称。</p>
+</li>
+<li><p><strong>初始化 fence 的核心字段与锁</strong><br><code>dma_fence_init()</code> 会把 fence 与 ops、lock、context、seqno 绑定，建立 fence 的基础身份与并发保护策略。</p>
+</li>
+<li><p><strong>打开 signal 能力位并立即 signal</strong><br><code>DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT</code> 允许 fence 走 signal 路径；随后立刻 <code>dma_fence_signal()</code>，使该 fence 永远处于“已完成”状态。</p>
+</li>
+<li><p><strong>在 subsys_initcall 阶段完成初始化</strong><br>通过 <code>subsys_initcall(dma_fence_init_stub)</code> 保证该 stub 在大量子系统使用 fence 之前就已就绪，避免早期路径拿到未初始化对象。</p>
+</li>
+</ol>
+<hr>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_stub_get_name: 返回 stub fence 的固定名称</span></span><br><span class="line"><span class="comment"> * @fence: 当前 fence 对象</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该函数用于同时作为 driver name 与 timeline name 的获取回调，</span></span><br><span class="line"><span class="comment"> * 以保证 stub fence 在调试、追踪与输出中具备可识别的名字。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="type">char</span> *<span class="title function_">dma_fence_stub_get_name</span><span class="params">(<span class="keyword">struct</span> dma_fence *fence)</span></span><br><span class="line">&#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="string">&quot;stub&quot;</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_stub_ops: stub fence 的操作集</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * stub fence 并不表示真实硬件队列或真实时间线，</span></span><br><span class="line"><span class="comment"> * 其目的只是提供最小的可识别信息，使其符合 dma_fence 的基本接口契约。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">dma_fence_ops</span> <span class="title">dma_fence_stub_ops</span> =</span> &#123;</span><br><span class="line">	.get_driver_name = dma_fence_stub_get_name,   <span class="comment">/* 返回驱动名称 */</span></span><br><span class="line">	.get_timeline_name = dma_fence_stub_get_name, <span class="comment">/* 返回时间线名称 */</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_init_stub: 初始化并完成全局 stub fence</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 在内核子系统初始化阶段构造一个全局 dma_fence：</span></span><br><span class="line"><span class="comment"> * - 使用 stub ops 与全局锁初始化其核心字段</span></span><br><span class="line"><span class="comment"> * - 设置允许 signal 的标志位</span></span><br><span class="line"><span class="comment"> * - 立即 signal，使其永久处于完成状态</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __init <span class="title function_">dma_fence_init_stub</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 初始化 dma_fence 核心字段：</span></span><br><span class="line"><span class="comment">	 * - &amp;dma_fence_stub: 全局 stub fence 对象</span></span><br><span class="line"><span class="comment">	 * - &amp;dma_fence_stub_ops: 操作集，用于获取名称等</span></span><br><span class="line"><span class="comment">	 * - &amp;dma_fence_stub_lock: fence 内部并发保护锁</span></span><br><span class="line"><span class="comment">	 * - context=0, seqno=0: 使用固定上下文与序号作为占位身份</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 对单核 STM32H750 视角的关键点：</span></span><br><span class="line"><span class="comment">	 * - 单核不意味着无并发：内核仍存在抢占/中断等并发语义</span></span><br><span class="line"><span class="comment">	 * - 因此 fence 仍必须依赖锁来保证状态转换一致性</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	dma_fence_init(&amp;dma_fence_stub, &amp;dma_fence_stub_ops,</span><br><span class="line">		       &amp;dma_fence_stub_lock, <span class="number">0</span>, <span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 设置允许 signal 的标志位。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT 用于控制 fence 是否允许进入 signal 路径，</span></span><br><span class="line"><span class="comment">	 * 避免某些 fence 类型在未准备好回调机制时被错误地 signal。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	set_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT,</span><br><span class="line">		&amp;dma_fence_stub.flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 立即 signal，使该 fence 永久处于“已完成”状态。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 这样任何对该 fence 的 wait 都不会阻塞，</span></span><br><span class="line"><span class="comment">	 * 可用于框架内部需要 fence 语义但不希望引入等待的缺省路径。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	dma_fence_signal(&amp;dma_fence_stub);</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line">subsys_initcall(dma_fence_init_stub);</span><br></pre></td></tr></table></figure>
+
+<h2 id="dma-fence-init-dma-fence-init-初始化-dma-fence-的身份、并发保护与回调容器"><a href="#dma-fence-init-dma-fence-init-初始化-dma-fence-的身份、并发保护与回调容器" class="headerlink" title="__dma_fence_init &#x2F; dma_fence_init: 初始化 dma_fence 的身份、并发保护与回调容器"></a><code>__dma_fence_init</code> &#x2F; <code>dma_fence_init</code>: 初始化 dma_fence 的身份、并发保护与回调容器</h2><p>这段代码的核心作用是：<strong>把一个已分配的 <code>struct dma_fence</code> 对象初始化成“可被框架安全使用的同步原语实例”</strong>。它不负责 signal、不负责等待，只负责建立最关键的三类基础设施：</p>
+<ol>
+<li><strong>生命周期基础</strong>：初始化引用计数 <code>refcount</code>，让 fence 能被跨子系统安全持有与释放。</li>
+<li><strong>并发一致性基础</strong>：绑定 <code>lock</code>，规定后续所有状态转换（signal、回调链处理等）必须在该锁保护下完成。</li>
+<li><strong>语义比较基础</strong>：设置 <code>context</code> 与 <code>seqno</code>，让 fence 之间可以通过 <code>dma_fence_later()</code> 这类比较函数建立有序关系（同一 context 内要求完全有序）。</li>
+</ol>
+<hr>
+<h3 id="核心原理概述-1"><a href="#核心原理概述-1" class="headerlink" title="核心原理概述"></a>核心原理概述</h3><ol>
+<li><p><strong>严格的前置条件检查（BUG_ON）</strong></p>
+<ul>
+<li><code>lock</code> 必须存在：否则后续 signal&#x2F;wait&#x2F;callback 的并发一致性不可保证。</li>
+<li><code>ops</code> 必须提供 <code>get_driver_name/get_timeline_name</code>：这是跨驱动契约的一部分，用于诊断、跟踪与一致的接口语义。缺失会导致框架在 debug&#x2F;trace&#x2F;输出路径上出现不可接受的不确定性。</li>
+</ul>
+</li>
+<li><p><strong>引用计数初始化（kref_init）</strong></p>
+<ul>
+<li>fence 的引用计数是其“跨模块共享”的基本机制。</li>
+<li>后续任何 attach&#x2F;等待&#x2F;回调注册都可能持有 fence，必须依赖 refcount 保证对象不被提前释放。</li>
+</ul>
+</li>
+<li><p><strong>回调链表容器初始化（cb_list）</strong></p>
+<ul>
+<li><code>INIT_LIST_HEAD(&amp;fence-&gt;cb_list)</code> 建立回调链表头。</li>
+<li>这使得 <code>dma_fence_add_callback()</code> 能在 fence 未 signal 时挂回调；signal 时可遍历并执行。</li>
+</ul>
+</li>
+<li><p><strong>并发保护锁绑定（fence-&gt;lock）</strong></p>
+<ul>
+<li>该指针定义 fence 的“互斥域”。</li>
+<li>signal 与 add_callback 的竞态处理依赖这把锁的语义：必须是 <strong>irqsafe</strong>，以便在可能的中断上下文中也能安全使用。</li>
+</ul>
+</li>
+<li><p><strong>context&#x2F;seqno 初始化（有序语义基础）</strong></p>
+<ul>
+<li><code>context</code> 表示执行上下文（例如某个硬件队列&#x2F;时间线）。</li>
+<li><code>seqno</code> 在同一 context 内单调递增，用于比较“哪个 fence 更晚”。</li>
+<li>这为 <code>dma_fence_later()</code> 提供数学意义上的偏序关系：同一 context 可全序比较，不同 context 不保证可比。</li>
+</ul>
+</li>
+<li><p><strong>flags 与 error 初始化</strong></p>
+<ul>
+<li><code>flags</code> 保存 fence 的状态标志（例如是否允许 enable_signaling 等）。</li>
+<li><code>error = 0</code> 表示初始无错误，后续可以通过 signal 带错误完成语义。</li>
+</ul>
+</li>
+<li><p><strong>trace 钩子</strong></p>
+<ul>
+<li><code>trace_dma_fence_init(fence)</code> 用于追踪初始化事件，便于定位生命周期与竞态问题。</li>
+</ul>
+</li>
+</ol>
+<hr>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * __dma_fence_init: 初始化 dma_fence 的内部字段</span></span><br><span class="line"><span class="comment"> * @fence: 需要初始化的 fence 对象</span></span><br><span class="line"><span class="comment"> * @ops:   fence 的操作集，提供跨驱动统一的接口实现入口</span></span><br><span class="line"><span class="comment"> * @lock:  fence 的 irqsafe 自旋锁，用于保护该 fence 的状态与回调链</span></span><br><span class="line"><span class="comment"> * @context: fence 所属执行上下文（同 context 内的 fence 必须全序）</span></span><br><span class="line"><span class="comment"> * @seqno:   该 context 内单调递增的序列号，用于 fence 先后比较</span></span><br><span class="line"><span class="comment"> * @flags:   fence 初始标志位集合</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line">__dma_fence_init(<span class="keyword">struct</span> dma_fence *fence, <span class="type">const</span> <span class="keyword">struct</span> dma_fence_ops *ops,</span><br><span class="line">	         <span class="type">spinlock_t</span> *lock, u64 context, u64 seqno, <span class="type">unsigned</span> <span class="type">long</span> flags)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* lock 必须存在，否则无法保证 signal/callback 路径的并发一致性 */</span></span><br><span class="line">	BUG_ON(!lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * ops 必须存在，且至少要能提供 driver 名与 timeline 名：</span></span><br><span class="line"><span class="comment">	 * 这既是调试/追踪要求，也是跨驱动契约的一部分。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	BUG_ON(!ops || !ops-&gt;get_driver_name || !ops-&gt;get_timeline_name);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 初始化引用计数，支持 fence 在跨子系统共享时的生命周期管理 */</span></span><br><span class="line">	kref_init(&amp;fence-&gt;refcount);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 绑定操作集：后续查询、打印、以及可选的 enable_signaling 等行为通过 ops 扩展 */</span></span><br><span class="line">	fence-&gt;ops = ops;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 初始化回调链表头：用于 dma_fence_add_callback() 注册回调 */</span></span><br><span class="line">	INIT_LIST_HEAD(&amp;fence-&gt;cb_list);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 绑定并发保护锁：规定 fence 的状态转换与回调链操作必须在该锁保护下进行 */</span></span><br><span class="line">	fence-&gt;lock = lock;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 设置 fence 的执行上下文与序列号，用于同一 context 内的先后比较 */</span></span><br><span class="line">	fence-&gt;context = context;</span><br><span class="line">	fence-&gt;seqno = seqno;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 设置初始标志位 */</span></span><br><span class="line">	fence-&gt;flags = flags;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 初始错误码为 0；若后续异步任务失败，可通过 error 语义完成 */</span></span><br><span class="line">	fence-&gt;error = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 记录初始化事件，便于追踪 fence 生命周期 */</span></span><br><span class="line">	trace_dma_fence_init(fence);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_init: 初始化一个自定义 fence（对外 API）</span></span><br><span class="line"><span class="comment"> * @fence:   需要初始化的 fence 对象</span></span><br><span class="line"><span class="comment"> * @ops:     fence 的操作集</span></span><br><span class="line"><span class="comment"> * @lock:    fence 的 irqsafe 自旋锁</span></span><br><span class="line"><span class="comment"> * @context: fence 所属执行上下文</span></span><br><span class="line"><span class="comment"> * @seqno:   该 context 内单调递增序列号</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该函数是对 __dma_fence_init 的封装，flags 固定为 0。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">void</span></span><br><span class="line"><span class="title function_">dma_fence_init</span><span class="params">(<span class="keyword">struct</span> dma_fence *fence, <span class="type">const</span> <span class="keyword">struct</span> dma_fence_ops *ops,</span></span><br><span class="line"><span class="params">	       <span class="type">spinlock_t</span> *lock, u64 context, u64 seqno)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* flags=0 表示以默认初始标志初始化 fence */</span></span><br><span class="line">	__dma_fence_init(fence, ops, lock, context, seqno, <span class="number">0UL</span>);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(dma_fence_init);</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="dma-fence-signal-timestamp-locked-dma-fence-signal-timestamp-dma-fence-signal-locked-dma-fence-signal-以原子方式将-fence-从“未完成”转换为“已完成”，并执行回调链"><a href="#dma-fence-signal-timestamp-locked-dma-fence-signal-timestamp-dma-fence-signal-locked-dma-fence-signal-以原子方式将-fence-从“未完成”转换为“已完成”，并执行回调链" class="headerlink" title="dma_fence_signal_timestamp_locked &#x2F; dma_fence_signal_timestamp &#x2F; dma_fence_signal_locked &#x2F; dma_fence_signal: 以原子方式将 fence 从“未完成”转换为“已完成”，并执行回调链"></a><code>dma_fence_signal_timestamp_locked</code> &#x2F; <code>dma_fence_signal_timestamp</code> &#x2F; <code>dma_fence_signal_locked</code> &#x2F; <code>dma_fence_signal</code>: 以原子方式将 fence 从“未完成”转换为“已完成”，并执行回调链</h2><p>这组函数实现的是 <code>dma_fence</code> 最核心的状态转换：<strong>signal（完成）</strong>。它们的共同语义是：</p>
+<ul>
+<li>将 fence 的状态从“未 signaled”变为“已 signaled”（只允许一次）</li>
+<li>设置完成时间戳（timestamp 版本）</li>
+<li>解除所有 <code>dma_fence_wait()</code> 的阻塞条件</li>
+<li>执行所有通过 <code>dma_fence_add_callback()</code> 注册的回调</li>
+<li>并且用锁与原子位操作保证：<strong>signal 与回调注册之间不会出现丢回调、重复回调或释放后访问</strong></li>
+</ul>
+<p>这段代码最关键的技巧有三个：</p>
+<ol>
+<li><strong>一次性状态转换的原子保证</strong>：<code>test_and_set_bit(SIGNALED_BIT)</code> 保证只有第一个调用者能成功 signal，后续调用直接失败返回。</li>
+<li><strong>回调链“先摘链后执行”</strong>：用 <code>list_replace</code> 把 <code>fence-&gt;cb_list</code> 原子地换成一个临时链表 <code>cb_list</code>，然后在锁保护外（或锁内的后半段）安全遍历执行，避免回调执行过程中破坏 fence 内部链表结构或造成死锁&#x2F;递归。</li>
+<li><strong>锁的两层封装</strong>：<code>*_locked</code> 版本要求调用者已持锁，<code>非 locked</code> 版本负责 <code>spin_lock_irqsave/restore</code>，保证在中断上下文与普通上下文都成立。</li>
+</ol>
+<p>在 STM32H750（单核、无 MMU）视角下需要强调：</p>
+<ul>
+<li>单核不意味着没有并发：中断、抢占、软中断&#x2F;工作队列都能产生并发交错，因此 <code>spin_lock_irqsave</code> 与原子位仍然必要。</li>
+<li><code>irqsave</code> 的意义不是“多核同步”，而是“禁止本 CPU 中断导致的重入竞态”。</li>
+</ul>
+<hr>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_signal_timestamp_locked: 在已持 fence-&gt;lock 的条件下 signal fence 并设置时间戳</span></span><br><span class="line"><span class="comment"> * @fence: 需要 signal 的 fence</span></span><br><span class="line"><span class="comment"> * @timestamp: 使用 CLOCK_MONOTONIC 域的完成时间戳</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 返回：</span></span><br><span class="line"><span class="comment"> *  0     - 成功 signal（第一次生效）</span></span><br><span class="line"><span class="comment"> * -EINVAL- fence 已经 signaled（再次调用不生效）</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">dma_fence_signal_timestamp_locked</span><span class="params">(<span class="keyword">struct</span> dma_fence *fence,</span></span><br><span class="line"><span class="params">				      <span class="type">ktime_t</span> timestamp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">dma_fence_cb</span> *<span class="title">cur</span>, *<span class="title">tmp</span>;</span> <span class="comment">/* 回调节点遍历指针 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">cb_list</span>;</span>       <span class="comment">/* 临时回调链表头，用于“摘链执行” */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 断言调用者已持有 fence-&gt;lock，用于保证状态转换与回调链操作的原子性 */</span></span><br><span class="line">	lockdep_assert_held(fence-&gt;lock);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 将 SIGNALED 位从 0 原子设置为 1，并返回旧值。</span></span><br><span class="line"><span class="comment">	 * - 若旧值为 1，说明已经 signal 过，本次返回 -EINVAL</span></span><br><span class="line"><span class="comment">	 * - 若旧值为 0，本次成为“唯一有效 signal”</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 这是 fence “只能从未完成-&gt;已完成一次”的硬性语义保证。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">if</span> (unlikely(test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT,</span><br><span class="line">				      &amp;fence-&gt;flags)))</span><br><span class="line">		<span class="keyword">return</span> -EINVAL;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 在写入 timestamp 前，先把 fence-&gt;cb_list “摘出来”。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * list_replace 的效果：</span></span><br><span class="line"><span class="comment">	 * - 把 fence-&gt;cb_list 的链表内容整体移交给局部变量 cb_list</span></span><br><span class="line"><span class="comment">	 * - fence-&gt;cb_list 自身被替换成一个空链表头（仍然可用）</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * 这样做的关键目的：</span></span><br><span class="line"><span class="comment">	 * 1) 回调执行过程中不再触碰 fence-&gt;cb_list，避免回调递归/并发修改破坏内部结构</span></span><br><span class="line"><span class="comment">	 * 2) signal 与 add_callback 的竞态能被严格界定：signal 成功后，后续回调注册必须走“立即执行/失败返回”的路径</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	list_replace(&amp;fence-&gt;cb_list, &amp;cb_list);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 写入完成时间戳，并设置“timestamp 有效”标志位 */</span></span><br><span class="line">	fence-&gt;timestamp = timestamp;</span><br><span class="line">	set_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &amp;fence-&gt;flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 记录 trace：用于性能分析与事件追踪 */</span></span><br><span class="line">	trace_dma_fence_signaled(fence);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 执行所有回调（安全遍历）。</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 * list_for_each_entry_safe 允许在遍历时删除节点；</span></span><br><span class="line"><span class="comment">	 * 这里先把 cur-&gt;node 重新 INIT_LIST_HEAD，确保该回调节点脱离链表，避免重复执行与悬挂指针。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	list_for_each_entry_safe(cur, tmp, &amp;cb_list, node) &#123;</span><br><span class="line">		INIT_LIST_HEAD(&amp;cur-&gt;node); <span class="comment">/* 标记该回调节点已从链表摘除 */</span></span><br><span class="line">		cur-&gt;func(fence, cur);      <span class="comment">/* 执行回调：由注册方提供的函数 */</span></span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(dma_fence_signal_timestamp_locked);</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_signal_timestamp: 在未持锁条件下 signal fence，并设置指定时间戳</span></span><br><span class="line"><span class="comment"> * @fence: 需要 signal 的 fence</span></span><br><span class="line"><span class="comment"> * @timestamp: 完成时间戳（CLOCK_MONOTONIC 域）</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 该函数负责加锁（irqsave）并调用 *_locked 版本完成实际工作。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">dma_fence_signal_timestamp</span><span class="params">(<span class="keyword">struct</span> dma_fence *fence, <span class="type">ktime_t</span> timestamp)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags; <span class="comment">/* irqsave 保存的中断标志 */</span></span><br><span class="line">	<span class="type">int</span> ret;             <span class="comment">/* 返回值 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* fence 为空属于调用者错误，返回 -EINVAL 并产生警告 */</span></span><br><span class="line">	<span class="keyword">if</span> (WARN_ON(!fence))</span><br><span class="line">		<span class="keyword">return</span> -EINVAL;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 使用 spin_lock_irqsave：</span></span><br><span class="line"><span class="comment">	 * - 自旋锁保证与其他上下文对同一 fence 的并发操作互斥</span></span><br><span class="line"><span class="comment">	 * - irqsave 防止本 CPU 中断打断导致的重入竞态</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	spin_lock_irqsave(fence-&gt;lock, flags);</span><br><span class="line">	ret = dma_fence_signal_timestamp_locked(fence, timestamp); <span class="comment">/* 真正的状态转换与回调执行 */</span></span><br><span class="line">	spin_unlock_irqrestore(fence-&gt;lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(dma_fence_signal_timestamp);</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_signal_locked: 在已持锁条件下 signal fence（使用当前时间戳）</span></span><br><span class="line"><span class="comment"> * @fence: 需要 signal 的 fence</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 这是对 dma_fence_signal_timestamp_locked 的简化封装。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">dma_fence_signal_locked</span><span class="params">(<span class="keyword">struct</span> dma_fence *fence)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">/* 使用 ktime_get() 获取当前 CLOCK_MONOTONIC 时间戳 */</span></span><br><span class="line">	<span class="keyword">return</span> dma_fence_signal_timestamp_locked(fence, ktime_get());</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(dma_fence_signal_locked);</span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * dma_fence_signal: 在未持锁条件下 signal fence（使用当前时间戳），并标注 signalling 区间</span></span><br><span class="line"><span class="comment"> * @fence: 需要 signal 的 fence</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 相比 dma_fence_signal_timestamp，该函数额外使用：</span></span><br><span class="line"><span class="comment"> * - dma_fence_begin_signalling / dma_fence_end_signalling</span></span><br><span class="line"><span class="comment"> * 用于标注“可能导致 fence 完成”的代码区间，辅助避免死锁与锁依赖问题（lockdep/规则契约）。</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">dma_fence_signal</span><span class="params">(<span class="keyword">struct</span> dma_fence *fence)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags; <span class="comment">/* irqsave 保存的中断标志 */</span></span><br><span class="line">	<span class="type">int</span> ret;             <span class="comment">/* signal 返回值 */</span></span><br><span class="line">	<span class="type">bool</span> tmp;            <span class="comment">/* begin_signalling 的返回值，用于 end_signalling 配对 */</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* fence 为空属于调用者错误 */</span></span><br><span class="line">	<span class="keyword">if</span> (WARN_ON(!fence))</span><br><span class="line">		<span class="keyword">return</span> -EINVAL;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * 标注进入 signalling 区间。</span></span><br><span class="line"><span class="comment">	 * 该机制属于跨驱动契约的一部分，用于帮助识别“等待路径与完成路径”的锁依赖关系，降低死锁风险。</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	tmp = dma_fence_begin_signalling();</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 加锁并完成实际 signal 逻辑 */</span></span><br><span class="line">	spin_lock_irqsave(fence-&gt;lock, flags);</span><br><span class="line">	ret = dma_fence_signal_timestamp_locked(fence, ktime_get());</span><br><span class="line">	spin_unlock_irqrestore(fence-&gt;lock, flags);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* 标注退出 signalling 区间，与 begin 成对 */</span></span><br><span class="line">	dma_fence_end_signalling(tmp);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(dma_fence_signal);</span><br></pre></td></tr></table></figure>
+
+
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/1d3fd482/">https://wdfk-prog.space/posts/1d3fd482/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/linux/">linux</a><a class="post-meta__tags" href="/tags/drivers/">drivers</a><a class="post-meta__tags" href="/tags/dma/">dma</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/05.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/5a79feca/" title="dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">dma</div></div><div class="info-2"><div class="info-item-1">  [TOC]  drivers&#x2F;dma DMA引擎与映射(DMA Engine &amp; Mapping) 内核统一的直接内存访问框架历史与背景这项技术是为了解决什么特定问题而诞生的？DMA（Direct Memory Access，直接内存访问）框架的诞生是为了解决一个根本性的性能瓶颈问题，并为内核提供一个统一、可移植的解决方案。  解决CPU性能瓶颈：在没有DMA的系统中，当外设（如网卡、磁盘）需要与内存交换大量数据时，CPU必须亲自担当“搬运工”的角色。这种方式被称为PIO（Programmed I&#x2F;O），CPU需要逐字节或逐字地从设备读取数据再写入内存，或者反之。对于高速设备，这会消耗大量的CPU周期，导致CPU无暇处理其他计算任务，严重影响系统整体性能。DMA技术通过引入一个专门的硬件控制器（DMAC），允许外设在没有CPU干预的情况下直接与内存进行数据传输，从而将CPU解放出来。 抽象硬件差异：不同的CPU架构和SoC平台，其DMA控制器的设计和编程接口千差万别。如果没有一个统一的软件框架，设备驱动程序的开发者将不得不为每一种不同的DMAC编写...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="coherent"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">coherent</div></div><div class="info-2"><div class="info-item-1">  [TOC]  kernel&#x2F;dma DMA引擎(DMA Engine)与DMA映射(DMA Mapping)框架历史与背景这项技术是为了解决什么特定问题而诞生的？kernel/dma 目录下的代码是为了解决一个计算机体系结构中的核心问题：如何让外围设备（Peripherals）高效地与主内存（Main Memory）进行数据交换，而无需中央处理器（CPU）的持续干预。 在没有DMA（Direct Memory Access，直接内存访问）的系统中，当一个设备（如网卡）需要发送数据时，CPU必须亲自逐字节或逐字地从内存中读取数据，然后再写入到网卡的寄存器中。这个过程称为PIO（Programmed I&#x2F;O）。对于大量数据的传输，这会完全占用CPU，使其无法执行其他计算任务，极大地降低了系统效率。 DMA技术引入了一个专门的硬件单元——DMA控制器（DMAC）。CPU只需配置好DMAC（告诉它源地址、目标地址、传输长度），然后就可以去做其他事情了。DMAC会接管总线控制权，直接在设备和内存之间搬运数据，传输完成后再通过中断通知CPU。 kernel/dma 子...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/d8c38d13/" title="dmaengine"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-21</div><div class="info-item-2">dmaengine</div></div><div class="info-2"><div class="info-item-1">   [toc]  drivers&#x2F;dma&#x2F;dmaengine.hstruct dma_chan &#x2F; struct dma_chan_dev: DMA 通道对象与其 sysfs 设备包装对象的语义建模 struct dma_chan：DMAengine 框架中“可被客户端申请与提交事务”的通道抽象，承载运行期状态（cookie、完成度、客户端引用计数、路由信息等）以及与上层可见性的关联（sysfs&#x2F;debugfs 相关字段）。 struct dma_chan_dev：把通道映射为 Linux 设备模型中的一个 struct device，用于 sysfs 节点呈现与生命周期管理；同时保存 dma_chan * 的反向指针（也就是你前面讨论的 chan-&gt;dev-&gt;chan 这一条关键可见性路径）。  这两个结构体之所以分开，是因为 DMAengine 需要同时满足：  运行期快速访问与调度（dma_chan） 设备模型可见性、热插拔&#x2F;解绑生命周期、sysfs 目录树一致性（dma_chan_dev + struct d...</div></div></div></a><a class="pagination-related" href="/posts/5a79feca/" title="coherent"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">coherent</div></div><div class="info-2"><div class="info-item-1">  [TOC]  kernel&#x2F;dma DMA引擎(DMA Engine)与DMA映射(DMA Mapping)框架历史与背景这项技术是为了解决什么特定问题而诞生的？kernel/dma 目录下的代码是为了解决一个计算机体系结构中的核心问题：如何让外围设备（Peripherals）高效地与主内存（Main Memory）进行数据交换，而无需中央处理器（CPU）的持续干预。 在没有DMA（Direct Memory Access，直接内存访问）的系统中，当一个设备（如网卡）需要发送数据时，CPU必须亲自逐字节或逐字地从内存中读取数据，然后再写入到网卡的寄存器中。这个过程称为PIO（Programmed I&#x2F;O）。对于大量数据的传输，这会完全占用CPU，使其无法执行其他计算任务，极大地降低了系统效率。 DMA技术引入了一个专门的硬件单元——DMA控制器（DMAC）。CPU只需配置好DMAC（告诉它源地址、目标地址、传输长度），然后就可以去做其他事情了。DMAC会接管总线控制权，直接在设备和内存之间搬运数据，传输完成后再通过中断通知CPU。 kernel/dma 子...</div></div></div></a><a class="pagination-related" href="/posts/6ce74947/" title="regmap"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">regmap</div></div><div class="info-2"><div class="info-item-1">   [TOC] regmapRegmap 简介Regmap 是 Linux 内核中的一个子系统，用于抽象和管理设备寄存器的访问。它为驱动程序提供了统一的接口，支持多种总线（如 I2C、SPI、MMIO 等）上的寄存器操作，同时提供了缓存、锁机制和调试功能。Regmap 的设计目标是简化驱动开发，减少重复代码，并提高寄存器访问的效率和安全性。  工作原理1. 核心概念 寄存器映射 (Register Map):Regmap 将设备的寄存器抽象为一个统一的映射，屏蔽了底层总线的差异。  寄存器缓存:Regmap 提供了可选的寄存器缓存机制，用于减少总线访问次数，提高性能。  寄存器访问控制:通过配置文件（struct regmap_config），可以定义哪些寄存器是可读、可写或易失的。  总线适配器:Regmap 支持多种总线（如 I2C、SPI、MMIO 等），通过总线适配器实现具体的读写操作。   2. 数据结构 struct regmap:表示寄存器映射的核心数据结构，包含寄存器的地址、值、缓存等信息。  struct regmap_config:配置寄存器映射的结构体，用...</div></div></div></a><a class="pagination-related" href="/posts/4333972f/" title="stm32-dma"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-21</div><div class="info-item-2">stm32-dma</div></div><div class="info-2"><div class="info-item-1">  [toc]  drivers&#x2F;dma&#x2F;stm32&#x2F;stm32-dmamux.cSTM32 DMAMUX (DMA多路复用器) 驱动此代码片段是STM32 DMAMUX的完整平台驱动程序。它的核心作用是充当一个硬件”路由交换机”的软件抽象层。在复杂的STM32微控制器(如STM32H7系列)中, 有大量的外设(如SPI, I2C, UART)可以发起DMA请求, 但实际的DMA控制器(DMA1, DMA2)通道数量是有限的。DMAMUX就是处在这两者之间的一个硬件单元, 它能将任意一个外设的请求信号连接到任意一个空闲的DMA通道上。 这个驱动的根本原理是实现内核DMA框架中的dma_router(DMA路由)模式。当一个外设驱动(如SPI驱动)请求一个DMA通道时, 它并不知道DMAMUX的存在。它在设备树中的dmas属性指向的是DMAMUX设备, 而不是最终的DMA控制器。内核的DMA框架看到这个dmas属性后, 会识别出这是一个DMA路由, 于是它不会直接与DMA控制器驱动交互, 而是调用这个DMAMUX驱动注册的route_allocate回...</div></div></div></a><a class="pagination-related" href="/posts/d32d8ac9/" title="clocksource"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">clocksource</div></div><div class="info-2"><div class="info-item-1">    [TOC] clocksource 内核时钟源(Kernel Clocksource) 为内核提供统一的时间基准历史与背景这项技术是为了解决什么特定问题而诞生的？clocksource框架的诞生是为了解决Linux内核中一个根本性的问题：如何以一种统一、可移植的方式来处理多样化的硬件计时器。  硬件的多样性：不同的CPU架构和平台提供了五花八门的硬件计时器，例如x86上的TSC（时间戳计数器）、HPET（高精度事件定时器）、ACPI PM Timer，以及ARM平台上的Architected Timer等。这些计时器的精度、速度、稳定性和编程接口各不相同。 缺乏统一抽象：在clocksource框架出现之前，内核中的时间管理代码与特定的硬件架构和计时器紧密耦合。这使得将内核移植到新平台变得困难，也难以在运行时动态选择最优的计时器硬件。 对高精度的需求：随着系统应用（如实时系统、高频交易、性能剖析）对时间精度要求的提高，内核需要一个能够充分利用现代高精度计时器硬件的框架。  clocksource框架通过创建一个通用的抽象层，将这些底层硬件计时器的差异性隐藏起来，为内核的上...</div></div></div></a><a class="pagination-related" href="/posts/ba80502e/" title="cpu"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-10-03</div><div class="info-item-2">cpu</div></div><div class="info-2"><div class="info-item-1">  [toc]  include&#x2F;linux&#x2F;cpumask.hcpumask_check 验证当前cpu数量是否超过了配置的最大cpu数量,并返回cpu1234567891011121314151617// 验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline void cpu_max_bits_warn(unsigned int cpu, unsigned int bits)&#123;#ifdef CONFIG_DEBUG_PER_CPU_MAPS	WARN_ON_ONCE(cpu &gt;= bits);#endif /* CONFIG_DEBUG_PER_CPU_MAPS */&#125;/* verify cpu argument to cpumask_* operators *///验证当前cpu数量是否超过了配置的最大cpu数量static __always_inline unsigned int cpumask_check(unsigned int cpu)&#123;    //small_cpuma...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">585</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">62</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">66</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Linux-%E5%86%85%E6%A0%B8-dma-buf-%E6%A0%B8%E5%BF%83%E5%AE%9E%E7%8E%B0%EF%BC%88drivers-dma-buf-dma-buf-c%EF%BC%89%E5%85%A8%E9%9D%A2%E8%A7%A3%E6%9E%90"><span class="toc-number">1.</span> <span class="toc-text">Linux 内核 dma-buf 核心实现（drivers&#x2F;dma-buf&#x2F;dma-buf.c）全面解析</span></a></li><li class="toc-item toc-level-1"><a class="toc-link" href="#drivers-dma-buf-dma-buf-c-dma-buf-%E5%85%B1%E4%BA%AB%E7%BC%93%E5%86%B2%E5%8C%BA%E6%A1%86%E6%9E%B6%E6%A0%B8%E5%BF%83-%E8%B7%A8%E5%AD%90%E7%B3%BB%E7%BB%9F-%E8%AE%BE%E5%A4%87%E5%85%B1%E4%BA%AB-DMA-%E7%BC%93%E5%86%B2%E5%8C%BA-%E5%90%8C%E6%AD%A5%E4%B8%8E-CPU-%E8%AE%BF%E9%97%AE%E6%94%AF%E6%8C%81%E7%9A%84%E6%A0%B8%E5%BF%83%E5%AF%B9%E8%B1%A1%E4%B8%8E%E6%96%87%E4%BB%B6%E6%8E%A5%E5%8F%A3"><span class="toc-number">2.</span> <span class="toc-text">[drivers&#x2F;dma-buf&#x2F;dma-buf.c] [dma-buf 共享缓冲区框架核心] [跨子系统&#x2F;设备共享 DMA 缓冲区 + 同步与 CPU 访问支持的核心对象与文件接口]</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8B%E7%BB%8D"><span class="toc-number">2.1.</span> <span class="toc-text">介绍</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF"><span class="toc-number">2.2.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E6%98%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E7%89%B9%E5%AE%9A%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F%E7%9A%84%EF%BC%9F"><span class="toc-number">2.2.1.</span> <span class="toc-text">这项技术是为了解决什么特定问题而诞生的？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%91%E5%B1%95%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E7%89%88%E6%9C%AC%E8%BF%AD%E4%BB%A3%EF%BC%88%E4%BB%8E%E4%BB%A3%E7%A0%81-%E6%96%87%E6%A1%A3%E5%8F%AF%E7%9B%B4%E6%8E%A5%E7%9C%8B%E5%88%B0%E7%9A%84%E8%83%BD%E5%8A%9B%E7%82%B9%EF%BC%89"><span class="toc-number">2.2.2.</span> <span class="toc-text">发展里程碑或版本迭代（从代码&#x2F;文档可直接看到的能力点）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E4%B8%8E%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5"><span class="toc-number">2.2.3.</span> <span class="toc-text">社区活跃度与主流应用情况</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1"><span class="toc-number">2.3.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">2.3.1.</span> <span class="toc-text">核心工作原理是什么？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF%E4%BD%93%E7%8E%B0%E5%9C%A8%E5%93%AA%E4%BA%9B%E6%96%B9%E9%9D%A2%EF%BC%9F"><span class="toc-number">2.3.2.</span> <span class="toc-text">主要优势体现在哪些方面？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E6%88%96%E4%B8%8D%E9%80%82%E7%94%A8%E6%80%A7"><span class="toc-number">2.3.3.</span> <span class="toc-text">劣势、局限性或不适用性</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">2.4.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%A6%96%E9%80%89%E5%9C%BA%E6%99%AF%EF%BC%88%E4%B8%BE%E4%BE%8B%EF%BC%89"><span class="toc-number">2.4.1.</span> <span class="toc-text">首选场景（举例）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E7%9A%84%E5%9C%BA%E6%99%AF%EF%BC%88%E5%8E%9F%E5%9B%A0%EF%BC%89"><span class="toc-number">2.4.2.</span> <span class="toc-text">不推荐使用的场景（原因）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90"><span class="toc-number">2.5.</span> <span class="toc-text">对比分析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-dma-buf-vs-%E2%80%9C%E6%99%AE%E9%80%9A%E5%85%B1%E4%BA%AB%E5%86%85%E5%AD%98-%E6%96%87%E4%BB%B6%EF%BC%88memfd-shm-tmpfs%EF%BC%89%E2%80%9D"><span class="toc-number">2.5.1.</span> <span class="toc-text">1) dma-buf vs “普通共享内存&#x2F;文件（memfd&#x2F;shm&#x2F;tmpfs）”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-dma-buf-vs-%E2%80%9C%E6%AF%8F%E8%AE%BE%E5%A4%87%E7%8B%AC%E7%AB%8B%E5%88%86%E9%85%8D-%E8%87%AA%E5%AE%9A%E4%B9%89%E4%BC%A0%E9%80%92%E2%80%9D"><span class="toc-number">2.5.2.</span> <span class="toc-text">2) dma-buf vs “每设备独立分配 + 自定义传递”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-dma-buf-vs-dma-heap%EF%BC%88%E8%A1%A5%E5%85%85%E7%90%86%E8%A7%A3%E8%BE%B9%E7%95%8C%EF%BC%89"><span class="toc-number">2.5.3.</span> <span class="toc-text">3) dma-buf vs dma-heap（补充理解边界）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">2.6.</span> <span class="toc-text">总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E7%89%B9%E6%80%A7"><span class="toc-number">2.6.1.</span> <span class="toc-text">关键特性</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-heap-%E4%B8%8E-dma-buf-%E7%9A%84%E8%81%8C%E8%B4%A3%E5%85%B3%E7%B3%BB%EF%BC%9A%E5%88%86%E9%85%8D%E5%85%A5%E5%8F%A3-%E5%86%85%E5%AD%98%E6%B1%A0%E7%AD%96%E7%95%A5-vs-%E5%85%B1%E4%BA%AB%E5%AF%B9%E8%B1%A1-%E8%AF%AD%E4%B9%89%E6%A0%B8%E5%BF%83"><span class="toc-number">2.7.</span> <span class="toc-text">dma-heap 与 dma-buf 的职责关系：分配入口&#x2F;内存池策略 vs 共享对象&#x2F;语义核心</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-dma-buf-%E6%98%AF%E2%80%9C%E5%85%B1%E4%BA%AB%E5%AF%B9%E8%B1%A1%E4%B8%8E%E8%AF%AD%E4%B9%89%E6%A0%B8%E5%BF%83%E2%80%9D"><span class="toc-number">2.7.1.</span> <span class="toc-text">1) dma-buf 是“共享对象与语义核心”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-dma-heap-%E6%9B%B4%E5%83%8F%E2%80%9C%E9%9D%A2%E5%90%91%E7%94%A8%E6%88%B7%E6%80%81%E7%94%B3%E8%AF%B7-dma-buf-%E7%9A%84%E5%88%86%E9%85%8D%E5%85%A5%E5%8F%A3-%E5%86%85%E5%AD%98%E6%B1%A0%E7%AD%96%E7%95%A5%E2%80%9D"><span class="toc-number">2.7.2.</span> <span class="toc-text">2) dma-heap 更像“面向用户态申请 dma-buf 的分配入口&#x2F;内存池策略”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%B8%A4%E8%80%85%E5%A6%82%E4%BD%95%E2%80%9C%E7%BB%8F%E5%B8%B8%E4%B8%80%E8%B5%B7%E5%87%BA%E7%8E%B0%E2%80%9D"><span class="toc-number">2.7.3.</span> <span class="toc-text">3) 两者如何“经常一起出现”</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#DMA-BUF-%E5%88%9D%E5%A7%8B%E5%8C%96%E4%B8%8E%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E7%AE%A1%E7%90%86%EF%BC%9Adma-buf-init-dmabuffs-dname-dma-buf-release-dma-buf-file-release"><span class="toc-number">3.</span> <span class="toc-text">DMA-BUF 初始化与生命周期管理：dma_buf_init &#x2F; dmabuffs_dname &#x2F; dma_buf_release &#x2F; dma_buf_file_release</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-buf-init-%E5%9C%A8%E5%AD%90%E7%B3%BB%E7%BB%9F%E5%88%9D%E5%A7%8B%E5%8C%96%E9%98%B6%E6%AE%B5%E5%BB%BA%E7%AB%8B-dma-buf-%E7%9A%84-sysfs-debugfs-%E4%B8%8E%E4%BC%AA%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E6%8C%82%E8%BD%BD"><span class="toc-number">3.1.</span> <span class="toc-text">dma_buf_init: 在子系统初始化阶段建立 dma-buf 的 sysfs&#x2F;debugfs 与伪文件系统挂载</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dmabuffs-dname-%E4%B8%BA-dma-buf-dentry-%E5%8A%A8%E6%80%81%E7%94%9F%E6%88%90%E5%8F%AF%E8%AF%BB%E7%9A%84%E8%B7%AF%E5%BE%84%E5%90%8D%E7%A7%B0"><span class="toc-number">3.2.</span> <span class="toc-text">dmabuffs_dname: 为 dma-buf dentry 动态生成可读的路径名称</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-buf-release-dentry-%E9%87%8A%E6%94%BE%E6%97%B6%E9%94%80%E6%AF%81-dma-buf-%E5%AF%B9%E8%B1%A1%E5%B9%B6%E5%9B%9E%E6%94%B6%E6%89%80%E6%9C%89%E5%85%B3%E8%81%94%E8%B5%84%E6%BA%90"><span class="toc-number">3.3.</span> <span class="toc-text">dma_buf_release: dentry 释放时销毁 dma-buf 对象并回收所有关联资源</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-buf-file-release-dma-buf-%E6%96%87%E4%BB%B6%E5%85%B3%E9%97%AD%E8%B7%AF%E5%BE%84%E4%B8%AD%E7%9A%84%E5%85%A8%E5%B1%80%E5%88%97%E8%A1%A8%E6%91%98%E9%99%A4"><span class="toc-number">3.4.</span> <span class="toc-text">dma_buf_file_release: dma-buf 文件关闭路径中的全局列表摘除</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#drivers-dma-buf-dma-fence-c-DMA-Fence%EF%BC%88DMA-%E6%A0%85%E6%A0%8F%EF%BC%89%E5%90%8C%E6%AD%A5%E6%9C%BA%E5%88%B6"><span class="toc-number">4.</span> <span class="toc-text">drivers&#x2F;dma-buf&#x2F;dma-fence.c DMA Fence（DMA 栅栏）同步机制</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8B%E7%BB%8D-1"><span class="toc-number">4.1.</span> <span class="toc-text">介绍</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%86%E5%8F%B2%E4%B8%8E%E8%83%8C%E6%99%AF-1"><span class="toc-number">4.1.1.</span> <span class="toc-text">历史与背景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E9%A1%B9%E6%8A%80%E6%9C%AF%E4%B8%BA%E4%BA%86%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E9%97%AE%E9%A2%98%E8%80%8C%E8%AF%9E%E7%94%9F"><span class="toc-number">4.1.1.1.</span> <span class="toc-text">这项技术为了解决什么问题而诞生</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%87%8D%E8%A6%81%E9%87%8C%E7%A8%8B%E7%A2%91%E6%88%96%E8%BF%AD%E4%BB%A3%E7%82%B9%EF%BC%88%E4%BB%8E%E6%BA%90%E7%A0%81%E6%B3%A8%E9%87%8A%E4%B8%8E%E8%BF%91%E6%9C%9F%E8%AE%A8%E8%AE%BA%E5%BD%92%E7%BA%B3%EF%BC%89"><span class="toc-number">4.1.1.2.</span> <span class="toc-text">重要里程碑或迭代点（从源码注释与近期讨论归纳）</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%A4%BE%E5%8C%BA%E6%B4%BB%E8%B7%83%E5%BA%A6%E4%B8%8E%E4%B8%BB%E6%B5%81%E5%BA%94%E7%94%A8%E6%83%85%E5%86%B5-1"><span class="toc-number">4.1.1.3.</span> <span class="toc-text">社区活跃度与主流应用情况</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E4%B8%8E%E8%AE%BE%E8%AE%A1-1"><span class="toc-number">4.1.2.</span> <span class="toc-text">核心原理与设计</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86"><span class="toc-number">4.1.2.1.</span> <span class="toc-text">核心工作原理</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%BB%E8%A6%81%E4%BC%98%E5%8A%BF"><span class="toc-number">4.1.2.2.</span> <span class="toc-text">主要优势</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B7%B2%E7%9F%A5%E5%8A%A3%E5%8A%BF%E3%80%81%E5%B1%80%E9%99%90%E6%80%A7%E4%B8%8E%E4%B8%8D%E9%80%82%E7%94%A8%E7%82%B9"><span class="toc-number">4.1.2.3.</span> <span class="toc-text">已知劣势、局限性与不适用点</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF-1"><span class="toc-number">4.1.3.</span> <span class="toc-text">使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%A6%96%E9%80%89%E5%9C%BA%E6%99%AF%EF%BC%88%E4%B8%BE%E4%BE%8B%EF%BC%89-1"><span class="toc-number">4.1.3.1.</span> <span class="toc-text">首选场景（举例）</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%8D%E6%8E%A8%E8%8D%90%E4%BD%BF%E7%94%A8%E7%9A%84%E5%9C%BA%E6%99%AF"><span class="toc-number">4.1.3.2.</span> <span class="toc-text">不推荐使用的场景</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AF%B9%E6%AF%94%E5%88%86%E6%9E%90-1"><span class="toc-number">4.1.4.</span> <span class="toc-text">对比分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93-1"><span class="toc-number">4.2.</span> <span class="toc-text">总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E7%89%B9%E6%80%A7-1"><span class="toc-number">4.2.1.</span> <span class="toc-text">关键特性</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-fence-init-stub-%E5%88%9D%E5%A7%8B%E5%8C%96%E5%B9%B6%E7%AB%8B%E5%8D%B3%E5%AE%8C%E6%88%90%E4%B8%80%E4%B8%AA%E5%85%A8%E5%B1%80-stub-fence%EF%BC%8C%E7%94%A8%E4%BA%8E%E6%8F%90%E4%BE%9B%E5%8F%AF%E7%94%A8%E7%9A%84%E9%BB%98%E8%AE%A4%E5%90%8C%E6%AD%A5%E5%AF%B9%E8%B1%A1"><span class="toc-number">4.3.</span> <span class="toc-text">dma_fence_init_stub: 初始化并立即完成一个全局 stub fence，用于提供可用的默认同步对象</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E6%A6%82%E8%BF%B0"><span class="toc-number">4.3.1.</span> <span class="toc-text">核心原理概述</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-fence-init-dma-fence-init-%E5%88%9D%E5%A7%8B%E5%8C%96-dma-fence-%E7%9A%84%E8%BA%AB%E4%BB%BD%E3%80%81%E5%B9%B6%E5%8F%91%E4%BF%9D%E6%8A%A4%E4%B8%8E%E5%9B%9E%E8%B0%83%E5%AE%B9%E5%99%A8"><span class="toc-number">4.4.</span> <span class="toc-text">__dma_fence_init &#x2F; dma_fence_init: 初始化 dma_fence 的身份、并发保护与回调容器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86%E6%A6%82%E8%BF%B0-1"><span class="toc-number">4.4.1.</span> <span class="toc-text">核心原理概述</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#dma-fence-signal-timestamp-locked-dma-fence-signal-timestamp-dma-fence-signal-locked-dma-fence-signal-%E4%BB%A5%E5%8E%9F%E5%AD%90%E6%96%B9%E5%BC%8F%E5%B0%86-fence-%E4%BB%8E%E2%80%9C%E6%9C%AA%E5%AE%8C%E6%88%90%E2%80%9D%E8%BD%AC%E6%8D%A2%E4%B8%BA%E2%80%9C%E5%B7%B2%E5%AE%8C%E6%88%90%E2%80%9D%EF%BC%8C%E5%B9%B6%E6%89%A7%E8%A1%8C%E5%9B%9E%E8%B0%83%E9%93%BE"><span class="toc-number">4.5.</span> <span class="toc-text">dma_fence_signal_timestamp_locked &#x2F; dma_fence_signal_timestamp &#x2F; dma_fence_signal_locked &#x2F; dma_fence_signal: 以原子方式将 fence 从“未完成”转换为“已完成”，并执行回调链</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/722454e5/" title="MCU学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="MCU学习笔记系列"/></a><div class="content"><a class="title" href="/posts/722454e5/" title="MCU学习笔记系列">MCU学习笔记系列</a><time datetime="2026-09-11T08:31:36.878Z" title="更新于 2026-09-11 16:31:36">2026-09-11</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/5b92047f/" title="lely-canopen-rtt：为什么推荐在 RT-Thread 上使用 Lely CANopen 构建主站"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="lely-canopen-rtt：为什么推荐在 RT-Thread 上使用 Lely CANopen 构建主站"/></a><div class="content"><a class="title" href="/posts/5b92047f/" title="lely-canopen-rtt：为什么推荐在 RT-Thread 上使用 Lely CANopen 构建主站">lely-canopen-rtt：为什么推荐在 RT-Thread 上使用 Lely CANopen 构建主站</a><time datetime="2026-09-11T08:30:30.381Z" title="更新于 2026-09-11 16:30:30">2026-09-11</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/b8fb0325/" title="docker学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="docker学习笔记系列"/></a><div class="content"><a class="title" href="/posts/b8fb0325/" title="docker学习笔记系列">docker学习笔记系列</a><time datetime="2026-09-11T08:28:52.165Z" title="更新于 2026-09-11 16:28:52">2026-09-11</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/d837d65a/" title="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划"/></a><div class="content"><a class="title" href="/posts/d837d65a/" title="09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划">09-大型Docker开发镜像磁盘排查：containerd、缓存与容量规划</a><time datetime="2026-09-05T14:56:14.895Z" title="更新于 2026-09-05 22:56:14">2026-09-05</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3a37ea37/" title="08-Docker29与containerd-image-store：镜像为什么会保存两种形态"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="08-Docker29与containerd-image-store：镜像为什么会保存两种形态"/></a><div class="content"><a class="title" href="/posts/3a37ea37/" title="08-Docker29与containerd-image-store：镜像为什么会保存两种形态">08-Docker29与containerd-image-store：镜像为什么会保存两种形态</a><time datetime="2026-09-05T14:56:14.895Z" title="更新于 2026-09-05 22:56:14">2026-09-05</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/05.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '4e2c1fad4170e3e07dd3786809267508'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",396],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",15],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [436,16,6,10,9,9,5,2,21,51,8,12],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":46},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":40}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":46},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":40}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":46}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":46}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"MCU","children":[],"count":40,"path":"MCU"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":46,"path":"rt-thread"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"杂谈","children":[],"count":36,"path":"杂谈"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>
