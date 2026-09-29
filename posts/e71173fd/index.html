@@ -1,0 +1,1380 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>15-group-data-plane-tx-rx | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Wi-Fi Direct 源码分析（15）：Group 建立后的真实数据面——Socket、mac80211、hwsim 与 802.11 Data Frame TX&#x2F;RX 摘要：沿 P2P Group netdev 追踪普通 TCP&#x2F;UDP 数据的 Linux TX&#x2F;RX 路径，说明业务 payload 如何绕过 P2P Core 进入 mac80211 与虚拟">
+<meta property="og:type" content="article">
+<meta property="og:title" content="15-group-data-plane-tx-rx">
+<meta property="og:url" content="https://wdfk-prog.space/posts/e71173fd/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Wi-Fi Direct 源码分析（15）：Group 建立后的真实数据面——Socket、mac80211、hwsim 与 802.11 Data Frame TX&#x2F;RX 摘要：沿 P2P Group netdev 追踪普通 TCP&#x2F;UDP 数据的 Linux TX&#x2F;RX 路径，说明业务 payload 如何绕过 P2P Core 进入 mac80211 与虚拟">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/05.jpg">
+<meta property="article:published_time" content="2026-09-29T08:09:54.000Z">
+<meta property="article:modified_time" content="2026-09-29T08:09:58.233Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="WIFI-Direct">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/05.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "15-group-data-plane-tx-rx",
+  "url": "https://wdfk-prog.space/posts/e71173fd/",
+  "image": "https://wdfk-prog.space/images/covers/05.jpg",
+  "datePublished": "2026-09-29T08:09:54.000Z",
+  "dateModified": "2026-09-29T08:09:58.233Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/e71173fd/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '15-group-data-plane-tx-rx',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">626</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">66</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/05.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">15-group-data-plane-tx-rx</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">15-group-data-plane-tx-rx<a class="post-edit-link" href="null_posts/WIFI-Direct/15-group-data-plane-tx-rx.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-29T08:09:54.000Z" title="发表于 2026-09-29 16:09:54">2026-09-29</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-29T08:09:58.233Z" title="更新于 2026-09-29 16:09:58">2026-09-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/WIFI-Direct/">WIFI-Direct</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">3.8k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>15分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/e71173fd/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-09-29 16:09:58&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Wi-Fi-Direct-源码分析（15）：Group-建立后的真实数据面——Socket、mac80211、hwsim-与-802-11-Data-Frame-TX-RX"><a href="#Wi-Fi-Direct-源码分析（15）：Group-建立后的真实数据面——Socket、mac80211、hwsim-与-802-11-Data-Frame-TX-RX" class="headerlink" title="Wi-Fi Direct 源码分析（15）：Group 建立后的真实数据面——Socket、mac80211、hwsim 与 802.11 Data Frame TX&#x2F;RX"></a>Wi-Fi Direct 源码分析（15）：Group 建立后的真实数据面——Socket、mac80211、hwsim 与 802.11 Data Frame TX&#x2F;RX</h1><blockquote>
+<p>摘要：沿 P2P Group netdev 追踪普通 TCP&#x2F;UDP 数据的 Linux TX&#x2F;RX 路径，说明业务 payload 如何绕过 P2P Core 进入 mac80211 与虚拟 radio。</p>
+</blockquote>
+<p>[TOC]</p>
+<p>第 11 篇已经建立一个关键边界：<code>P2P-GROUP-STARTED</code> 之后还需要完成 Group Interface、IP 和 route 配置；当三层网络 ready 后，应用不再调用“Wi-Fi Direct 数据发送 API”，而是直接使用标准 Socket。</p>
+<p>第 14 篇又补齐了另一半：Discovery、Listen、GO Negotiation 等 <strong>控制面</strong>进入 kernel 后，会通过 <code>nl80211 → cfg80211 → mac80211 → driver</code> 完成 ROC、Management Frame TX&#x2F;RX，再由异步 event 返回 <code>wpa_supplicant</code>。</p>
+<p>还剩最后一个问题：</p>
+<blockquote>
+<p><code>send()</code> &#x2F; <code>sendto()</code> 产生的普通业务数据，在选中 P2P Group netdev 后，怎样真正变成 802.11 Data Frame；对端又怎样把它还原成 IP&#x2F;TCP&#x2F;UDP，最终交给 <code>recv()</code>？</p>
+</blockquote>
+<p>第 15 篇只回答这条数据面主线。不会继续展开 TCP 拥塞控制、Linux routing internals、mac80211 rate control、A-MPDU、DMA ring、firmware 或 PHY；这些都不是理解 Wi-Fi Direct 数据交互所必需的内容。[S1][S2][S3][S4]</p>
+<blockquote>
+<p><strong>版本边界</strong>：P2P 生命周期仍以 hostap&#x2F;wpa_supplicant 2.12 为基线；数据面内核源码继续使用 upstream Linux <code>v6.8</code> 作为 SoftMAC&#x2F;hwsim 阅读基线。当前工程没有固定 Ubuntu Host 的 kernel commit，因此本文描述的是本实验采用的 Linux Wireless 架构，不把 v6.8 的每个内部函数名视为所有内核版本的永久 ABI。[S1][S2][S5]</p>
+</blockquote>
+<hr>
+<p><a id="idx-plane-boundary"></a></p>
+<h2 id="1-先固定一个结论：普通-TCP-UDP-payload-不再逐包经过-wpa-supplicant"><a href="#1-先固定一个结论：普通-TCP-UDP-payload-不再逐包经过-wpa-supplicant" class="headerlink" title="1. 先固定一个结论：普通 TCP&#x2F;UDP payload 不再逐包经过 wpa_supplicant"></a>1. 先固定一个结论：普通 TCP&#x2F;UDP payload 不再逐包经过 wpa_supplicant</h2><p>第 11 篇已经给出：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">Application</span><br><span class="line">    ↓</span><br><span class="line">Socket</span><br><span class="line">    ↓</span><br><span class="line">TCP / UDP / IP</span><br><span class="line">    ↓</span><br><span class="line">P2P Group netdev</span><br></pre></td></tr></table></figure>
+
+<p>第 15 篇从 <code>P2P Group netdev</code> 后面继续，不重新解释 DHCP、IP Address Allocation、route 或 Socket API。[S1]</p>
+<p>当路由选择结果把一个 IP packet 送到 P2P Group interface 后，业务数据面进入 Linux networking&#x2F;mac80211 路径。此时：</p>
+<ul>
+<li><code>wpa_cli</code> 不参与；</li>
+<li>P2P Find&#x2F;GO Negotiation state machine 不参与；</li>
+<li><code>NL80211_CMD_FRAME</code> 也不是每个业务 packet 的发送接口；</li>
+<li><code>wpa_supplicant</code> 仍运行，但负责控制、连接、安全状态和生命周期，而不是转发每个 TCP&#x2F;UDP payload。</li>
+</ul>
+<p>因此控制面与数据面的入口已经彻底分开：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>userspace 入口</th>
+<th>kernel 入口特征</th>
+<th>典型 frame</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>P2P 控制面</td>
+<td><code>wpa_cli</code> &#x2F; P2P Core</td>
+<td>nl80211 command&#x2F;event</td>
+<td>Probe &#x2F; Action &#x2F; auth 等 Management Frame</td>
+</tr>
+<tr>
+<td>Group 数据面</td>
+<td><code>send()</code> &#x2F; <code>sendto()</code> &#x2F; TCP&#x2F;IP</td>
+<td>netdev TX</td>
+<td>802.11 Data Frame</td>
+</tr>
+</tbody></table>
+<p>这个区别是整个系列最后一块必须固定的心智模型。</p>
+<hr>
+<p><a id="idx-overall"></a></p>
+<h2 id="2-本实验的数据面全景：应用看到-IP，hwsim-看到-802-11-skb"><a href="#2-本实验的数据面全景：应用看到-IP，hwsim-看到-802-11-skb" class="headerlink" title="2. 本实验的数据面全景：应用看到 IP，hwsim 看到 802.11 skb"></a>2. 本实验的数据面全景：应用看到 IP，hwsim 看到 802.11 skb</h2><p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/03-p2p-data-plane-path.png" alt="P2P Group 建立后 TCP&#x2F;UDP 数据从 Linux Socket 穿过 mac80211&#x2F;hwsim 到对端 Socket 的 TX&#x2F;RX 路径"></p>
+<p>图中有两个非常重要的转换边界：</p>
+<ol>
+<li><strong>Linux 网络栈 → mac80211</strong>：上层交给 Group netdev 的是普通网络数据，mac80211 为无线传输准备 802.11 Data Frame；</li>
+<li><strong>mac80211 RX → Linux 网络栈</strong>：对端收到 802.11 Data Frame 后，mac80211 完成接收处理并重新交付为本机网络栈能够处理的 skb。</li>
+</ol>
+<p><code>mac80211_hwsim</code> 位于两端 mac80211 之间，只模拟“radio&#x2F;无线介质”这一段。它既不是 P2P Core，也不是 TCP&#x2F;IP stack。[S2][S3][S4]</p>
+<hr>
+<p><a id="idx-socket-to-netdev"></a></p>
+<h2 id="3-send-之后为什么能自动找到-P2P-Group-interface"><a href="#3-send-之后为什么能自动找到-P2P-Group-interface" class="headerlink" title="3. send() 之后为什么能自动找到 P2P Group interface"></a>3. <code>send()</code> 之后为什么能自动找到 P2P Group interface</h2><p>应用调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">send()</span><br><span class="line">sendto()</span><br><span class="line">write()</span><br></pre></td></tr></table></figure>
+
+<p>之后，TCP&#x2F;UDP&#x2F;IP stack 根据 socket 的目的地址、绑定信息和 route 决定 packet 的 egress interface。第 11 篇已经说明：只要 peer IP 的 route 指向当前 P2P Group netdev，应用就不需要知道底层是 Wi-Fi Direct。[S1]</p>
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">TCP server 在 GO</span><br></pre></td></tr></table></figure>
+
+<p>或者：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">TCP server 在 P2P Client</span><br></pre></td></tr></table></figure>
+
+<p>都不会改变底层机制。GO&#x2F;Client 是 Wi-Fi Direct Group role；Socket server&#x2F;client 是传输层应用角色，两者互不绑定。</p>
+<p>当 packet 被交给 P2P Group netdev 后，Linux 已经完成本篇不再展开的上层工作，例如：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">TCP/UDP header</span><br><span class="line">    ↓</span><br><span class="line">IP header</span><br><span class="line">    ↓</span><br><span class="line">route / neighbor resolution</span><br><span class="line">    ↓</span><br><span class="line">选择 Group netdev</span><br></pre></td></tr></table></figure>
+
+<p>接下来才进入 mac80211 数据面。</p>
+<hr>
+<p><a id="idx-netdev-entry"></a></p>
+<h2 id="4-SoftMAC-netdev-的-TX-入口：ieee80211-subif-start-xmit"><a href="#4-SoftMAC-netdev-的-TX-入口：ieee80211-subif-start-xmit" class="headerlink" title="4. SoftMAC netdev 的 TX 入口：ieee80211_subif_start_xmit()"></a>4. SoftMAC netdev 的 TX 入口：<code>ieee80211_subif_start_xmit()</code></h2><p>Linux v6.8 的 mac80211 为普通 802.3 风格 virtual interface 提供 netdev TX 入口：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">netdev_tx_t</span> <span class="title function_">ieee80211_subif_start_xmit</span><span class="params">(<span class="keyword">struct</span> sk_buff *skb,</span></span><br><span class="line"><span class="params">                                       <span class="keyword">struct</span> net_device *dev)</span></span><br></pre></td></tr></table></figure>
+
+<p>主路径继续进入：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">__ieee80211_subif_start_xmit()</span><br></pre></td></tr></table></figure>
+
+<p>这里开始把上层网络栈交来的 skb 转换成适合 802.11 发送的形式。[S2]</p>
+<p>对本篇最重要的不是逐行理解整个 <code>tx.c</code>，而是知道 mac80211 在这一阶段掌握了：</p>
+<ul>
+<li>当前 virtual interface &#x2F; Group netdev；</li>
+<li>目的 station；</li>
+<li>QoS&#x2F;TID&#x2F;queue；</li>
+<li>当前 key；</li>
+<li>需要构造的 802.11 header&#x2F;addressing；</li>
+<li>最终要交给哪一个 hardware&#x2F;driver queue。</li>
+</ul>
+<p>因此应用层并没有直接构造：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Frame Control</span><br><span class="line">Address 1 / Address 2 / Address 3</span><br><span class="line">Sequence Control</span><br><span class="line">CCMP header</span><br></pre></td></tr></table></figure>
+
+<p>这些属于 802.11 MAC&#x2F;安全数据面的职责。</p>
+<hr>
+<p><a id="idx-80211-conversion"></a></p>
+<h2 id="5-从“普通网络-skb”到-802-11-Data-Frame，mac80211-至少做了哪些事"><a href="#5-从“普通网络-skb”到-802-11-Data-Frame，mac80211-至少做了哪些事" class="headerlink" title="5. 从“普通网络 skb”到 802.11 Data Frame，mac80211 至少做了哪些事"></a>5. 从“普通网络 skb”到 802.11 Data Frame，mac80211 至少做了哪些事</h2><p>mac80211 的 TX pipeline 很长，本篇只保留会改变“业务数据怎样变成 Wi-Fi frame”这一结论的步骤。[S2]</p>
+<h3 id="5-1-选择-station-与无线地址关系"><a href="#5-1-选择-station-与无线地址关系" class="headerlink" title="5.1 选择 station 与无线地址关系"></a>5.1 选择 station 与无线地址关系</h3><p>mac80211 根据 interface type、目的 MAC 和 station table 决定接收 station，并把上层数据组织成对应的 802.11 Data&#x2F;QoS Data frame。</p>
+<p>在 P2P Group 中：</p>
+<ul>
+<li>GO 的 MAC 行为接近 AP；</li>
+<li>P2P Client 的 MAC 行为接近 STA；</li>
+<li>frame 中 To DS &#x2F; From DS、RA&#x2F;TA&#x2F;BSSID 等地址语义由 802.11 角色决定。</li>
+</ul>
+<p>这与应用层 IP 地址无关。应用只看到 peer IP；到了 MAC 层才转换为对应 station 的无线地址关系。</p>
+<h3 id="5-2-进入-TX-handlers"><a href="#5-2-进入-TX-handlers" class="headerlink" title="5.2 进入 TX handlers"></a>5.2 进入 TX handlers</h3><p>Linux v6.8 的 mac80211 TX handlers 会执行一系列处理。当前源码中与本文最相关的 handler 包括：[S2]</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">association/control-port checks</span><br><span class="line">    ↓</span><br><span class="line">key selection</span><br><span class="line">    ↓</span><br><span class="line">rate control / sequence</span><br><span class="line">    ↓</span><br><span class="line">fragmentation（如适用）</span><br><span class="line">    ↓</span><br><span class="line">encryption</span><br><span class="line">    ↓</span><br><span class="line">duration / TX metadata</span><br></pre></td></tr></table></figure>
+
+<p>其中源码可以看到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ieee80211_tx_h_select_key()</span><br><span class="line">ieee80211_tx_h_sequence()</span><br><span class="line">ieee80211_tx_h_encrypt()</span><br></pre></td></tr></table></figure>
+
+<p>这说明第 10 篇建立的 WPA&#x2F;RSN key 不只是“握手成功的状态”。进入数据面以后，mac80211&#x2F;driver 会把已经安装的 key 用于真正的数据 frame 保护。[S2]</p>
+<p>但这里必须保留一个实现边界：</p>
+<blockquote>
+<p>加密不一定永远由 mac80211 在 CPU 上完成。具体 cipher 可由 mac80211 软件处理，也可以由 driver&#x2F;hardware&#x2F;firmware offload；取决于设备能力和 key 是否被上传到硬件。[S5]</p>
+</blockquote>
+<p>因此不能把某个 SoftMAC&#x2F;hwsim 分支泛化成所有真实 Wi-Fi 芯片。</p>
+<hr>
+<p><a id="idx-driver-tx"></a></p>
+<h2 id="6-mac80211-最终怎样把-frame-交给-hwsim-driver"><a href="#6-mac80211-最终怎样把-frame-交给-hwsim-driver" class="headerlink" title="6. mac80211 最终怎样把 frame 交给 hwsim driver"></a>6. mac80211 最终怎样把 frame 交给 hwsim driver</h2><p>经过 TX handlers 后，mac80211 最终从内部 TX path 进入 driver callback。Linux v6.8 可以看到关键动作：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">drv_tx(local, &amp;control, skb)</span><br></pre></td></tr></table></figure>
+
+<p>它对应 SoftMAC driver 注册的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">struct ieee80211_ops</span><br></pre></td></tr></table></figure>
+
+<p>本实验的 <code>mac80211_hwsim</code> 把 TX callback 绑定为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">.tx = mac80211_hwsim_tx</span><br></pre></td></tr></table></figure>
+
+<p>同时也提供 <code>wake_tx_queue</code> 等队列接口。[S2][S4]</p>
+<p>所以从 Group netdev 到 hwsim 的最小链可以理解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">P2P Group netdev</span><br><span class="line">    ↓</span><br><span class="line">ieee80211_subif_start_xmit()</span><br><span class="line">    ↓</span><br><span class="line">802.11 header / key / TX handlers</span><br><span class="line">    ↓</span><br><span class="line">__ieee80211_tx()</span><br><span class="line">    ↓</span><br><span class="line">drv_tx()</span><br><span class="line">    ↓</span><br><span class="line">mac80211_hwsim_tx()</span><br></pre></td></tr></table></figure>
+
+<p>到这里 skb 已经属于 <strong>802.11 TX frame</strong>，而不再只是应用层理解的“TCP payload”。</p>
+<hr>
+<p><a id="idx-hwsim-medium"></a></p>
+<h2 id="7-hwsim-如何模拟无线介质：不是-loopback，而是把-frame-投递给另一块-virtual-radio"><a href="#7-hwsim-如何模拟无线介质：不是-loopback，而是把-frame-投递给另一块-virtual-radio" class="headerlink" title="7. hwsim 如何模拟无线介质：不是 loopback，而是把 frame 投递给另一块 virtual radio"></a>7. hwsim 如何模拟无线介质：不是 loopback，而是把 frame 投递给另一块 virtual radio</h2><p><code>mac80211_hwsim</code> 默认没有真实射频。没有 <code>wmediumd</code> 时，Linux v6.8 的 hwsim 使用内核内的“perfect medium simulation”路径：[S4]</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">mac80211_hwsim_tx()</span><br><span class="line">    ↓</span><br><span class="line">mac80211_hwsim_tx_frame_no_nl()</span><br></pre></td></tr></table></figure>
+
+<p><code>mac80211_hwsim_tx_frame_no_nl()</code> 会遍历 <code>hwsim_radios</code>，只选择满足条件的其他 radio，例如：</p>
+<ul>
+<li>radio 已启动；</li>
+<li>group&#x2F;netgroup 允许互相通信；</li>
+<li>radio 当前 channel 与 TX channel 兼容，或者其 active interface 可以在该 channel 接收。</li>
+</ul>
+<p>对符合条件的 radio，hwsim 复制一个新的 skb，并调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">mac80211_hwsim_rx(data2, &amp;rx_status, nskb)</span><br></pre></td></tr></table></figure>
+
+<p>随后：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ieee80211_rx_irqsafe(data-&gt;hw, skb);</span><br></pre></td></tr></table></figure>
+
+<p>把 frame 注入<strong>对端 radio 自己的 mac80211 RX pipeline</strong>。[S4]</p>
+<p>因此 hwsim 的双 radio 实验不是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">wlan0 packet → Linux loopback → wlan1</span><br></pre></td></tr></table></figure>
+
+<p>而更接近：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">radio A 生成 802.11 TX skb</span><br><span class="line">    ↓</span><br><span class="line">hwsim 模拟无线传播</span><br><span class="line">    ↓</span><br><span class="line">radio B 得到独立 RX skb</span><br><span class="line">    ↓</span><br><span class="line">radio B 的 mac80211 正常执行 RX 逻辑</span><br></pre></td></tr></table></figure>
+
+<p>这也是它能够验证管理帧和普通数据帧的根本原因。</p>
+<hr>
+<p><a id="idx-rx-entry"></a></p>
+<h2 id="8-对端-RX：ieee80211-rx-irqsafe-之后发生了什么"><a href="#8-对端-RX：ieee80211-rx-irqsafe-之后发生了什么" class="headerlink" title="8. 对端 RX：ieee80211_rx_irqsafe() 之后发生了什么"></a>8. 对端 RX：<code>ieee80211_rx_irqsafe()</code> 之后发生了什么</h2><p>对端 <code>mac80211_hwsim_rx()</code> 写入 <code>struct ieee80211_rx_status</code>，包括 channel&#x2F;band、rate、signal 等接收元数据，然后调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ieee80211_rx_irqsafe()</span><br></pre></td></tr></table></figure>
+
+<p>这相当于一个真实 SoftMAC driver 告诉 mac80211：</p>
+<blockquote>
+<p>收到了一帧 802.11 frame，请按正常 RX pipeline 处理。</p>
+</blockquote>
+<p>接下来的 <code>net/mac80211/rx.c</code> 很长。本篇只保留与普通 P2P Data Frame 到 Socket 有关的职责：[S3]</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">802.11 frame basic validation</span><br><span class="line">    ↓</span><br><span class="line">station / interface lookup</span><br><span class="line">    ↓</span><br><span class="line">duplicate/reorder/fragment handling（按需）</span><br><span class="line">    ↓</span><br><span class="line">security / decrypt / replay checks（按需）</span><br><span class="line">    ↓</span><br><span class="line">802.11 Data → 802.3-style payload</span><br><span class="line">    ↓</span><br><span class="line">交给本机 netdev / network stack</span><br></pre></td></tr></table></figure>
+
+<p>Management Frame 在第 14 篇会通过 cfg80211&#x2F;nl80211 上送 userspace；<strong>普通 Data Frame 的目标不同：它要进入 Linux 本地数据栈，而不是进入 P2P Core。</strong></p>
+<hr>
+<p><a id="idx-deliver-stack"></a></p>
+<h2 id="9-最关键的-RX-边界：ieee80211-deliver-skb-to-local-stack"><a href="#9-最关键的-RX-边界：ieee80211-deliver-skb-to-local-stack" class="headerlink" title="9. 最关键的 RX 边界：ieee80211_deliver_skb_to_local_stack()"></a>9. 最关键的 RX 边界：<code>ieee80211_deliver_skb_to_local_stack()</code></h2><p>Linux v6.8 的 <code>rx.c</code> 在完成 Data Frame 处理后，会进入：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ieee80211_deliver_skb()</span><br><span class="line">    ↓</span><br><span class="line">ieee80211_deliver_skb_to_local_stack()</span><br></pre></td></tr></table></figure>
+
+<p>普通场景最终调用：[S3]</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">netif_receive_skb(skb);</span><br></pre></td></tr></table></figure>
+
+<p>这一步可以看成第 15 篇最重要的“交接点”：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">mac80211 / 802.11 RX</span><br><span class="line">        ↓</span><br><span class="line">netif_receive_skb()</span><br><span class="line">        ↓</span><br><span class="line">Linux Ethernet-like netdev receive path</span><br><span class="line">        ↓</span><br><span class="line">IP</span><br><span class="line">        ↓</span><br><span class="line">TCP / UDP</span><br><span class="line">        ↓</span><br><span class="line">Socket receive queue</span><br><span class="line">        ↓</span><br><span class="line">recv() / recvfrom()</span><br></pre></td></tr></table></figure>
+
+<p>所以对端应用最终拿到的仍然是普通 TCP byte stream 或 UDP datagram。应用层完全不需要解析 802.11 header、CCMP、QoS Control 等无线字段。</p>
+<hr>
+<p><a id="idx-encryption"></a></p>
+<h2 id="10-WPA-RSN-4-Way-Handshake-与业务数据之间，真正的联系是什么"><a href="#10-WPA-RSN-4-Way-Handshake-与业务数据之间，真正的联系是什么" class="headerlink" title="10. WPA&#x2F;RSN 4-Way Handshake 与业务数据之间，真正的联系是什么"></a>10. WPA&#x2F;RSN 4-Way Handshake 与业务数据之间，真正的联系是什么</h2><p>第 10 篇已经解释：4-Way Handshake 成功之后，安全连接进入可传数据状态。</p>
+<p>第 15 篇可以把这个结论落到真实数据面：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">4-Way Handshake</span><br><span class="line">    ↓</span><br><span class="line">PTK/GTK 等 key 被建立并安装到连接/driver</span><br><span class="line">    ↓</span><br><span class="line">后续 Data Frame TX</span><br><span class="line">    ↓</span><br><span class="line">mac80211/driver 根据 key 做加密或硬件 offload</span><br><span class="line">    ↓</span><br><span class="line">802.11 protected Data Frame</span><br><span class="line">    ↓</span><br><span class="line">peer RX</span><br><span class="line">    ↓</span><br><span class="line">mac80211/driver decrypt / replay validation</span><br><span class="line">    ↓</span><br><span class="line">恢复可交付给 IP 层的数据</span><br></pre></td></tr></table></figure>
+
+<p>因此：</p>
+<ul>
+<li>WPS 不是逐包数据加密算法；</li>
+<li>GO Negotiation 也不参与每个业务 packet；</li>
+<li>WPA&#x2F;RSN handshake 建立的是后续数据面需要使用的安全上下文；</li>
+<li>packet 真正发送时由 mac80211&#x2F;driver&#x2F;hardware 使用这些 key。[S1][S2][S5]</li>
+</ul>
+<p>这把第 10 篇的“安全建立”与第 15 篇的“真实业务 TX&#x2F;RX”连接起来了。</p>
+<hr>
+<p><a id="idx-control-vs-data"></a></p>
+<h2 id="11-为什么-Management-Frame-RX-会进-wpa-supplicant，而-Data-Frame-RX-通常不会"><a href="#11-为什么-Management-Frame-RX-会进-wpa-supplicant，而-Data-Frame-RX-通常不会" class="headerlink" title="11. 为什么 Management Frame RX 会进 wpa_supplicant，而 Data Frame RX 通常不会"></a>11. 为什么 Management Frame RX 会进 wpa_supplicant，而 Data Frame RX 通常不会</h2><p>第 14 篇和第 15 篇对比后，可以清楚看到 RX 分叉。</p>
+<h3 id="11-1-Wi-Fi-Direct-Management-Frame"><a href="#11-1-Wi-Fi-Direct-Management-Frame" class="headerlink" title="11.1 Wi-Fi Direct Management Frame"></a>11.1 Wi-Fi Direct Management Frame</h3><p>例如 GO Negotiation Response：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">hwsim / driver RX</span><br><span class="line">    ↓</span><br><span class="line">mac80211</span><br><span class="line">    ↓</span><br><span class="line">cfg80211_rx_mgmt*</span><br><span class="line">    ↓</span><br><span class="line">nl80211 event</span><br><span class="line">    ↓</span><br><span class="line">driver_nl80211</span><br><span class="line">    ↓</span><br><span class="line">wpa_supplicant / P2P Core</span><br></pre></td></tr></table></figure>
+
+<p>原因是 P2P protocol state machine 需要解析并响应这些 management frames。</p>
+<h3 id="11-2-普通业务-Data-Frame"><a href="#11-2-普通业务-Data-Frame" class="headerlink" title="11.2 普通业务 Data Frame"></a>11.2 普通业务 Data Frame</h3><p>例如 TCP payload：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">hwsim / driver RX</span><br><span class="line">    ↓</span><br><span class="line">mac80211 RX</span><br><span class="line">    ↓</span><br><span class="line">802.11 Data decapsulation</span><br><span class="line">    ↓</span><br><span class="line">netif_receive_skb()</span><br><span class="line">    ↓</span><br><span class="line">IP / TCP</span><br><span class="line">    ↓</span><br><span class="line">Socket</span><br></pre></td></tr></table></figure>
+
+<p>原因是 Group 已经建立，业务数据属于 Linux 网络数据面。</p>
+<p>所以不能把：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Wi-Fi Direct 通过 wpa_supplicant 建立连接</span><br></pre></td></tr></table></figure>
+
+<p>误解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">以后所有 Wi-Fi Direct 数据都由 wpa_supplicant 转发</span><br></pre></td></tr></table></figure>
+
+<p><code>wpa_supplicant</code> 是控制面参与者，不是 TCP&#x2F;UDP data proxy。</p>
+<hr>
+<p><a id="idx-go-forwarding"></a></p>
+<h2 id="12-GO-作为-AP-like-角色时，数据也不一定总是交给本机-Socket"><a href="#12-GO-作为-AP-like-角色时，数据也不一定总是交给本机-Socket" class="headerlink" title="12. GO 作为 AP-like 角色时，数据也不一定总是交给本机 Socket"></a>12. GO 作为 AP-like 角色时，数据也不一定总是交给本机 Socket</h2><p>P2P GO 在无线 MAC 行为上接近 AP，因此 mac80211 RX path 还可能执行本地无线转发判断。[S3]</p>
+<p>例如一个 GO 同时连接多个 P2P Clients 时，如果收到 Client A 发往 Client B 的 frame，AP&#x2F;GO 数据面可能直接复制&#x2F;转发给另一 station，而不是先送进 GO 本机应用 Socket。</p>
+<p>本实验当前主要关注两台设备：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">GO ↔ one P2P Client</span><br></pre></td></tr></table></figure>
+
+<p>如果业务目的地址就是 GO 本机，则 Data Frame 经：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">mac80211</span><br><span class="line">    ↓</span><br><span class="line">netif_receive_skb()</span><br><span class="line">    ↓</span><br><span class="line">GO local IP stack</span><br></pre></td></tr></table></figure>
+
+<p>交给本机应用；反方向 Client 收到 GO 发来的数据时也是同一套本地交付逻辑。</p>
+<p>这说明 P2P GO 的“像 AP”不仅存在于建组角色，也会影响 MAC 数据转发语义；但这些行为仍属于 mac80211&#x2F;networking，而不是 P2P Core 状态机。</p>
+<hr>
+<p><a id="idx-real-hardware"></a></p>
+<h2 id="13-换成真实-Wi-Fi-芯片后，哪些部分仍成立，哪些会变化"><a href="#13-换成真实-Wi-Fi-芯片后，哪些部分仍成立，哪些会变化" class="headerlink" title="13. 换成真实 Wi-Fi 芯片后，哪些部分仍成立，哪些会变化"></a>13. 换成真实 Wi-Fi 芯片后，哪些部分仍成立，哪些会变化</h2><p>本实验使用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">cfg80211</span><br><span class="line">    ↓</span><br><span class="line">mac80211</span><br><span class="line">    ↓</span><br><span class="line">mac80211_hwsim</span><br></pre></td></tr></table></figure>
+
+<p>这是典型 SoftMAC 学习路径。[S4][S5]</p>
+<p>真实产品可能仍然是 SoftMAC，例如：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">cfg80211</span><br><span class="line">    ↓</span><br><span class="line">mac80211</span><br><span class="line">    ↓</span><br><span class="line">real SoftMAC driver</span><br><span class="line">    ↓</span><br><span class="line">firmware / hardware</span><br></pre></td></tr></table></figure>
+
+<p>也可能是 FullMAC：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">cfg80211</span><br><span class="line">    ↓</span><br><span class="line">vendor FullMAC driver</span><br><span class="line">    ↓</span><br><span class="line">firmware</span><br><span class="line">    ↓</span><br><span class="line">Wi-Fi chip</span><br></pre></td></tr></table></figure>
+
+<p>此时大量 802.11 MAC、security、aggregation、rate-control 甚至 management 行为可能在 firmware 中完成，不一定经过 Linux <code>mac80211</code>。[S5]</p>
+<p>但是从 Wi-Fi Direct 系统层理解，下列边界仍然成立：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">P2P control plane</span><br><span class="line">    负责 discovery / negotiation / group/security lifecycle</span><br><span class="line"></span><br><span class="line">Linux network data plane</span><br><span class="line">    负责 Group 建成后的 ordinary IP traffic</span><br></pre></td></tr></table></figure>
+
+<p>变化的是“802.11 Data Frame 具体由 kernel、driver 还是 firmware 的哪一层加工”，不是应用层又重新进入 P2P Core。</p>
+<hr>
+<p><a id="idx-series-close"></a></p>
+<h2 id="14-01～15-的最终闭环：从-P2P-FIND-一直到真正的业务-TX-RX"><a href="#14-01～15-的最终闭环：从-P2P-FIND-一直到真正的业务-TX-RX" class="headerlink" title="14. 01～15 的最终闭环：从 P2P_FIND 一直到真正的业务 TX&#x2F;RX"></a>14. 01～15 的最终闭环：从 P2P_FIND 一直到真正的业务 TX&#x2F;RX</h2><p>整个系列现在可以收束成两条主线。</p>
+<p>第一条是控制面：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">wpa_cli</span><br><span class="line">    ↓</span><br><span class="line">P2P_FIND / P2P_CONNECT</span><br><span class="line">    ↓</span><br><span class="line">wpa_supplicant / P2P Core</span><br><span class="line">    ↓</span><br><span class="line">Scan / Listen / GO Negotiation / WPS / WPA</span><br><span class="line">    ↓</span><br><span class="line">nl80211 / cfg80211 / driver</span><br><span class="line">    ↓</span><br><span class="line">802.11 Management Frame TX/RX</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br></pre></td></tr></table></figure>
+
+<p>第二条是数据面：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">Application</span><br><span class="line">    ↓</span><br><span class="line">TCP / UDP / IP</span><br><span class="line">    ↓</span><br><span class="line">P2P Group netdev</span><br><span class="line">    ↓</span><br><span class="line">mac80211 / driver</span><br><span class="line">    ↓</span><br><span class="line">802.11 protected Data Frame</span><br><span class="line">    ↓</span><br><span class="line">peer driver / mac80211</span><br><span class="line">    ↓</span><br><span class="line">IP / TCP / UDP</span><br><span class="line">    ↓</span><br><span class="line">peer Application</span><br></pre></td></tr></table></figure>
+
+<p>这两条路径共享同一块 Wi-Fi radio 和同一条已经建立的安全连接，但承担完全不同的职责。</p>
+<p>到第 15 篇为止，理解 Wi-Fi Direct 所需要的系统级链路已经完整：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">发现设备</span><br><span class="line">→ 协商角色</span><br><span class="line">→ 建立安全 Group</span><br><span class="line">→ 创建/选择 Group netdev</span><br><span class="line">→ 配置 IP/route</span><br><span class="line">→ Socket 发送业务数据</span><br><span class="line">→ 802.11 Data Frame TX/RX</span><br></pre></td></tr></table></figure>
+
+<p>继续深入 <code>nl80211</code> Generic Netlink internals、mac80211 queue&#x2F;aggregation、firmware command、DMA、PHY&#x2F;RF，属于 Linux Wi-Fi driver&#x2F;firmware 专题，而不再是本系列必须继续下钻的内容。</p>
+<hr>
+<h2 id="关键源码索引"><a href="#关键源码索引" class="headerlink" title="关键源码索引"></a>关键源码索引</h2><table>
+<thead>
+<tr>
+<th>关键对象 &#x2F; 符号</th>
+<th>所在层</th>
+<th>本篇只关注的作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>P2P Group <code>net_device</code></td>
+<td>Linux networking</td>
+<td>IP route 选择后的 Wi-Fi 出口</td>
+</tr>
+<tr>
+<td><code>ieee80211_subif_start_xmit()</code></td>
+<td>mac80211 TX</td>
+<td>Group netdev 的 802.3-style TX 入口</td>
+</tr>
+<tr>
+<td><code>ieee80211_tx_h_select_key()</code></td>
+<td>mac80211 TX</td>
+<td>选择数据 frame 的 key</td>
+</tr>
+<tr>
+<td><code>ieee80211_tx_h_encrypt()</code></td>
+<td>mac80211 TX</td>
+<td>软件加密路径之一；硬件可 offload</td>
+</tr>
+<tr>
+<td><code>__ieee80211_tx()</code> &#x2F; <code>drv_tx()</code></td>
+<td>mac80211 → driver</td>
+<td>将准备好的 802.11 skb 提交给 SoftMAC driver</td>
+</tr>
+<tr>
+<td><code>mac80211_hwsim_tx_frame_no_nl()</code></td>
+<td>hwsim</td>
+<td>将 frame 复制到兼容 channel 的 peer radio</td>
+</tr>
+<tr>
+<td><code>mac80211_hwsim_rx()</code></td>
+<td>hwsim</td>
+<td>填写 RX status 并调用 <code>ieee80211_rx_irqsafe()</code></td>
+</tr>
+<tr>
+<td><code>ieee80211_deliver_skb()</code></td>
+<td>mac80211 RX</td>
+<td>将无线 Data Frame 转到本机数据栈</td>
+</tr>
+<tr>
+<td><code>netif_receive_skb()</code></td>
+<td>Linux networking</td>
+<td>从 mac80211 交接到 IP&#x2F;TCP&#x2F;UDP 网络接收路径</td>
+</tr>
+</tbody></table>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-本系列第-10～11-篇与-hostap-wpa-supplicant-2-12"><a href="#S1-本系列第-10～11-篇与-hostap-wpa-supplicant-2-12" class="headerlink" title="[S1] 本系列第 10～11 篇与 hostap&#x2F;wpa_supplicant 2.12"></a>[S1] 本系列第 10～11 篇与 hostap&#x2F;wpa_supplicant 2.12</h3><ul>
+<li>类型：系列既有源码结论 + 目标版本 hostap 源码</li>
+<li>版本：<code>hostap_2_12</code> &#x2F; commit <code>831364bf02710ad09c2f27d3efa92abeeb5634c0</code></li>
+<li>前置文章：<a href="10-group-formation-security.md">10-group-formation-security.md</a>、<a href="11-group-runtime.md">11-group-runtime.md</a></li>
+<li>公开源码：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/">https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/</a></li>
+<li>使用位置：第 1、3、10～11、14 节</li>
+<li>支撑内容：<code>P2P-GROUP-STARTED</code>、WPA&#x2F;RSN key 建立、Group Interface 与 IP&#x2F;route ready 后业务进入普通 Socket 数据面。</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-Linux-v6-8：mac80211-TX-path"><a href="#S2-Linux-v6-8：mac80211-TX-path" class="headerlink" title="[S2] Linux v6.8：mac80211 TX path"></a>[S2] Linux v6.8：mac80211 TX path</h3><ul>
+<li>类型：upstream Linux 源码</li>
+<li>版本：Linux <code>v6.8</code></li>
+<li>文件：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/torvalds/linux/blob/v6.8/net/mac80211/tx.c"><code>net/mac80211/tx.c</code></a></li>
+<li>关键符号：<code>ieee80211_subif_start_xmit()</code>、<code>__ieee80211_subif_start_xmit()</code>、<code>ieee80211_tx_h_select_key()</code>、<code>ieee80211_tx_h_encrypt()</code>、<code>__ieee80211_tx()</code>、<code>drv_tx()</code></li>
+<li>使用位置：第 4～6、10、14 节</li>
+<li>支撑内容：Group netdev 的 SoftMAC TX 入口、802.11 TX handlers、key&#x2F;encryption 处理以及向 driver 提交 skb。</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-Linux-v6-8：mac80211-RX-与本地网络栈交付"><a href="#S3-Linux-v6-8：mac80211-RX-与本地网络栈交付" class="headerlink" title="[S3] Linux v6.8：mac80211 RX 与本地网络栈交付"></a>[S3] Linux v6.8：mac80211 RX 与本地网络栈交付</h3><ul>
+<li>类型：upstream Linux 源码</li>
+<li>版本：Linux <code>v6.8</code></li>
+<li>文件：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/torvalds/linux/blob/v6.8/net/mac80211/rx.c"><code>net/mac80211/rx.c</code></a></li>
+<li>关键符号：mac80211 RX handlers、<code>ieee80211_deliver_skb()</code>、<code>ieee80211_deliver_skb_to_local_stack()</code>、<code>netif_receive_skb()</code></li>
+<li>使用位置：第 8～9、11～12、14 节</li>
+<li>支撑内容：802.11 Data Frame RX 处理、恢复为本地网络栈 skb、AP-like local forwarding 与 IP stack 交接。</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-Linux-v6-8：mac80211-hwsim-数据-TX-RX"><a href="#S4-Linux-v6-8：mac80211-hwsim-数据-TX-RX" class="headerlink" title="[S4] Linux v6.8：mac80211_hwsim 数据 TX&#x2F;RX"></a>[S4] Linux v6.8：mac80211_hwsim 数据 TX&#x2F;RX</h3><ul>
+<li>类型：upstream Linux driver 源码</li>
+<li>版本：Linux <code>v6.8</code></li>
+<li>文件：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/torvalds/linux/blob/v6.8/drivers/net/wireless/virtual/mac80211_hwsim.c"><code>drivers/net/wireless/virtual/mac80211_hwsim.c</code></a></li>
+<li>关键符号：<code>mac80211_hwsim_tx()</code>、<code>mac80211_hwsim_tx_frame_no_nl()</code>、<code>mac80211_hwsim_rx()</code>、<code>ieee80211_rx_irqsafe()</code></li>
+<li>使用位置：第 2、6～8、13～14 节</li>
+<li>支撑内容：默认无 wmediumd 时的 virtual medium、同频 radio frame clone、peer mac80211 RX 注入。</li>
+</ul>
+<p><a id="source-s5"></a></p>
+<h3 id="S5-Linux-Kernel-Linux-Wireless：cfg80211、mac80211-与硬件-crypto-官方文档"><a href="#S5-Linux-Kernel-Linux-Wireless：cfg80211、mac80211-与硬件-crypto-官方文档" class="headerlink" title="[S5] Linux Kernel &#x2F; Linux Wireless：cfg80211、mac80211 与硬件 crypto 官方文档"></a>[S5] Linux Kernel &#x2F; Linux Wireless：cfg80211、mac80211 与硬件 crypto 官方文档</h3><ul>
+<li>类型：官方内核文档</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://docs.kernel.org/driver-api/80211/"><code>Linux 802.11 Driver Developer&#39;s Guide</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://docs.kernel.org/driver-api/80211/cfg80211.html"><code>cfg80211 subsystem</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://wireless.docs.kernel.org/en/latest/en/developers/documentation/mac80211.html"><code>About mac80211</code></a></li>
+<li>使用位置：版本边界、第 5、10、13～14 节</li>
+<li>支撑内容：cfg80211&#x2F;mac80211 的 SoftMAC 职责边界、TX&#x2F;RX processing 与 hardware crypto&#x2F;offload 的实现边界，以及 FullMAC 不一定经过 mac80211。</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/e71173fd/">https://wdfk-prog.space/posts/e71173fd/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/WIFI-Direct/">WIFI-Direct</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/05.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/873586f3/" title="readme"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">readme</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct Source Lab 面向 Linux Wi-Fi Direct &#x2F; Wi-Fi P2P 源码学习、协议实验与 GDB 调试的可重复实验环境。项目以 hostap &#x2F; wpa_supplicant 2.12 为固定 userspace 基线：Ubuntu Host 提供真实 Linux wireless kernel stack 与 mac80211_hwsim，Docker 固化源码、Debug binary、编译选项和工具链，VS Code Dev Containers 提供源码跳转与 GDB 调试入口。   @[toc] 本仓库的目标不是封装一个“直接可用的 Wi-Fi Direct 产品”，而是把 Wi-Fi Direct 从： 123456789wpa_cli / control interface        ↓wpa_supplicant / P2P state machine        ↓nl80211 / cfg80211 / mac80211        ↓802.11 management + dat...</div></div></div></a><a class="pagination-related" href="/posts/5a8672d6/" title="14-kernel-wireless-control-path"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">14-kernel-wireless-control-path</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 源码分析（14）：控制面进入 Linux 内核后发生了什么——nl80211、cfg80211、mac80211 与管理帧 TX&#x2F;RX 摘要：从 P2P Listen 与 Action Frame 两条真实路径追到 Linux Wireless 内核和 mac80211_hwsim，补齐 Wi-Fi Direct 控制面进入驱动后的 TX&#x2F;RX 闭环。  [TOC] 第 01～13 篇已经把 Wi-Fi Direct 的主要用户态机制闭环：wpa_cli 命令进入 wpa_supplicant，P2P Core 完成 Discovery、GO Negotiation、Group Formation、Teardown 与 Persistent Group；eloop、radio work、callback 和状态机也已经有了明确的运行模型。 到这里还剩一个有意保留的黑盒： 1234567wpa_supplicant    ↓driver_nl80211    ↓Linux kernel / Wi-Fi driver    ↓802....</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c260404/" title="01-wifi-direct-lab"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">01-wifi-direct-lab</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct教程 01：在 Ubuntu 搭建双 mac80211_hwsim + wpa_supplicant 2.12 摘要：Ubuntu Host 提供双 mac80211_hwsim radio，Docker 固化 wpa_supplicant 2.12 源码、构建依赖和 F12&#x2F;F5 调试环境，并说明 nl80211&#x2F;Netlink 边界。   @[toc]实验环境固定分成两层：Ubuntu Host 负责 Linux kernel 与 mac80211_hwsim，Docker 负责 wpa_supplicant 2.12 userspace、源码、编译依赖和调试工具。本文固定使用下面的工程路径： 12Ubuntu Host: /home/wdfk/share/wifi-directContainer:   /workspace  12345678910111213141516Ubuntu x86 VM│├── Linux kernel│   └── mac80211_hwsim radios=2│       ├── virtua...</div></div></div></a><a class="pagination-related" href="/posts/a2a54a10/" title="02-wpa-cli-to-p2p-find"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">02-wpa-cli-to-p2p-find</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct教程 02：从 wpa_cli main() 到 P2P_FIND——用源码注释追踪 CLI 控制命令发送 摘要：沿 wpa_supplicant 2.12 的 wpa_cli 实际执行路径，用连续源码片段和行内注释说明参数解析、eloop、UNIX datagram control socket、命令分发以及 P2P_FIND 的发送与同步回复。   @[toc]上一篇已经完成双 mac80211_hwsim radio、双 wpa_supplicant 2.12 实例和独立 control interface。本篇只追踪下面这条命令在 wpa_cli 进程内部如何执行： 1234sudo wpa_cli-2.12 \    -p /run/wpa_supplicant-p2p-a \    -i wlan0 \    p2p_find  目标是回答： 1234567891011Shell 输入 p2p_find    ↓wpa_cli 如何解析 -p / -i / p2p_find    ↓如何建立本地 control socket    ↓p2p...</div></div></div></a><a class="pagination-related" href="/posts/90da79e7/" title="05-ctrl-iface-eloop"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">05-ctrl-iface-eloop</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 05：control socket 与 eloop——P2P_FIND 怎样进入 wpa_supplicant 命令解析器 摘要：从 interface 初始化后的运行阶段追踪 AF_UNIX control socket、eloop 唤醒、recvfrom() 与 P2P_FIND 命令分发。   @[toc]wpa_supplicant 的 interface 初始化完成后，进程进入事件驱动阶段。本文只追踪 control server：配置中的 ctrl_interface 怎样变成 AF_UNIX&#x2F;SOCK_DGRAM socket，socket fd 怎样注册进 eloop，以及 wpa_cli 发出的 P2P_FIND datagram 怎样被唤醒、读取并进入 command parser。 ATTACH 也属于这个本地 control interface：它只让 control client 订阅异步事件，与空口 Probe Request、WPS IE、P2P IE 的发送无关。  1. control socket ...</div></div></div></a><a class="pagination-related" href="/posts/f713c98e/" title="03-wpa-supplicant-startup-driver"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">03-wpa-supplicant-startup-driver</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 03：wpa_supplicant 启动到 driver 就绪——main、Interface 对象与 nl80211 backend 摘要：从 main() 追踪 global&#x2F;eloop、interface 对象与 driver backend 选择，明确 nl80211 userspace backend 和 mac80211_hwsim 的层次。   @[toc]本文从 wpa_supplicant main() 开始，只追踪启动骨架：命令行参数如何形成 interface 配置，global&#x2F;eloop 如何建立，struct wpa_supplicant 怎样创建，以及 -Dnl80211 最终怎样选中 wpa_driver_nl80211_ops。 需要特别区分两层“driver”：driver_nl80211.c 是 wpa_supplicant userspace backend；当前实验真正运行在 Linux kernel 中的无线驱动是 mac80211_hwsim。  1. 从 wpa_supplic...</div></div></div></a><a class="pagination-related" href="/posts/3fe6d478/" title="07-p2p-first-scan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">07-p2p-first-scan</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 07：第一次 P2P Scan 如何真正发出——WPS&#x2F;P2P IE、radio work 与 driver request 摘要：追踪 P2P Probe Request、radio work 与 nl80211 扫描提交，解释 no-CCK 速率约束及 Generic Netlink 的用户态&#x2F;内核态边界。   @[toc]P2P Core 已经请求第一轮 scan。本文从 wpas_p2p_scan() 开始，解释 P2P Wildcard SSID、WPS IE、P2P IE、频段分类与 radio work queue，并继续沿 wpa_drv_scan()、driver_nl80211_scan2()、wpa_driver_nl80211_scan() 追到 NL80211_CMD_TRIGGER_SCAN 被提交给 Linux kernel。进入 nl80211 backend 后，还需要回答两个直接影响调用链理解的问题：p2p_probe 为什么会禁用 2.4 GHz 的 802.11b legacy rat...</div></div></div></a><a class="pagination-related" href="/posts/33170b43/" title="04-interface-protocol-init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">04-interface-protocol-init</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 04：Interface 协议子系统初始化——WPA&#x2F;EAPOL、WPS、DPP&#x2F;NAN、GAS 与 P2P callback 摘要：继续 wpa_supplicant_init_iface()，解释 WPA&#x2F;EAPOL、WPS、DPP&#x2F;NAN、GAS&#x2F;ANQP 与 P2P Core callback 的初始化。   @[toc]driver backend 已经选定后，wpa_supplicant_init_iface() 还要继续建立真正的协议运行环境。本文集中解释这部分：association&#x2F;EAPOL 相关状态为什么要准备，L2&#x2F;TKIP&#x2F;PMKID 分别承担什么，WPS、DPP、NAN、EAP_PROXY、GAS&#x2F;ANQP 是什么，以及 wpas_p2p_init() 在哪里绑定 P2P Core callbacks。  1. wpa_supplicant_init_wpa()：建立 WPA&#x2F;RSN 状态机wpas_init_driv...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">626</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">66</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Wi-Fi-Direct-%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%EF%BC%8815%EF%BC%89%EF%BC%9AGroup-%E5%BB%BA%E7%AB%8B%E5%90%8E%E7%9A%84%E7%9C%9F%E5%AE%9E%E6%95%B0%E6%8D%AE%E9%9D%A2%E2%80%94%E2%80%94Socket%E3%80%81mac80211%E3%80%81hwsim-%E4%B8%8E-802-11-Data-Frame-TX-RX"><span class="toc-number">1.</span> <span class="toc-text">Wi-Fi Direct 源码分析（15）：Group 建立后的真实数据面——Socket、mac80211、hwsim 与 802.11 Data Frame TX&#x2F;RX</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%85%88%E5%9B%BA%E5%AE%9A%E4%B8%80%E4%B8%AA%E7%BB%93%E8%AE%BA%EF%BC%9A%E6%99%AE%E9%80%9A-TCP-UDP-payload-%E4%B8%8D%E5%86%8D%E9%80%90%E5%8C%85%E7%BB%8F%E8%BF%87-wpa-supplicant"><span class="toc-number">1.1.</span> <span class="toc-text">1. 先固定一个结论：普通 TCP&#x2F;UDP payload 不再逐包经过 wpa_supplicant</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E6%9C%AC%E5%AE%9E%E9%AA%8C%E7%9A%84%E6%95%B0%E6%8D%AE%E9%9D%A2%E5%85%A8%E6%99%AF%EF%BC%9A%E5%BA%94%E7%94%A8%E7%9C%8B%E5%88%B0-IP%EF%BC%8Chwsim-%E7%9C%8B%E5%88%B0-802-11-skb"><span class="toc-number">1.2.</span> <span class="toc-text">2. 本实验的数据面全景：应用看到 IP，hwsim 看到 802.11 skb</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-send-%E4%B9%8B%E5%90%8E%E4%B8%BA%E4%BB%80%E4%B9%88%E8%83%BD%E8%87%AA%E5%8A%A8%E6%89%BE%E5%88%B0-P2P-Group-interface"><span class="toc-number">1.3.</span> <span class="toc-text">3. send() 之后为什么能自动找到 P2P Group interface</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-SoftMAC-netdev-%E7%9A%84-TX-%E5%85%A5%E5%8F%A3%EF%BC%9Aieee80211-subif-start-xmit"><span class="toc-number">1.4.</span> <span class="toc-text">4. SoftMAC netdev 的 TX 入口：ieee80211_subif_start_xmit()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E4%BB%8E%E2%80%9C%E6%99%AE%E9%80%9A%E7%BD%91%E7%BB%9C-skb%E2%80%9D%E5%88%B0-802-11-Data-Frame%EF%BC%8Cmac80211-%E8%87%B3%E5%B0%91%E5%81%9A%E4%BA%86%E5%93%AA%E4%BA%9B%E4%BA%8B"><span class="toc-number">1.5.</span> <span class="toc-text">5. 从“普通网络 skb”到 802.11 Data Frame，mac80211 至少做了哪些事</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E9%80%89%E6%8B%A9-station-%E4%B8%8E%E6%97%A0%E7%BA%BF%E5%9C%B0%E5%9D%80%E5%85%B3%E7%B3%BB"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 选择 station 与无线地址关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E8%BF%9B%E5%85%A5-TX-handlers"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 进入 TX handlers</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-mac80211-%E6%9C%80%E7%BB%88%E6%80%8E%E6%A0%B7%E6%8A%8A-frame-%E4%BA%A4%E7%BB%99-hwsim-driver"><span class="toc-number">1.6.</span> <span class="toc-text">6. mac80211 最终怎样把 frame 交给 hwsim driver</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-hwsim-%E5%A6%82%E4%BD%95%E6%A8%A1%E6%8B%9F%E6%97%A0%E7%BA%BF%E4%BB%8B%E8%B4%A8%EF%BC%9A%E4%B8%8D%E6%98%AF-loopback%EF%BC%8C%E8%80%8C%E6%98%AF%E6%8A%8A-frame-%E6%8A%95%E9%80%92%E7%BB%99%E5%8F%A6%E4%B8%80%E5%9D%97-virtual-radio"><span class="toc-number">1.7.</span> <span class="toc-text">7. hwsim 如何模拟无线介质：不是 loopback，而是把 frame 投递给另一块 virtual radio</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E5%AF%B9%E7%AB%AF-RX%EF%BC%9Aieee80211-rx-irqsafe-%E4%B9%8B%E5%90%8E%E5%8F%91%E7%94%9F%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.8.</span> <span class="toc-text">8. 对端 RX：ieee80211_rx_irqsafe() 之后发生了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E6%9C%80%E5%85%B3%E9%94%AE%E7%9A%84-RX-%E8%BE%B9%E7%95%8C%EF%BC%9Aieee80211-deliver-skb-to-local-stack"><span class="toc-number">1.9.</span> <span class="toc-text">9. 最关键的 RX 边界：ieee80211_deliver_skb_to_local_stack()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-WPA-RSN-4-Way-Handshake-%E4%B8%8E%E4%B8%9A%E5%8A%A1%E6%95%B0%E6%8D%AE%E4%B9%8B%E9%97%B4%EF%BC%8C%E7%9C%9F%E6%AD%A3%E7%9A%84%E8%81%94%E7%B3%BB%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.10.</span> <span class="toc-text">10. WPA&#x2F;RSN 4-Way Handshake 与业务数据之间，真正的联系是什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E4%B8%BA%E4%BB%80%E4%B9%88-Management-Frame-RX-%E4%BC%9A%E8%BF%9B-wpa-supplicant%EF%BC%8C%E8%80%8C-Data-Frame-RX-%E9%80%9A%E5%B8%B8%E4%B8%8D%E4%BC%9A"><span class="toc-number">1.11.</span> <span class="toc-text">11. 为什么 Management Frame RX 会进 wpa_supplicant，而 Data Frame RX 通常不会</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-1-Wi-Fi-Direct-Management-Frame"><span class="toc-number">1.11.1.</span> <span class="toc-text">11.1 Wi-Fi Direct Management Frame</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-%E6%99%AE%E9%80%9A%E4%B8%9A%E5%8A%A1-Data-Frame"><span class="toc-number">1.11.2.</span> <span class="toc-text">11.2 普通业务 Data Frame</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-GO-%E4%BD%9C%E4%B8%BA-AP-like-%E8%A7%92%E8%89%B2%E6%97%B6%EF%BC%8C%E6%95%B0%E6%8D%AE%E4%B9%9F%E4%B8%8D%E4%B8%80%E5%AE%9A%E6%80%BB%E6%98%AF%E4%BA%A4%E7%BB%99%E6%9C%AC%E6%9C%BA-Socket"><span class="toc-number">1.12.</span> <span class="toc-text">12. GO 作为 AP-like 角色时，数据也不一定总是交给本机 Socket</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-%E6%8D%A2%E6%88%90%E7%9C%9F%E5%AE%9E-Wi-Fi-%E8%8A%AF%E7%89%87%E5%90%8E%EF%BC%8C%E5%93%AA%E4%BA%9B%E9%83%A8%E5%88%86%E4%BB%8D%E6%88%90%E7%AB%8B%EF%BC%8C%E5%93%AA%E4%BA%9B%E4%BC%9A%E5%8F%98%E5%8C%96"><span class="toc-number">1.13.</span> <span class="toc-text">13. 换成真实 Wi-Fi 芯片后，哪些部分仍成立，哪些会变化</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-01%EF%BD%9E15-%E7%9A%84%E6%9C%80%E7%BB%88%E9%97%AD%E7%8E%AF%EF%BC%9A%E4%BB%8E-P2P-FIND-%E4%B8%80%E7%9B%B4%E5%88%B0%E7%9C%9F%E6%AD%A3%E7%9A%84%E4%B8%9A%E5%8A%A1-TX-RX"><span class="toc-number">1.14.</span> <span class="toc-text">14. 01～15 的最终闭环：从 P2P_FIND 一直到真正的业务 TX&#x2F;RX</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E6%BA%90%E7%A0%81%E7%B4%A2%E5%BC%95"><span class="toc-number">1.15.</span> <span class="toc-text">关键源码索引</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.16.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-%E6%9C%AC%E7%B3%BB%E5%88%97%E7%AC%AC-10%EF%BD%9E11-%E7%AF%87%E4%B8%8E-hostap-wpa-supplicant-2-12"><span class="toc-number">1.16.1.</span> <span class="toc-text">[S1] 本系列第 10～11 篇与 hostap&#x2F;wpa_supplicant 2.12</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-Linux-v6-8%EF%BC%9Amac80211-TX-path"><span class="toc-number">1.16.2.</span> <span class="toc-text">[S2] Linux v6.8：mac80211 TX path</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-Linux-v6-8%EF%BC%9Amac80211-RX-%E4%B8%8E%E6%9C%AC%E5%9C%B0%E7%BD%91%E7%BB%9C%E6%A0%88%E4%BA%A4%E4%BB%98"><span class="toc-number">1.16.3.</span> <span class="toc-text">[S3] Linux v6.8：mac80211 RX 与本地网络栈交付</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-Linux-v6-8%EF%BC%9Amac80211-hwsim-%E6%95%B0%E6%8D%AE-TX-RX"><span class="toc-number">1.16.4.</span> <span class="toc-text">[S4] Linux v6.8：mac80211_hwsim 数据 TX&#x2F;RX</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S5-Linux-Kernel-Linux-Wireless%EF%BC%9Acfg80211%E3%80%81mac80211-%E4%B8%8E%E7%A1%AC%E4%BB%B6-crypto-%E5%AE%98%E6%96%B9%E6%96%87%E6%A1%A3"><span class="toc-number">1.16.5.</span> <span class="toc-text">[S5] Linux Kernel &#x2F; Linux Wireless：cfg80211、mac80211 与硬件 crypto 官方文档</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="WIFI-Direct学习笔记系列"/></a><div class="content"><a class="title" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列">WIFI-Direct学习笔记系列</a><time datetime="2026-09-29T08:10:22.663Z" title="更新于 2026-09-29 16:10:22">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873586f3/" title="readme"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="readme"/></a><div class="content"><a class="title" href="/posts/873586f3/" title="readme">readme</a><time datetime="2026-09-29T08:10:20.186Z" title="更新于 2026-09-29 16:10:20">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="15-group-data-plane-tx-rx"/></a><div class="content"><a class="title" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx">15-group-data-plane-tx-rx</a><time datetime="2026-09-29T08:09:58.233Z" title="更新于 2026-09-29 16:09:58">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/5a8672d6/" title="14-kernel-wireless-control-path"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="14-kernel-wireless-control-path"/></a><div class="content"><a class="title" href="/posts/5a8672d6/" title="14-kernel-wireless-control-path">14-kernel-wireless-control-path</a><time datetime="2026-09-29T08:09:51.750Z" title="更新于 2026-09-29 16:09:51">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/c949e3bb/" title="13-persistent-group"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="13-persistent-group"/></a><div class="content"><a class="title" href="/posts/c949e3bb/" title="13-persistent-group">13-persistent-group</a><time datetime="2026-09-29T08:09:45.343Z" title="更新于 2026-09-29 16:09:45">2026-09-29</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/05.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'dcbbef0a44f9886cf06add64cde7f47b'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":40}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":40}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":47}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":47}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"hpatch","children":[{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"},{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"}],"count":10,"path":"hpatch"},{"name":"linux","children":[{"name":"drivers","children":[{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"}],"count":60,"path":"linux/drivers"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"}],"count":63,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

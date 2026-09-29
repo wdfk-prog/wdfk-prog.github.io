@@ -1,0 +1,1555 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>13-persistent-group | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Wi-Fi Direct 源码分析（13）：Persistent Group 如何再次建立——P2P_INVITE、Invitation 与 Reinvocation 摘要：追踪 Persistent Group 凭据保存、P2P_INVITE、Invitation Request&#x2F;Response 与重新建组，说明 teardown 后如何复用原角色和密钥再次到达 P2P-GROU">
+<meta property="og:type" content="article">
+<meta property="og:title" content="13-persistent-group">
+<meta property="og:url" content="https://wdfk-prog.space/posts/c949e3bb/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="Wi-Fi Direct 源码分析（13）：Persistent Group 如何再次建立——P2P_INVITE、Invitation 与 Reinvocation 摘要：追踪 Persistent Group 凭据保存、P2P_INVITE、Invitation Request&#x2F;Response 与重新建组，说明 teardown 后如何复用原角色和密钥再次到达 P2P-GROU">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/09.jpg">
+<meta property="article:published_time" content="2026-09-29T08:09:41.000Z">
+<meta property="article:modified_time" content="2026-09-29T08:09:45.343Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="WIFI-Direct">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/09.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "13-persistent-group",
+  "url": "https://wdfk-prog.space/posts/c949e3bb/",
+  "image": "https://wdfk-prog.space/images/covers/09.jpg",
+  "datePublished": "2026-09-29T08:09:41.000Z",
+  "dateModified": "2026-09-29T08:09:45.343Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/c949e3bb/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '13-persistent-group',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">626</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">66</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/09.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">13-persistent-group</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">13-persistent-group<a class="post-edit-link" href="null_posts/WIFI-Direct/13-persistent-group.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-29T08:09:41.000Z" title="发表于 2026-09-29 16:09:41">2026-09-29</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-29T08:09:45.343Z" title="更新于 2026-09-29 16:09:45">2026-09-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/WIFI-Direct/">WIFI-Direct</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>26分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/c949e3bb/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-09-29 16:09:45&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="Wi-Fi-Direct-源码分析（13）：Persistent-Group-如何再次建立——P2P-INVITE、Invitation-与-Reinvocation"><a href="#Wi-Fi-Direct-源码分析（13）：Persistent-Group-如何再次建立——P2P-INVITE、Invitation-与-Reinvocation" class="headerlink" title="Wi-Fi Direct 源码分析（13）：Persistent Group 如何再次建立——P2P_INVITE、Invitation 与 Reinvocation"></a>Wi-Fi Direct 源码分析（13）：Persistent Group 如何再次建立——P2P_INVITE、Invitation 与 Reinvocation</h1><blockquote>
+<p>摘要：追踪 Persistent Group 凭据保存、P2P_INVITE、Invitation Request&#x2F;Response 与重新建组，说明 teardown 后如何复用原角色和密钥再次到达 P2P-GROUP-STARTED。</p>
+</blockquote>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/5a85996898aa44c4af0252f7a0b92cad.png" alt="在这里插入图片描述"></p>
+<p>@[toc]<br>第 12 篇结束在一个很关键的生命周期边界：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">active P2P Group</span><br><span class="line">    ↓</span><br><span class="line">P2P_GROUP_REMOVE / internal removal</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-REMOVED</span><br><span class="line">    ↓</span><br><span class="line">Group Interface 与运行态资源被释放</span><br></pre></td></tr></table></figure>
+
+<p>但第 12 篇同时保留了一个没有继续展开的问题：</p>
+<blockquote>
+<p>当前 Group 被删除以后，为什么同一对设备下一次还能“恢复”原来的 Group，而不必重新完成一次完整的 GO Negotiation？</p>
+</blockquote>
+<p>答案就是 <strong>Persistent Group</strong>。<a href="#source-s3">S3</a></p>
+<p>它并不是一个一直运行、不被删除的 Group，也不是一个后台常驻的虚拟 interface。Persistent Group 真正持久化的是一组能够描述“原 Group 身份与安全关系”的配置数据。当前 active Group 可以退出，Group Interface 可以消失，但这组配置仍然保存在 <code>wpa_supplicant</code> 的 network 配置中。下一次通过 Invitation 重新唤起时，双方可以直接复用已经保存的角色、SSID 和密钥材料，再进入 GO 或 Client 的启动路径。</p>
+<p>因此第 13 篇只解决这一条主线：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">第一次形成 persistent Group</span><br><span class="line">    ↓</span><br><span class="line">保存 persistent network</span><br><span class="line">    ↓</span><br><span class="line">active Group teardown</span><br><span class="line">    ↓</span><br><span class="line">P2P_INVITE persistent=&lt;id&gt;</span><br><span class="line">    ↓</span><br><span class="line">Invitation Request / Response</span><br><span class="line">    ↓</span><br><span class="line">匹配双方保存的 persistent entry</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br><span class="line">    ↓</span><br><span class="line">按原角色恢复 GO / Client</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br></pre></td></tr></table></figure>
+
+<p>本文只追踪保存的 Persistent Group 如何通过 <code>P2P_INVITE persistent=&lt;id&gt;</code> 被重新建立；相邻但不同语义的命令只在必要的对比处说明。</p>
+<p>本文源码基线统一为 hostap 2.12 release tag <code>hostap_2_12</code>（commit <code>831364bf02710ad09c2f27d3efa92abeeb5634c0</code>）。Persistent network 保存、<code>P2P_INVITE</code>、Invitation Request&#x2F;Response 与 <code>wpas_p2p_group_add_persistent()</code> 都按同一 Git tag 的 <code>wpa_supplicant/</code> 与 <code>src/p2p/</code> 源码核对。<a href="#source-s1">S1</a></p>
+<hr>
+<p><a id="idx-persistent"></a></p>
+<h2 id="1-Persistent-Group-持久化的不是“正在运行的-Group”"><a href="#1-Persistent-Group-持久化的不是“正在运行的-Group”" class="headerlink" title="1. Persistent Group 持久化的不是“正在运行的 Group”"></a>1. Persistent Group 持久化的不是“正在运行的 Group”</h2><p>第 09 篇中，<code>P2P_CONNECT ... persistent</code> 可以要求本次形成 Persistent Group；第 10 篇的 WPS &#x2F; Group Formation 成功以后，<code>wpa_supplicant</code> 才会把当前 Group 的关键信息复制到一个特殊的 <code>struct wpa_ssid</code> network entry 中。</p>
+<p>在 <code>wpas_group_formation_completed()</code> 中可以直接看到这个动作：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (persistent)</span><br><span class="line">        wpas_p2p_store_persistent_group(wpa_s-&gt;p2pdev,</span><br><span class="line">                                        ssid, go_dev_addr, <span class="number">0</span>);</span><br><span class="line"><span class="keyword">else</span> &#123;</span><br><span class="line">        os_free(wpa_s-&gt;global-&gt;add_psk);</span><br><span class="line">        wpa_s-&gt;global-&gt;add_psk = <span class="literal">NULL</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>GO 在不需要 provisioning、直接完成 Group 配置的路径中也会保存：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (params-&gt;persistent_group) &#123;</span><br><span class="line">        wpas_p2p_store_persistent_group(</span><br><span class="line">                wpa_s-&gt;p2pdev, ssid,</span><br><span class="line">                wpa_s-&gt;global-&gt;p2p_dev_addr, <span class="number">0</span>);</span><br><span class="line">        wpas_p2p_add_psk_list(wpa_s, ssid);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以 Persistent Group 的生命周期不是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Group 一直保持运行</span><br></pre></td></tr></table></figure>
+
+<p>而是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">graph TD</span><br><span class="line">    A[&quot;一次正常 Group Formation&quot;] --&gt; B[&quot;persistent = 1&quot;]</span><br><span class="line">    B --&gt; C[&quot;wpas_p2p_store_persistent_group()&quot;]</span><br><span class="line">    C --&gt; D[&quot;保存 persistent network entry&quot;]</span><br><span class="line">    D --&gt; E[&quot;active Group 可以正常 teardown&quot;]</span><br><span class="line">    E --&gt; F[&quot;persistent network entry 仍保留&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>第 12 篇删除的是 <code>active Group</code>；第 13 篇要使用的是留下来的 <code>persistent network entry</code>。这两个对象必须从一开始就分开理解。</p>
+<hr>
+<p><a id="idx-store"></a></p>
+<h2 id="2-wpas-p2p-store-persistent-group-到底保存了什么"><a href="#2-wpas-p2p-store-persistent-group-到底保存了什么" class="headerlink" title="2. wpas_p2p_store_persistent_group() 到底保存了什么"></a>2. <code>wpas_p2p_store_persistent_group()</code> 到底保存了什么</h2><p>核心函数位于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">wpa_supplicant/p2p_supplicant.c</span><br></pre></td></tr></table></figure>
+
+<p>它首先尝试寻找已有的 Persistent Group 条目：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> (s = wpa_s-&gt;conf-&gt;ssid; s; s = s-&gt;next) &#123;</span><br><span class="line">        <span class="keyword">if</span> (s-&gt;disabled == <span class="number">2</span> &amp;&amp;</span><br><span class="line">            ether_addr_equal(go_dev_addr, s-&gt;bssid) &amp;&amp;</span><br><span class="line">            s-&gt;ssid_len == ssid-&gt;ssid_len &amp;&amp;</span><br><span class="line">            os_memcmp(ssid-&gt;ssid, s-&gt;ssid, ssid-&gt;ssid_len) == <span class="number">0</span>)</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (dik_id &amp;&amp; s-&gt;go_dik_id == dik_id)</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>经典 P2P 路径主要使用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">disabled == 2</span><br><span class="line">GO Device Address</span><br><span class="line">SSID</span><br></pre></td></tr></table></figure>
+
+<p>来识别已有条目。如果没有找到，就新建 network，并马上把它标记为 Persistent Group：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">s-&gt;p2p_group = <span class="number">1</span>;</span><br><span class="line">s-&gt;p2p_persistent_group = <span class="number">1</span>;</span><br><span class="line">wpas_notify_persistent_group_added(wpa_s, s);</span><br><span class="line">wpa_config_set_network_defaults(s);</span><br></pre></td></tr></table></figure>
+
+<p>随后填入真正需要长期保留的数据：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">s-&gt;p2p_group = <span class="number">1</span>;</span><br><span class="line">s-&gt;p2p_persistent_group = <span class="number">1</span>;</span><br><span class="line">s-&gt;disabled = <span class="number">2</span>;</span><br><span class="line">s-&gt;bssid_set = <span class="number">1</span>;</span><br><span class="line">os_memcpy(s-&gt;bssid, go_dev_addr, ETH_ALEN);</span><br><span class="line">s-&gt;mode = ssid-&gt;mode;</span><br><span class="line">s-&gt;auth_alg = ssid-&gt;auth_alg;</span><br><span class="line">s-&gt;key_mgmt = ssid-&gt;key_mgmt;</span><br><span class="line">s-&gt;proto = ssid-&gt;proto;</span><br><span class="line">s-&gt;pbss = ssid-&gt;pbss;</span><br><span class="line">s-&gt;pmk_valid = ssid-&gt;pmk_valid;</span><br><span class="line">s-&gt;pairwise_cipher = ssid-&gt;pbss ? WPA_CIPHER_GCMP : WPA_CIPHER_CCMP;</span><br><span class="line">s-&gt;export_keys = <span class="number">1</span>;</span><br><span class="line">s-&gt;go_dik_id = dik_id;</span><br></pre></td></tr></table></figure>
+
+<p>密钥材料也会被复制：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ssid-&gt;passphrase) &#123;</span><br><span class="line">        os_free(s-&gt;passphrase);</span><br><span class="line">        s-&gt;passphrase = os_strdup(ssid-&gt;passphrase);</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> (ssid-&gt;psk_set) &#123;</span><br><span class="line">        s-&gt;psk_set = <span class="number">1</span>;</span><br><span class="line">        os_memcpy(s-&gt;psk, ssid-&gt;psk, <span class="number">32</span>);</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> (s-&gt;passphrase &amp;&amp; !s-&gt;psk_set)</span><br><span class="line">        wpa_config_update_psk(s);</span><br></pre></td></tr></table></figure>
+
+<p>SSID 同样被复制到保存条目中：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (s-&gt;ssid == <span class="literal">NULL</span> || s-&gt;ssid_len &lt; ssid-&gt;ssid_len) &#123;</span><br><span class="line">        os_free(s-&gt;ssid);</span><br><span class="line">        s-&gt;ssid = os_malloc(ssid-&gt;ssid_len);</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> (s-&gt;ssid) &#123;</span><br><span class="line">        s-&gt;ssid_len = ssid-&gt;ssid_len;</span><br><span class="line">        os_memcpy(s-&gt;ssid, ssid-&gt;ssid, s-&gt;ssid_len);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果配置允许写回：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (changed &amp;&amp; wpa_s-&gt;conf-&gt;update_config &amp;&amp;</span><br><span class="line">    wpa_config_write(wpa_s-&gt;confname, wpa_s-&gt;conf)) &#123;</span><br><span class="line">        wpa_printf(MSG_DEBUG, <span class="string">&quot;P2P: Failed to update configuration&quot;</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这就解释了 Persistent Group 为什么能够跨越一次 active Group 的 teardown：真正需要复用的数据已经进入普通配置对象，而不是只保存在已经被释放的 Group Interface 中。</p>
+<h3 id="disabled-2-不是普通的“禁用网络”"><a href="#disabled-2-不是普通的“禁用网络”" class="headerlink" title="disabled == 2 不是普通的“禁用网络”"></a><code>disabled == 2</code> 不是普通的“禁用网络”</h3><p>hostap 2.12 release tag在 <code>config_file.c</code> 中还有一条非常直接的恢复规则：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ssid-&gt;disabled == <span class="number">2</span>)</span><br><span class="line">        ssid-&gt;p2p_persistent_group = <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+
+<p><code>wpa_supplicant_i.h</code> 也把 Persistent Group 判定封装成：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="keyword">inline</span> <span class="type">int</span> <span class="title function_">network_is_persistent_group</span><span class="params">(<span class="keyword">struct</span> wpa_ssid *ssid)</span></span><br><span class="line">&#123;</span><br><span class="line">        <span class="keyword">return</span> ssid-&gt;disabled == <span class="number">2</span> &amp;&amp; ssid-&gt;p2p_persistent_group;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因此这里的 <code>disabled == 2</code> 是一个特殊状态：它表示这条 network 不是普通 STA 自动连接项，而是用于 Persistent Group storage。</p>
+<p><code>config_ssid.h</code> 对 <code>bssid</code> 字段也特别注明：当 <code>disabled == 2</code> 时，<code>bssid</code> 保存的是 <strong>GO Device Address</strong>。</p>
+<p>所以一个 persistent entry 至少建立了这样的映射：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>在 Persistent Group 中的含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>disabled == 2</code></td>
+<td>Persistent Group storage entry</td>
+</tr>
+<tr>
+<td><code>p2p_persistent_group</code></td>
+<td>明确标记为持久化 P2P Group</td>
+</tr>
+<tr>
+<td><code>ssid</code></td>
+<td>原 Group SSID</td>
+</tr>
+<tr>
+<td><code>bssid</code></td>
+<td>GO Device Address</td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td>本端在该 Group 中保存的角色</td>
+</tr>
+<tr>
+<td><code>passphrase</code> &#x2F; <code>psk</code></td>
+<td>重新建立安全连接所需的密钥材料</td>
+</tr>
+<tr>
+<td>cipher &#x2F; key management</td>
+<td>原安全配置</td>
+</tr>
+</tbody></table>
+<p>其中 <code>mode</code> 对下一阶段尤其重要，因为 Reinvocation 不会再通过一次 GO Negotiation 来重新决定角色。</p>
+<hr>
+<p><a id="idx-list"></a></p>
+<h2 id="3-为什么-list-networks-能看到-P2P-PERSISTENT"><a href="#3-为什么-list-networks-能看到-P2P-PERSISTENT" class="headerlink" title="3. 为什么 list_networks 能看到 [P2P-PERSISTENT]"></a>3. 为什么 <code>list_networks</code> 能看到 <code>[P2P-PERSISTENT]</code></h2><p><code>README-P2P</code> 明确说明，<code>list_networks</code> 会同时列出 Persistent Group 的保存信息；<a href="#source-s2">S2</a>后续 <code>p2p_group_add</code> 和 <code>p2p_invite</code> 使用这里的 network id 来选择需要恢复的 Group。</p>
+<p>源码在生成 <code>LIST_NETWORKS</code> 输出时直接根据 <code>disabled == 2</code> 增加标记：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">ret = os_snprintf(pos, end - pos, <span class="string">&quot;\t%s%s%s%s&quot;</span>,</span><br><span class="line">                  ssid == wpa_s-&gt;current_ssid ?</span><br><span class="line">                  <span class="string">&quot;[CURRENT]&quot;</span> : <span class="string">&quot;&quot;</span>,</span><br><span class="line">                  ssid-&gt;disabled ? <span class="string">&quot;[DISABLED]&quot;</span> : <span class="string">&quot;&quot;</span>,</span><br><span class="line">                  ssid-&gt;disabled_until.sec ?</span><br><span class="line">                  <span class="string">&quot;[TEMP-DISABLED]&quot;</span> : <span class="string">&quot;&quot;</span>,</span><br><span class="line">                  ssid-&gt;disabled == <span class="number">2</span> ? <span class="string">&quot;[P2P-PERSISTENT]&quot;</span> :</span><br><span class="line">                  <span class="string">&quot;&quot;</span>);</span><br></pre></td></tr></table></figure>
+
+<p>因此可能看到类似：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">network id / ssid / bssid / flags</span><br><span class="line">4    DIRECT-xy    02:11:22:33:44:55    [DISABLED][P2P-PERSISTENT]</span><br></pre></td></tr></table></figure>
+
+<p>这里的 <code>4</code> 就是后续命令：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">P2P_INVITE persistent=4</span><br></pre></td></tr></table></figure>
+
+<p>中的 <code>&lt;network id&gt;</code>。</p>
+<p>这个 id 指向保存的 persistent configuration，不指向第 12 篇已经删除的 Group Interface。</p>
+<hr>
+<p><a id="idx-invite-entry"></a></p>
+<h2 id="4-Reinvocation-的真正用户态入口：P2P-INVITE-persistent"><a href="#4-Reinvocation-的真正用户态入口：P2P-INVITE-persistent" class="headerlink" title="4. Reinvocation 的真正用户态入口：P2P_INVITE persistent=&lt;id&gt;"></a>4. Reinvocation 的真正用户态入口：<code>P2P_INVITE persistent=&lt;id&gt;</code></h2><p><code>README-P2P</code> 对 Invitation 给出的接口是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">p2p_invite [persistent=&lt;network id&gt;|group=&lt;group ifname&gt;] [peer=address]</span><br></pre></td></tr></table></figure>
+
+<p>其中两种形式解决的是两个不同问题：</p>
+<table>
+<thead>
+<tr>
+<th>命令形式</th>
+<th>目标</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>persistent=&lt;id&gt;</code></td>
+<td>重新唤起以前保存过的 Persistent Group</td>
+</tr>
+<tr>
+<td><code>group=&lt;ifname&gt;</code></td>
+<td>邀请 peer 加入一个当前已经运行的 Group</td>
+</tr>
+</tbody></table>
+<p>第 13 篇只沿第一条路径继续。</p>
+<p>命令进入 <code>ctrl_iface.c</code> 后，<code>p2p_ctrl_invite()</code> 先按前缀分流：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">p2p_ctrl_invite</span><span class="params">(<span class="keyword">struct</span> wpa_supplicant *wpa_s, <span class="type">char</span> *cmd)</span></span><br><span class="line">&#123;</span><br><span class="line">        <span class="keyword">if</span> (os_strncmp(cmd, <span class="string">&quot;persistent&quot;</span>, <span class="number">10</span>) == <span class="number">0</span>)</span><br><span class="line">                <span class="keyword">return</span> p2p_ctrl_invite_persistent(wpa_s, cmd);</span><br><span class="line">        <span class="keyword">if</span> (os_strncmp(cmd, <span class="string">&quot;group=&quot;</span>, <span class="number">6</span>) == <span class="number">0</span>)</span><br><span class="line">                <span class="keyword">return</span> p2p_ctrl_invite_group(wpa_s, cmd + <span class="number">6</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>p2p_ctrl_invite_persistent()</code> 对 <code>persistent=&lt;id&gt;</code> 做的第一件关键事情，就是重新取得刚才分析过的 persistent network：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (os_strncmp(cmd, <span class="string">&quot;persistent=&quot;</span>, <span class="number">11</span>) == <span class="number">0</span>) &#123;</span><br><span class="line">        id = atoi(cmd + <span class="number">11</span>);</span><br><span class="line">        ssid = wpa_config_get_network(wpa_s-&gt;conf, id);</span><br><span class="line">        <span class="keyword">if</span> (!ssid || ssid-&gt;disabled != <span class="number">2</span>) &#123;</span><br><span class="line">                wpa_printf(MSG_DEBUG,</span><br><span class="line">                           <span class="string">&quot;CTRL_IFACE: Could not find SSID id=%d for persistent P2P group&quot;</span>,</span><br><span class="line">                           id);</span><br><span class="line">                <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">        &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>然后把这个 <code>struct wpa_ssid *ssid</code> 传入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> wpas_p2p_invite(wpa_s, _peer, ssid, <span class="literal">NULL</span>, freq, freq2, ht40, vht,</span><br><span class="line">                       max_oper_chwidth, pref_freq, he, edmg,</span><br><span class="line">                       allow_6ghz, p2p2);</span><br></pre></td></tr></table></figure>
+
+<p>到这里已经出现了和第一次 <code>P2P_CONNECT</code> 完全不同的参数来源：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">graph LR</span><br><span class="line">    A[&quot;P2P_CONNECT&quot;] --&gt; B[&quot;peer + WPS method + go_intent&quot;]</span><br><span class="line">    C[&quot;P2P_INVITE persistent=id&quot;] --&gt; D[&quot;saved struct wpa_ssid&quot;]</span><br><span class="line">    D --&gt; E[&quot;saved role + SSID + GO Device Address + key material&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>第 09 篇首次 GO Negotiation 时需要协商“谁做 GO”；第 13 篇 reinvocation 的核心前提则是双方已经保存过这段关系。</p>
+<hr>
+<p><a id="idx-wpas-invite"></a></p>
+<h2 id="5-wpas-p2p-invite-先从保存配置恢复角色"><a href="#5-wpas-p2p-invite-先从保存配置恢复角色" class="headerlink" title="5. wpas_p2p_invite() 先从保存配置恢复角色"></a>5. <code>wpas_p2p_invite()</code> 先从保存配置恢复角色</h2><p><code>wpas_p2p_invite()</code> 的源码注释已经直接写明用途：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Invite to reinvoke a persistent group */</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">wpas_p2p_invite</span><span class="params">(<span class="keyword">struct</span> wpa_supplicant *wpa_s, <span class="type">const</span> u8 *peer_addr,</span></span><br><span class="line"><span class="params">                    <span class="keyword">struct</span> wpa_ssid *ssid, <span class="type">const</span> u8 *go_dev_addr, <span class="type">int</span> freq,</span></span><br><span class="line"><span class="params">                    <span class="type">int</span> vht_center_freq2, <span class="type">int</span> ht40, <span class="type">int</span> vht, <span class="type">int</span> max_chwidth,</span></span><br><span class="line"><span class="params">                    <span class="type">int</span> pref_freq, <span class="type">int</span> he, <span class="type">int</span> edmg, <span class="type">bool</span> allow_6ghz, <span class="type">bool</span> p2p2)</span></span><br></pre></td></tr></table></figure>
+
+<p>进入函数后，如果没有可用的 persistent entry，会立即失败：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!ssid)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br></pre></td></tr></table></figure>
+
+<p>接下来最关键的是角色恢复。</p>
+<h3 id="保存条目表明本端原来是-GO"><a href="#保存条目表明本端原来是-GO" class="headerlink" title="保存条目表明本端原来是 GO"></a>保存条目表明本端原来是 GO</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ssid-&gt;mode == WPAS_MODE_P2P_GO) &#123;</span><br><span class="line">        role = P2P_INVITE_ROLE_GO;</span><br><span class="line">        <span class="keyword">if</span> (peer_addr == <span class="literal">NULL</span>) &#123;</span><br><span class="line">                wpa_printf(MSG_DEBUG, <span class="string">&quot;P2P: Missing peer &quot;</span></span><br><span class="line">                           <span class="string">&quot;address in invitation command&quot;</span>);</span><br><span class="line">                <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (wpas_p2p_create_iface(wpa_s)) &#123;</span><br><span class="line">                <span class="keyword">if</span> (wpas_p2p_add_group_interface(wpa_s,</span><br><span class="line">                                                 WPA_IF_P2P_GO) &lt; <span class="number">0</span>) &#123;</span><br><span class="line">                        wpa_printf(MSG_ERROR, <span class="string">&quot;P2P: Failed to &quot;</span></span><br><span class="line">                                   <span class="string">&quot;allocate a new interface for the &quot;</span></span><br><span class="line">                                   <span class="string">&quot;group&quot;</span>);</span><br><span class="line">                        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">                &#125;</span><br><span class="line">                bssid = wpa_s-&gt;pending_interface_addr;</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (wpa_s-&gt;p2p_mgmt)</span><br><span class="line">                bssid = wpa_s-&gt;parent-&gt;own_addr;</span><br><span class="line">        <span class="keyword">else</span></span><br><span class="line">                bssid = wpa_s-&gt;own_addr;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里没有 <code>go_intent</code> 比较。保存配置已经说明本端在这个 Persistent Group 中承担 GO 角色。</p>
+<p>如果平台需要独立 Group Interface，还会在 Invitation 发出前预留新的 GO interface 地址。</p>
+<h3 id="保存条目表明本端原来是-Client"><a href="#保存条目表明本端原来是-Client" class="headerlink" title="保存条目表明本端原来是 Client"></a>保存条目表明本端原来是 Client</h3><p>紧接着是另一条分支：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">else</span> &#123;</span><br><span class="line">        role = P2P_INVITE_ROLE_CLIENT;</span><br><span class="line">        <span class="keyword">if</span> (!wpa_s-&gt;p2p2)</span><br><span class="line">                peer_addr = ssid-&gt;bssid;</span><br><span class="line">&#125;</span><br><span class="line">wpa_s-&gt;pending_invite_ssid_id = ssid-&gt;id;</span><br></pre></td></tr></table></figure>
+
+<p>经典 P2P Client 路径会把保存条目中的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ssid-&gt;bssid</span><br></pre></td></tr></table></figure>
+
+<p>直接当作需要联系的 GO Device Address。前面已经确认 Persistent Group entry 中的 <code>bssid</code> 字段正是用于保存 GO Device Address。</p>
+<p>这里形成了一个非常重要的闭环：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">第一次保存时</span><br><span class="line">GO Device Address → persistent ssid-&gt;bssid</span><br><span class="line"></span><br><span class="line">下一次 Client reinvocation 时</span><br><span class="line">persistent ssid-&gt;bssid → peer_addr</span><br></pre></td></tr></table></figure>
+
+<p>这也是为什么 <code>README-P2P</code> 说明：如果 peer 本身就是该 Persistent Group 的 GO，某些调用场景中不必再单独提供 <code>peer</code> 参数。</p>
+<hr>
+<h2 id="6-Invitation-开始前会停止-Find，并把流程交给-P2P-Core"><a href="#6-Invitation-开始前会停止-Find，并把流程交给-P2P-Core" class="headerlink" title="6. Invitation 开始前会停止 Find，并把流程交给 P2P Core"></a>6. Invitation 开始前会停止 Find，并把流程交给 P2P Core</h2><p><code>wpas_p2p_invite()</code> 在真正发 Invitation 前先停止当前 Find&#x2F;Listen：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment"> * Stop any find/listen operations before invitation and possibly</span></span><br><span class="line"><span class="comment"> * connection establishment.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line">wpas_p2p_stop_find_oper(wpa_s);</span><br></pre></td></tr></table></figure>
+
+<p>经典非 P2P2 路径最后进入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> p2p_invite(wpa_s-&gt;global-&gt;p2p, peer_addr, role, bssid,</span><br><span class="line">                  ssid-&gt;ssid, ssid-&gt;ssid_len, force_freq, go_dev_addr,</span><br><span class="line">                  <span class="number">1</span>, pref_freq, <span class="number">-1</span>, <span class="literal">false</span>);</span><br></pre></td></tr></table></figure>
+
+<p>这里传给 P2P Core 的几个关键值已经全部来自 Persistent Group 上下文：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">peer_addr</span><br><span class="line">role</span><br><span class="line">Group BSSID（如果本端为 GO）</span><br><span class="line">SSID</span><br><span class="line">persistent = 1</span><br><span class="line">frequency preference</span><br></pre></td></tr></table></figure>
+
+<p>hostap 2.12 同一 Git tag 中的 <code>src/p2p/p2p_invitation.c</code> 可以直接继续追踪：<code>p2p_invite()</code> 进入 Invitation 流程并发送 <strong>Invitation Request Public Action frame</strong>；收到对端 Invitation Response 后，再通过 <code>struct p2p_config</code> callback 返回 <code>wpa_supplicant</code> glue 层。<a href="#source-s1">S1</a></p>
+<p>这条路径的关键不是底层函数名本身，而是它建立了一个新的异步边界：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">wpas_p2p_invite()</span><br><span class="line">    ↓ 同步调用</span><br><span class="line">p2p_invite()</span><br><span class="line">    ↓</span><br><span class="line">发送 Invitation Request</span><br><span class="line">    ↓ 无线异步交互</span><br><span class="line">等待对端 Invitation Response</span><br><span class="line">    ↓</span><br><span class="line">invitation_result callback</span><br><span class="line">    ↓</span><br><span class="line">重新进入 wpa_supplicant/p2p_supplicant.c</span><br></pre></td></tr></table></figure>
+
+<p>因此不能把 <code>wpas_p2p_invite()</code> 和 <code>wpas_p2p_group_add_persistent()</code> 画成一个直接同步调用。</p>
+<hr>
+<p><a id="idx-core"></a></p>
+<h2 id="7-为什么-P2P-Core-能回到-wpas-invitation-process-和-wpas-invitation-result"><a href="#7-为什么-P2P-Core-能回到-wpas-invitation-process-和-wpas-invitation-result" class="headerlink" title="7. 为什么 P2P Core 能回到 wpas_invitation_process() 和 wpas_invitation_result()"></a>7. 为什么 P2P Core 能回到 <code>wpas_invitation_process()</code> 和 <code>wpas_invitation_result()</code></h2><p>这条 callback 关系在 P2P 初始化时已经绑定。</p>
+<p><code>wpas_p2p_init()</code> 中：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">p2p.invitation_process = wpas_invitation_process;</span><br><span class="line">p2p.invitation_received = wpas_invitation_received;</span><br><span class="line">p2p.invitation_result = wpas_invitation_result;</span><br></pre></td></tr></table></figure>
+
+<p>三个 callback 的职责不同：</p>
+<table>
+<thead>
+<tr>
+<th>callback</th>
+<th>发生在哪一侧</th>
+<th>主要职责</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>wpas_invitation_process()</code></td>
+<td>收到 Invitation Request 的设备</td>
+<td>判断是否认识该 Group、是否允许接受、恢复哪个角色</td>
+</tr>
+<tr>
+<td><code>wpas_invitation_received()</code></td>
+<td>Request 接收端发送完 Invitation Response 后</td>
+<td>把结果通知上层；成功时启动本端 persistent Group</td>
+</tr>
+<tr>
+<td><code>wpas_invitation_result()</code></td>
+<td>主动发起 Invitation 的设备收到 Response 后</td>
+<td>上报 <code>P2P-INVITATION-RESULT</code>；成功时启动本端 persistent Group</td>
+</tr>
+</tbody></table>
+<p>这三个函数正好把 P2P Core 的无线 Action frame 交互桥接回 <code>wpa_supplicant</code> 的配置和 Group 生命周期。</p>
+<hr>
+<p><a id="idx-receive"></a></p>
+<h2 id="8-接收端收到-Invitation-Request-后，先判断“这个-Group-我认不认识”"><a href="#8-接收端收到-Invitation-Request-后，先判断“这个-Group-我认不认识”" class="headerlink" title="8. 接收端收到 Invitation Request 后，先判断“这个 Group 我认不认识”"></a>8. 接收端收到 Invitation Request 后，先判断“这个 Group 我认不认识”</h2><p>接收端真正做策略判断的是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">wpas_invitation_process()</span><br></pre></td></tr></table></figure>
+
+<p>对于 Persistent Group，它先检查是否已经有同 SSID、同角色的 active Group：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">grp = wpas_get_p2p_group(wpa_s, ssid, ssid_len, go);</span><br><span class="line"><span class="keyword">if</span> (grp) &#123;</span><br><span class="line">        wpa_printf(MSG_DEBUG, <span class="string">&quot;P2P: Accept invitation to already &quot;</span></span><br><span class="line">                   <span class="string">&quot;running persistent group&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (*go)</span><br><span class="line">                os_memcpy(group_bssid, grp-&gt;own_addr, ETH_ALEN);</span><br><span class="line">        <span class="keyword">goto</span> accept_inv;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果当前没有运行，则继续检查这次 Invitation 是否已经被本端预先授权，或者配置是否允许自动 persistent reconnect：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!is_zero_ether_addr(wpa_s-&gt;p2p_auth_invite) &amp;&amp;</span><br><span class="line">    ether_addr_equal(sa, wpa_s-&gt;p2p_auth_invite)) &#123;</span><br><span class="line">        wpa_printf(MSG_DEBUG, <span class="string">&quot;P2P: Accept previously initiated &quot;</span></span><br><span class="line">                   <span class="string">&quot;invitation to re-invoke a persistent group&quot;</span>);</span><br><span class="line">        os_memset(wpa_s-&gt;p2p_auth_invite, <span class="number">0</span>, ETH_ALEN);</span><br><span class="line">&#125; <span class="keyword">else</span> <span class="keyword">if</span> (!wpa_s-&gt;conf-&gt;persistent_reconnect)</span><br><span class="line">        <span class="keyword">return</span> P2P_SC_FAIL_INFO_CURRENTLY_UNAVAILABLE;</span><br></pre></td></tr></table></figure>
+
+<p>然后寻找本机保存的 Persistent Group entry：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> (s = wpa_s-&gt;conf-&gt;ssid; s; s = s-&gt;next) &#123;</span><br><span class="line">        <span class="keyword">if</span> (s-&gt;disabled == <span class="number">2</span> &amp;&amp;</span><br><span class="line">            (p2p2 || ether_addr_equal(s-&gt;bssid, go_dev_addr)) &amp;&amp;</span><br><span class="line">            s-&gt;ssid_len == ssid_len &amp;&amp;</span><br><span class="line">            os_memcmp(ssid, s-&gt;ssid, ssid_len) == <span class="number">0</span>)</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>经典 P2P 路径下，接收端要求保存条目能够匹配：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">disabled == 2</span><br><span class="line">GO Device Address</span><br><span class="line">SSID</span><br></pre></td></tr></table></figure>
+
+<p>如果不存在，就直接返回：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">else</span> <span class="keyword">if</span> (!s) &#123;</span><br><span class="line">        wpa_printf(MSG_DEBUG, <span class="string">&quot;P2P: Invitation from &quot;</span> MACSTR</span><br><span class="line">                   <span class="string">&quot; requested reinvocation of an unknown group&quot;</span>,</span><br><span class="line">                   MAC2STR(sa));</span><br><span class="line">        <span class="keyword">return</span> P2P_SC_FAIL_UNKNOWN_GROUP;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以 Persistent Group Reinvocation 不是“对端说有这个 Group，本端就相信”。双方本地都需要有能够匹配的持久化上下文；至少在经典路径中，接收端会用自己的 saved entry 做确认。</p>
+<hr>
+<p><a id="idx-reconnect"></a></p>
+<h2 id="9-persistent-reconnect-控制的是“是否自动接受”，不是“有没有保存配置”"><a href="#9-persistent-reconnect-控制的是“是否自动接受”，不是“有没有保存配置”" class="headerlink" title="9. persistent_reconnect 控制的是“是否自动接受”，不是“有没有保存配置”"></a>9. <code>persistent_reconnect</code> 控制的是“是否自动接受”，不是“有没有保存配置”</h2><p><code>README-P2P</code> 对这个开关的定义是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">set persistent_reconnect &lt;0/1&gt;</span><br></pre></td></tr></table></figure>
+
+<p>启用后，对 Persistent Group reinvocation 的 Invitation 可以不经过单独的上层授权直接接受。</p>
+<p>源码刚才已经给出了准确条件：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">else</span> <span class="keyword">if</span> (!wpa_s-&gt;conf-&gt;persistent_reconnect)</span><br><span class="line">        <span class="keyword">return</span> P2P_SC_FAIL_INFO_CURRENTLY_UNAVAILABLE;</span><br></pre></td></tr></table></figure>
+
+<p>因此两种行为可以画成：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">graph TD</span><br><span class="line">    A[&quot;收到 Persistent Invitation Request&quot;] --&gt; B&#123;&quot;已有匹配 persistent entry?&quot;&#125;</span><br><span class="line">    B -- &quot;否&quot; --&gt; C[&quot;UNKNOWN_GROUP&quot;]</span><br><span class="line">    B -- &quot;是&quot; --&gt; D&#123;&quot;本次已预授权 或 persistent_reconnect=1?&quot;&#125;</span><br><span class="line">    D -- &quot;否&quot; --&gt; E[&quot;INFO_CURRENTLY_UNAVAILABLE&quot;]</span><br><span class="line">    D -- &quot;是&quot; --&gt; F[&quot;接受 Invitation&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>注意，这个配置不决定 Persistent Group 是否保存，也不等于跳过无线安全认证。它只影响收到 reinvocation Invitation 后，<code>wpa_supplicant</code> 是否允许自动进入恢复流程。</p>
+<hr>
+<h2 id="10-接收端为什么会产生-P2P-INVITATION-RECEIVED-或-P2P-INVITATION-ACCEPTED"><a href="#10-接收端为什么会产生-P2P-INVITATION-RECEIVED-或-P2P-INVITATION-ACCEPTED" class="headerlink" title="10. 接收端为什么会产生 P2P-INVITATION-RECEIVED 或 P2P-INVITATION-ACCEPTED"></a>10. 接收端为什么会产生 <code>P2P-INVITATION-RECEIVED</code> 或 <code>P2P-INVITATION-ACCEPTED</code></h2><p>P2P Core 处理完 Request、发送 Invitation Response 后，会通过初始化时注册的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">invitation_received</span><br></pre></td></tr></table></figure>
+
+<p>callback 回到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">wpas_invitation_received()</span><br></pre></td></tr></table></figure>
+
+<p>这个函数先按 SSID 在本地找 Persistent Group entry：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> (s = wpa_s-&gt;conf-&gt;ssid; s; s = s-&gt;next) &#123;</span><br><span class="line">        <span class="keyword">if</span> (s-&gt;disabled == <span class="number">2</span> &amp;&amp;</span><br><span class="line">            s-&gt;ssid_len == ssid_len &amp;&amp;</span><br><span class="line">            os_memcmp(ssid, s-&gt;ssid, ssid_len) == <span class="number">0</span>)</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="已经接受-Invitation"><a href="#已经接受-Invitation" class="headerlink" title="已经接受 Invitation"></a>已经接受 Invitation</h3><p>当 <code>status == P2P_SC_SUCCESS</code> 且找到了保存条目时，它会先上报接受事件，再直接进入 persistent Group restart：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (s) &#123;</span><br><span class="line">        <span class="type">const</span> <span class="type">char</span> *ssid_txt;</span><br><span class="line"></span><br><span class="line">        ssid_txt = wpa_ssid_txt(s-&gt;ssid, s-&gt;ssid_len);</span><br><span class="line">        <span class="type">int</span> go = s-&gt;mode == WPAS_MODE_P2P_GO;</span><br><span class="line">        <span class="keyword">if</span> (go) &#123;</span><br><span class="line">                wpa_msg_global(wpa_s, MSG_INFO,</span><br><span class="line">                               P2P_EVENT_INVITATION_ACCEPTED</span><br><span class="line">                               <span class="string">&quot;sa=&quot;</span> MACSTR</span><br><span class="line">                               <span class="string">&quot; persistent=%d freq=%d ssid=\&quot;%s\&quot; go_dev_addr=&quot;</span></span><br><span class="line">                               MACSTR, MAC2STR(sa), s-&gt;id,</span><br><span class="line">                               op_freq, ssid_txt,</span><br><span class="line">                               MAC2STR(go_dev_addr));</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                wpa_msg_global(wpa_s, MSG_INFO,</span><br><span class="line">                               P2P_EVENT_INVITATION_ACCEPTED</span><br><span class="line">                               <span class="string">&quot;sa=&quot;</span> MACSTR</span><br><span class="line">                               <span class="string">&quot; persistent=%d ssid=\&quot;%s\&quot; go_dev_addr=&quot;</span> MACSTR,</span><br><span class="line">                               MAC2STR(sa), s-&gt;id, ssid_txt,</span><br><span class="line">                               MAC2STR(go_dev_addr));</span><br><span class="line">        &#125;</span><br><span class="line">        wpas_p2p_group_add_persistent(</span><br><span class="line">                wpa_s, s, go, <span class="number">0</span>, op_freq, <span class="number">0</span>,</span><br><span class="line">                wpa_s-&gt;conf-&gt;p2p_go_ht40,</span><br><span class="line">                wpa_s-&gt;conf-&gt;p2p_go_vht,</span><br><span class="line">                <span class="number">0</span>,</span><br><span class="line">                wpa_s-&gt;conf-&gt;p2p_go_he,</span><br><span class="line">                wpa_s-&gt;conf-&gt;p2p_go_edmg, <span class="literal">NULL</span>,</span><br><span class="line">                go ? P2P_MAX_INITIAL_CONN_WAIT_GO_REINVOKE : <span class="number">0</span>,</span><br><span class="line">                <span class="number">1</span>, is_p2p_allow_6ghz(wpa_s-&gt;global-&gt;p2p), <span class="number">0</span>,</span><br><span class="line">                bssid, sa, pmkid, pmk, pmk_len, <span class="literal">false</span>, <span class="literal">true</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里出现了第 13 篇最关键的跳转：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">Invitation 接受</span><br><span class="line">    ↓</span><br><span class="line">不是 p2p_connect()</span><br><span class="line">不是 GO Negotiation</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br></pre></td></tr></table></figure>
+
+<h3 id="当前不能自动接受"><a href="#当前不能自动接受" class="headerlink" title="当前不能自动接受"></a>当前不能自动接受</h3><p>如果前面的策略返回：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">P2P_SC_FAIL_INFO_CURRENTLY_UNAVAILABLE</span><br></pre></td></tr></table></figure>
+
+<p><code>wpas_invitation_received()</code> 不会立刻重建 Group，而是上报 <code>P2P-INVITATION-RECEIVED</code>，让上层知道有一个 Persistent Group reinvocation 请求等待处理。</p>
+<p>有匹配条目时：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (s-&gt;mode == WPAS_MODE_P2P_GO &amp;&amp; op_freq) &#123;</span><br><span class="line">        wpa_msg_global(wpa_s, MSG_INFO, P2P_EVENT_INVITATION_RECEIVED</span><br><span class="line">                       <span class="string">&quot;sa=&quot;</span> MACSTR <span class="string">&quot; persistent=%d freq=%d&quot;</span>,</span><br><span class="line">                       MAC2STR(sa), s-&gt;id, op_freq);</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        wpa_msg_global(wpa_s, MSG_INFO, P2P_EVENT_INVITATION_RECEIVED</span><br><span class="line">                       <span class="string">&quot;sa=&quot;</span> MACSTR <span class="string">&quot; persistent=%d&quot;</span>,</span><br><span class="line">                       MAC2STR(sa), s-&gt;id);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这就是 <code>persistent_reconnect=0</code> 时应用层可能看到“Invitation 到达，但 Group 还没有自动恢复”的原因。</p>
+<hr>
+<p><a id="idx-result"></a></p>
+<h2 id="11-发起端收到-Invitation-Response-后怎样继续"><a href="#11-发起端收到-Invitation-Response-后怎样继续" class="headerlink" title="11. 发起端收到 Invitation Response 后怎样继续"></a>11. 发起端收到 Invitation Response 后怎样继续</h2><p>主动执行：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">P2P_INVITE persistent=&lt;id&gt;</span><br></pre></td></tr></table></figure>
+
+<p>的一侧，在收到对端 Invitation Response 后，会从 P2P Core 通过：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">invitation_result</span><br></pre></td></tr></table></figure>
+
+<p>callback 进入：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">wpas_invitation_result()</span><br></pre></td></tr></table></figure>
+
+<p>函数一开始就生成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">P2P-INVITATION-RESULT</span><br></pre></td></tr></table></figure>
+
+<p>事件：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">wpas_msg_p2p_invitation_result(wpa_s, status, new_ssid, new_ssid_len,</span><br><span class="line">                               bssid, go_dev_addr);</span><br><span class="line">wpas_notify_p2p_invitation_result(wpa_s, status, bssid);</span><br></pre></td></tr></table></figure>
+
+<p>如果 <code>pending_invite_ssid_id != -1</code>，说明当前是 Persistent Group reinvocation，而不是“邀请 peer 加入当前 active Group”。</p>
+<p>失败时会停在 Invitation 阶段；例如 <code>UNKNOWN_GROUP</code> 还会清理本机保存的对应 peer 信息。</p>
+<p>成功后重新取出发起命令时保存的 network id：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">ssid = wpa_config_get_network(wpa_s-&gt;conf,</span><br><span class="line">                              wpa_s-&gt;pending_invite_ssid_id);</span><br><span class="line"><span class="keyword">if</span> (ssid == <span class="literal">NULL</span>) &#123;</span><br><span class="line">        wpa_printf(MSG_ERROR, <span class="string">&quot;P2P: Could not find persistent group &quot;</span></span><br><span class="line">                   <span class="string">&quot;data matching with invitation&quot;</span>);</span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>随后根据 Response 中的 channel 信息确定重新建组频率，并最终进入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">wpas_p2p_group_add_persistent(wpa_s, ssid,</span><br><span class="line">                              ssid-&gt;mode == WPAS_MODE_P2P_GO,</span><br><span class="line">                              wpa_s-&gt;p2p_persistent_go_freq,</span><br><span class="line">                              freq,</span><br><span class="line">                              wpa_s-&gt;p2p_go_vht_center_freq2,</span><br><span class="line">                              wpa_s-&gt;p2p_go_ht40, wpa_s-&gt;p2p_go_vht,</span><br><span class="line">                              wpa_s-&gt;p2p_go_max_oper_chwidth,</span><br><span class="line">                              wpa_s-&gt;p2p_go_he,</span><br><span class="line">                              wpa_s-&gt;p2p_go_edmg,</span><br><span class="line">                              channels,</span><br><span class="line">                              ssid-&gt;mode == WPAS_MODE_P2P_GO ?</span><br><span class="line">                              P2P_MAX_INITIAL_CONN_WAIT_GO_REINVOKE :</span><br><span class="line">                              <span class="number">0</span>, <span class="number">1</span>,</span><br><span class="line">                              is_p2p_allow_6ghz(wpa_s-&gt;global-&gt;p2p), <span class="number">0</span>,</span><br><span class="line">                              bssid, peer, pmkid, pmk, pmk_len, <span class="literal">false</span>,</span><br><span class="line">                              <span class="literal">true</span>);</span><br></pre></td></tr></table></figure>
+
+<p>因此 Invitation Request&#x2F;Response 并不是最终 Group 本身。它解决的是：</p>
+<ol>
+<li>双方是否同意恢复这条已保存关系；</li>
+<li>Group identity 是否匹配；</li>
+<li>本次重新启动使用什么 operating channel；</li>
+<li>成功后双方各自进入哪条本地 Group restart 路径。</li>
+</ol>
+<p>真正重新启动 GO 或 Client 的仍然是后面的 <code>wpas_p2p_group_add_persistent()</code>。</p>
+<hr>
+<p><a id="idx-group-add"></a></p>
+<h2 id="12-wpas-p2p-group-add-persistent-为什么能跳过-GO-Negotiation"><a href="#12-wpas-p2p-group-add-persistent-为什么能跳过-GO-Negotiation" class="headerlink" title="12. wpas_p2p_group_add_persistent() 为什么能跳过 GO Negotiation"></a>12. <code>wpas_p2p_group_add_persistent()</code> 为什么能跳过 GO Negotiation</h2><p>这是 Persistent Group reinvocation 最核心的一层。</p>
+<p>函数首先要求传入的 network 必须真的是 persistent storage entry：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ssid-&gt;disabled != <span class="number">2</span> || ssid-&gt;ssid == <span class="literal">NULL</span>)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br></pre></td></tr></table></figure>
+
+<p>然后停止 Discovery：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Make sure we are not running find during connection establishment */</span></span><br><span class="line">wpas_p2p_stop_find_oper(wpa_s);</span><br><span class="line"></span><br><span class="line">wpa_s-&gt;p2p_fallback_to_go_neg = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>接下来直接根据保存的 <code>ssid-&gt;mode</code> 分流。</p>
+<h3 id="原角色是-GO"><a href="#原角色是-GO" class="headerlink" title="原角色是 GO"></a>原角色是 GO</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ssid-&gt;mode == WPAS_MODE_P2P_GO) &#123;</span><br><span class="line">        <span class="keyword">if</span> (force_freq &gt; <span class="number">0</span>) &#123;</span><br><span class="line">                freq = wpas_p2p_select_go_freq(wpa_s, force_freq);</span><br><span class="line">                <span class="keyword">if</span> (freq &lt; <span class="number">0</span>)</span><br><span class="line">                        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">                wpa_s-&gt;p2p_go_no_pri_sec_switch = <span class="number">1</span>;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                freq = wpas_p2p_select_go_freq(wpa_s, neg_freq);</span><br><span class="line">                <span class="keyword">if</span> (freq &lt; <span class="number">0</span> ||</span><br><span class="line">                    (freq &gt; <span class="number">0</span> &amp;&amp; !freq_included(wpa_s, channels, freq)))</span><br><span class="line">                        freq = <span class="number">0</span>;</span><br><span class="line">        &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>后面把保存条目中的 PSK、passphrase 与 SSID 重新写入 GO 参数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">params.role_go = <span class="number">1</span>;</span><br><span class="line">params.psk_set = ssid-&gt;psk_set;</span><br><span class="line"><span class="keyword">if</span> (params.psk_set)</span><br><span class="line">        os_memcpy(params.psk, ssid-&gt;psk, <span class="keyword">sizeof</span>(params.psk));</span><br><span class="line"><span class="keyword">if</span> (ssid-&gt;passphrase) &#123;</span><br><span class="line">        <span class="keyword">if</span> (os_strlen(ssid-&gt;passphrase) &gt;= <span class="keyword">sizeof</span>(params.passphrase)) &#123;</span><br><span class="line">                wpa_printf(MSG_ERROR, <span class="string">&quot;P2P: Invalid passphrase in &quot;</span></span><br><span class="line">                           <span class="string">&quot;persistent group&quot;</span>);</span><br><span class="line">                <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        os_strlcpy(params.passphrase, ssid-&gt;passphrase,</span><br><span class="line">                   <span class="keyword">sizeof</span>(params.passphrase));</span><br><span class="line">&#125;</span><br><span class="line">os_memcpy(params.ssid, ssid-&gt;ssid, ssid-&gt;ssid_len);</span><br><span class="line">params.ssid_len = ssid-&gt;ssid_len;</span><br><span class="line">params.persistent_group = <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+
+<p>最后取得 Group Interface 并启动 GO：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">wpa_s = wpas_p2p_get_group_iface(wpa_s, addr_allocated, <span class="number">1</span>);</span><br><span class="line"><span class="keyword">if</span> (wpa_s == <span class="literal">NULL</span>)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">p2p_channels_to_freqs(channels, params.freq_list, P2P_MAX_CHANNELS);</span><br><span class="line"></span><br><span class="line">wpa_s-&gt;p2p_first_connection_timeout = connection_timeout;</span><br><span class="line">wpa_s-&gt;p2p_in_invitation = is_invitation;</span><br><span class="line">params.p2p2 = wpa_s-&gt;p2p2;</span><br><span class="line">wpas_start_go(wpa_s, &amp;params, <span class="number">0</span>, wpa_s-&gt;p2p_mode);</span><br></pre></td></tr></table></figure>
+
+<h3 id="原角色是-Client"><a href="#原角色是-Client" class="headerlink" title="原角色是 Client"></a>原角色是 Client</h3><p>另一条分支完全不创建 GO：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">else</span> <span class="keyword">if</span> (ssid-&gt;mode == WPAS_MODE_INFRA) &#123;</span><br><span class="line">        freq = neg_freq;</span><br></pre></td></tr></table></figure>
+
+<p>经典 Client 路径最终直接进入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> wpas_start_p2p_client(wpa_s, ssid, addr_allocated, freq,</span><br><span class="line">                             force_scan, retry_limit, go_bssid,</span><br><span class="line">                             wpa_s-&gt;p2p2, pmkid, pmk, pmk_len);</span><br></pre></td></tr></table></figure>
+
+<p>所以 reinvocation 的角色恢复本质是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">graph TD</span><br><span class="line">    A[&quot;saved persistent ssid&quot;] --&gt; B&#123;&quot;ssid-&gt;mode&quot;&#125;</span><br><span class="line">    B -- &quot;WPAS_MODE_P2P_GO&quot; --&gt; C[&quot;恢复 SSID / PSK / passphrase&quot;]</span><br><span class="line">    C --&gt; D[&quot;wpas_start_go()&quot;]</span><br><span class="line">    B -- &quot;WPAS_MODE_INFRA&quot; --&gt; E[&quot;wpas_start_p2p_client()&quot;]</span><br><span class="line">    D --&gt; F[&quot;Group runtime&quot;]</span><br><span class="line">    E --&gt; F</span><br></pre></td></tr></table></figure>
+
+<p>这里没有回到第 09 篇的 GO Negotiation 主线：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">p2p_connect()</span><br><span class="line">    ↓</span><br><span class="line">GO Negotiation Request / Response / Confirm</span><br></pre></td></tr></table></figure>
+
+<p>因为 GO&#x2F;Client 角色已经由 saved entry 确定。</p>
+<p>但“跳过 GO Negotiation”不等于“什么握手都不需要”。GO 仍然需要真正启动 AP&#x2F;GO，Client 仍然需要找到 GO、关联并完成安全数据连接；只是<strong>角色和持久化凭据不再通过一次全新的 Group Formation 协商重新生成</strong>。</p>
+<hr>
+<p><a id="idx-started"></a></p>
+<h2 id="13-为什么最终仍然会回到-P2P-GROUP-STARTED"><a href="#13-为什么最终仍然会回到-P2P-GROUP-STARTED" class="headerlink" title="13. 为什么最终仍然会回到 P2P-GROUP-STARTED"></a>13. 为什么最终仍然会回到 <code>P2P-GROUP-STARTED</code></h2><p><code>wpas_p2p_group_add_persistent()</code> 没有创造另一套独立的 Group runtime。</p>
+<p>它只是用 saved configuration 选择一条已有的运行路径：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">Persistent GO</span><br><span class="line">    ↓</span><br><span class="line">wpas_start_go()</span><br><span class="line">    ↓</span><br><span class="line">GO configured</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br></pre></td></tr></table></figure>
+
+<p>或者：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">Persistent Client</span><br><span class="line">    ↓</span><br><span class="line">wpas_start_p2p_client()</span><br><span class="line">    ↓</span><br><span class="line">scan / associate / security connection</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br></pre></td></tr></table></figure>
+
+<p>因此第 11 篇讲过的 Group Interface、IP Address Allocation&#x2F;DHCP 与数据面逻辑在 reinvocation 后仍然适用。</p>
+<p>Persistent Group 复用的是 Group identity、角色与安全配置；它不会让 IP 层脱离第 11 篇的网络配置流程。</p>
+<p>下面这张图把第 13 篇真正需要记住的关系压缩在一起：</p>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://img-home.csdnimg.cn/images/20230724024159.png?origin_url=images/01-persistent-reinvocation-flow.png&pos_id=img-KGcupjcV-1790667869683" alt="外链图片转存失败,源站可能有防盗链机制,建议将图片保存下来直接上传"></p>
+<p>图中最重要的不是 Invitation frame 自身，而是上下两端的 <code>saved persistent network</code> 都参与了重新建组：发起端用 network id 取出保存配置，接收端用本地保存条目确认 Group identity 和角色，成功后双方最终都汇入 <code>wpas_p2p_group_add_persistent()</code> 所连接的 GO&#x2F;Client 运行路径。</p>
+<hr>
+<p><a id="idx-compare"></a></p>
+<h2 id="14-P2P-INVITE-persistent-与-P2P-GROUP-ADD-persistent-不是同一件事"><a href="#14-P2P-INVITE-persistent-与-P2P-GROUP-ADD-persistent-不是同一件事" class="headerlink" title="14. P2P_INVITE persistent=&lt;id&gt; 与 P2P_GROUP_ADD persistent=&lt;id&gt; 不是同一件事"></a>14. <code>P2P_INVITE persistent=&lt;id&gt;</code> 与 <code>P2P_GROUP_ADD persistent=&lt;id&gt;</code> 不是同一件事</h2><p><code>README-P2P</code> 还提供：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">p2p_group_add persistent=&lt;network id&gt;</span><br></pre></td></tr></table></figure>
+
+<p>这条命令也能使用 Persistent Group entry，所以很容易和 <code>P2P_INVITE</code> 混淆。</p>
+<p><code>ctrl_iface.c</code> 中它最终也是调用：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">return</span> wpas_p2p_group_add_persistent(wpa_s, ssid, <span class="number">0</span>, freq, freq,</span><br><span class="line">                                     vht_center_freq2, ht40, vht,</span><br><span class="line">                                     vht_chwidth, he, edmg,</span><br><span class="line">                                     <span class="literal">NULL</span>, <span class="number">0</span>, <span class="number">0</span>, allow_6ghz, <span class="number">0</span>,</span><br><span class="line">                                     go_bssid, <span class="literal">NULL</span>, <span class="literal">NULL</span>, <span class="literal">NULL</span>, <span class="number">0</span>,</span><br><span class="line">                                     join, <span class="literal">false</span>);</span><br></pre></td></tr></table></figure>
+
+<p>但两条命令的前半段完全不同：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">P2P_INVITE persistent=&lt;id&gt;</span><br><span class="line">    ↓</span><br><span class="line">先和 peer 做 Invitation Request / Response</span><br><span class="line">    ↓</span><br><span class="line">双方确认 reinvocation</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br></pre></td></tr></table></figure>
+
+<p>而：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">P2P_GROUP_ADD persistent=&lt;id&gt;</span><br><span class="line">    ↓</span><br><span class="line">本地直接取 persistent entry</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br></pre></td></tr></table></figure>
+
+<p>所以 <code>P2P_GROUP_ADD persistent=&lt;id&gt;</code> 更接近“使用保存配置在本地重启这个 Group”；<code>P2P_INVITE persistent=&lt;id&gt;</code> 则是“通过 Wi-Fi Direct Invitation procedure 与 peer 协调 reinvocation”。</p>
+<p>二者共享后半段 Group restart 实现，不代表前半段协议语义相同。</p>
+<hr>
+<h2 id="15-P2P-INVITE-group-又是另一条-Invitation-路径"><a href="#15-P2P-INVITE-group-又是另一条-Invitation-路径" class="headerlink" title="15. P2P_INVITE group=&lt;ifname&gt; 又是另一条 Invitation 路径"></a>15. <code>P2P_INVITE group=&lt;ifname&gt;</code> 又是另一条 Invitation 路径</h2><p><code>p2p_ctrl_invite()</code> 的另一个分支是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">P2P_INVITE group=&lt;group ifname&gt; peer=&lt;addr&gt;</span><br></pre></td></tr></table></figure>
+
+<p>它调用：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">wpas_p2p_invite_group()</span><br></pre></td></tr></table></figure>
+
+<p>源码注释把它定义为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Invite to join an active group */</span></span><br></pre></td></tr></table></figure>
+
+<p>也就是说，此时 Group 已经处于运行态，Invitation 的目标是让新 peer 加入这个 active Group，而不是根据 <code>disabled == 2</code> 的保存条目把一个已经结束的 Group 重新唤起。</p>
+<p>可以直接按对象生命周期区分：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>Group 当前状态</th>
+<th>主要入口</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Persistent reinvocation</td>
+<td>active Group 已结束，saved entry 仍在</td>
+<td><code>P2P_INVITE persistent=&lt;id&gt;</code></td>
+</tr>
+<tr>
+<td>Active Group invitation</td>
+<td>Group 正在运行</td>
+<td><code>P2P_INVITE group=&lt;ifname&gt;</code></td>
+</tr>
+<tr>
+<td>本地直接恢复 persistent Group</td>
+<td>不先做 peer Invitation</td>
+<td><code>P2P_GROUP_ADD persistent=&lt;id&gt;</code></td>
+</tr>
+</tbody></table>
+<p>第 13 篇的主线只属于第一行。</p>
+<hr>
+<p><a id="idx-status"></a></p>
+<h2 id="16-三种-Invitation-结果怎样改变后续路径"><a href="#16-三种-Invitation-结果怎样改变后续路径" class="headerlink" title="16. 三种 Invitation 结果怎样改变后续路径"></a>16. 三种 Invitation 结果怎样改变后续路径</h2><p>沿当前代码可以把最重要的结果分成三类。</p>
+<h3 id="P2P-SC-SUCCESS"><a href="#P2P-SC-SUCCESS" class="headerlink" title="P2P_SC_SUCCESS"></a><code>P2P_SC_SUCCESS</code></h3><p>双方接受 reinvocation。</p>
+<p>发起端：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">P2P-INVITATION-RESULT status=0</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br></pre></td></tr></table></figure>
+
+<p>接收端：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">P2P-INVITATION-ACCEPTED</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br></pre></td></tr></table></figure>
+
+<p>然后双方各自按保存角色进入 GO&#x2F;Client 路径。</p>
+<h3 id="P2P-SC-FAIL-INFO-CURRENTLY-UNAVAILABLE"><a href="#P2P-SC-FAIL-INFO-CURRENTLY-UNAVAILABLE" class="headerlink" title="P2P_SC_FAIL_INFO_CURRENTLY_UNAVAILABLE"></a><code>P2P_SC_FAIL_INFO_CURRENTLY_UNAVAILABLE</code></h3><p>本端可能拥有匹配 persistent entry，但当前策略不允许自动接受，例如：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">persistent_reconnect = 0</span><br></pre></td></tr></table></figure>
+
+<p>且本次 Invitation 没有被预授权。</p>
+<p>这时接收端会发出：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">P2P-INVITATION-RECEIVED</span><br></pre></td></tr></table></figure>
+
+<p>把是否继续交给上层，而不是直接启动 Group。</p>
+<h3 id="P2P-SC-FAIL-UNKNOWN-GROUP"><a href="#P2P-SC-FAIL-UNKNOWN-GROUP" class="headerlink" title="P2P_SC_FAIL_UNKNOWN_GROUP"></a><code>P2P_SC_FAIL_UNKNOWN_GROUP</code></h3><p>本端找不到对应的 Persistent Group context。</p>
+<p>这表示双方对“这条旧 Group 关系是否还存在”的认知已经不一致。当前源码在部分失败路径中还会清理本地保存的 peer 信息，避免继续反复使用已经失效的关系。</p>
+<p>另外 channel intersection 失败也可能导致 Invitation 不能完成；因此“双方都有 persistent entry”只是 reinvocation 的必要条件之一，不代表任何时刻都一定能够重新建立 Group。</p>
+<hr>
+<h2 id="17-为什么-Reinvocation-不是“免认证快速连接”"><a href="#17-为什么-Reinvocation-不是“免认证快速连接”" class="headerlink" title="17. 为什么 Reinvocation 不是“免认证快速连接”"></a>17. 为什么 Reinvocation 不是“免认证快速连接”</h2><p>Persistent Group 最容易被误解成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">保存了 PSK</span><br><span class="line">    ↓</span><br><span class="line">下次直接开始传数据</span><br></pre></td></tr></table></figure>
+
+<p>源码并不是这样。</p>
+<p>它真正跳过的是第 09 篇中的“重新决定 GO&#x2F;Client 角色与重新协商 Group 参数”的部分。</p>
+<p>重新唤起时仍然要经历：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">找到 peer / 可用 channel</span><br><span class="line">    ↓</span><br><span class="line">Invitation Request / Response</span><br><span class="line">    ↓</span><br><span class="line">GO 真正启动 Group</span><br><span class="line">或</span><br><span class="line">Client 真正连接 GO</span><br><span class="line">    ↓</span><br><span class="line">安全连接进入可用状态</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br><span class="line">    ↓</span><br><span class="line">第 11 篇的 IP / DHCP / 数据面</span><br></pre></td></tr></table></figure>
+
+<p>所以更准确的表述是：</p>
+<blockquote>
+<p>Persistent Group 让双方复用以前已经建立的 Group identity、角色和安全配置，从而避免再次执行完整的 GO Negotiation 与重新生成一套 Group 凭据；它并不绕过无线关联、运行态安全连接和后续 IP 网络建立。</p>
+</blockquote>
+<hr>
+<p><a id="idx-full"></a></p>
+<h2 id="18-从第-09-篇到第-13-篇，Persistent-Group-的完整生命周期已经闭环"><a href="#18-从第-09-篇到第-13-篇，Persistent-Group-的完整生命周期已经闭环" class="headerlink" title="18. 从第 09 篇到第 13 篇，Persistent Group 的完整生命周期已经闭环"></a>18. 从第 09 篇到第 13 篇，Persistent Group 的完整生命周期已经闭环</h2><p>把前面几篇真正相关的部分串起来，现在可以看到 Persistent Group 其实跨越了两个 active Group 生命周期。</p>
+<p>第一次建立：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">第 09 篇</span><br><span class="line">P2P_CONNECT ... persistent</span><br><span class="line">    ↓</span><br><span class="line">GO Negotiation</span><br><span class="line">    ↓</span><br><span class="line">第 10 篇</span><br><span class="line">WPS / Group Formation / 4-Way Handshake</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_store_persistent_group()</span><br><span class="line">    ↓</span><br><span class="line">保存 persistent network entry</span><br></pre></td></tr></table></figure>
+
+<p>第一次运行和结束：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">第 11 篇</span><br><span class="line">Group Interface + IP + data path</span><br><span class="line">    ↓</span><br><span class="line">第 12 篇</span><br><span class="line">P2P_GROUP_REMOVE</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-REMOVED</span><br><span class="line">    ↓</span><br><span class="line">active Group 消失</span><br><span class="line">    ↓</span><br><span class="line">persistent entry 保留</span><br></pre></td></tr></table></figure>
+
+<p>第二次恢复：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">第 13 篇</span><br><span class="line">P2P_INVITE persistent=&lt;id&gt;</span><br><span class="line">    ↓</span><br><span class="line">Invitation Request / Response</span><br><span class="line">    ↓</span><br><span class="line">双方匹配 saved persistent entry</span><br><span class="line">    ↓</span><br><span class="line">wpas_p2p_group_add_persistent()</span><br><span class="line">    ↓</span><br><span class="line">按原角色启动 GO / Client</span><br><span class="line">    ↓</span><br><span class="line">P2P-GROUP-STARTED</span><br></pre></td></tr></table></figure>
+
+<p>这也把三个此前容易混在一起的对象彻底分开：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">P2P Device</span><br><span class="line">    长生命周期，用于 Discovery / P2P control</span><br><span class="line"></span><br><span class="line">Persistent network entry</span><br><span class="line">    跨 active Group 保存，记录 Group identity / role / credentials</span><br><span class="line"></span><br><span class="line">Active P2P Group</span><br><span class="line">    一次运行实例，有 Group Interface、GO/Client 状态和数据面</span><br></pre></td></tr></table></figure>
+
+<p>第 12 篇 teardown 只结束第三个对象；第 13 篇依靠第二个对象重新创建第三个对象，而第一个对象仍然承担整个 P2P subsystem 的发现和控制基础。</p>
+<p>到这里，系列已经形成两层完整闭环：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">04 → 05 → 06 → 07</span><br><span class="line">发现 → 首次建组 → 数据通信 → 结束 Group</span><br><span class="line"></span><br><span class="line">05 persistent → 07 teardown → 08 reinvocation</span><br><span class="line">首次保存持久关系 → active Group 结束 → 使用旧关系再次建组</span><br></pre></td></tr></table></figure>
+
+<h2 id="关键源码索引"><a href="#关键源码索引" class="headerlink" title="关键源码索引"></a>关键源码索引</h2><table>
+<thead>
+<tr>
+<th>关键对象 &#x2F; 符号</th>
+<th>本文位置</th>
+<th>Git 源码</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>wpas_p2p_store_persistent_group()</code></td>
+<td><a href="#idx-store">persistent entry 保存</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/p2p_supplicant.c#1184">hostap 2.12</a></td>
+</tr>
+<tr>
+<td><code>P2P_INVITE persistent=&lt;id&gt;</code></td>
+<td><a href="#idx-invite-entry">用户态入口</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/ctrl_iface.c#13853">hostap 2.12</a></td>
+</tr>
+<tr>
+<td><code>wpas_p2p_invite()</code></td>
+<td><a href="#idx-wpas-invite">supplicant Invitation</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/p2p_supplicant.c#9043">hostap 2.12</a></td>
+</tr>
+<tr>
+<td><code>p2p_invite()</code></td>
+<td><a href="#idx-core">P2P Core Invitation</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/src/p2p/p2p_invitation.c#837">hostap 2.12</a></td>
+</tr>
+<tr>
+<td><code>p2p_process_invitation_req()</code></td>
+<td><a href="#idx-receive">Invitation Request RX</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/src/p2p/p2p_invitation.c#227">hostap 2.12</a></td>
+</tr>
+<tr>
+<td><code>wpas_invitation_result()</code></td>
+<td><a href="#idx-result">Invitation result callback</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/p2p_supplicant.c#4139">hostap 2.12</a></td>
+</tr>
+<tr>
+<td><code>wpas_p2p_group_add_persistent()</code></td>
+<td><a href="#idx-group-add">persistent group restore</a></td>
+<td><a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/p2p_supplicant.c#8366">hostap 2.12</a></td>
+</tr>
+</tbody></table>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-hostap-2-12-Git：Persistent-Group-Invitation-implementation"><a href="#S1-hostap-2-12-Git：Persistent-Group-Invitation-implementation" class="headerlink" title="[S1] hostap 2.12 Git：Persistent Group &#x2F; Invitation implementation"></a>[S1] hostap 2.12 Git：Persistent Group &#x2F; Invitation implementation</h3><ul>
+<li>版本：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12"><code>hostap_2_12</code> &#x2F; <code>831364bf02710ad09c2f27d3efa92abeeb5634c0</code></a></li>
+<li>文件：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/ctrl_iface.c#13853">ctrl_iface.c</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/p2p_supplicant.c">p2p_supplicant.c</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/config_file.c">config_file.c</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/src/p2p/p2p_invitation.c">p2p_invitation.c</a></li>
+<li>使用位置：第 1～18 节</li>
+<li>支撑内容：persistent network entry、<code>disabled == 2</code>、Invitation Request&#x2F;Response callback、role restore 与 <code>wpas_p2p_group_add_persistent()</code>。</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-hostap-2-12-README-P2P"><a href="#S2-hostap-2-12-README-P2P" class="headerlink" title="[S2] hostap 2.12 README-P2P"></a>[S2] hostap 2.12 README-P2P</h3><ul>
+<li>来源：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://chromium.googlesource.com/chromiumos/third_party/hostap/+/refs/tags/hostap_2_12/wpa_supplicant/README-P2P">wpa_supplicant&#x2F;README-P2P</a></li>
+<li>使用位置：第 3～6、14～15 节</li>
+<li>支撑内容：<code>list_networks</code> 的 <code>[P2P-PERSISTENT]</code> 标记、<code>p2p_invite</code> 与 <code>p2p_group_add persistent=</code> 的 command semantics。</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-Wi-Fi-Direct-Specification-v1-9"><a href="#S3-Wi-Fi-Direct-Specification-v1-9" class="headerlink" title="[S3] Wi-Fi Direct Specification v1.9"></a>[S3] Wi-Fi Direct Specification v1.9</h3><ul>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://tools.barco.com/kb-downloads/4814/Wi-Fi_Direct_Specification_v1.pdf">Wi-Fi Direct Specification v1.9</a></li>
+<li>使用位置：第 1、4～13、16～18 节</li>
+<li>支撑内容：Persistent Group、Invitation 与 reinvocation 的协议语义和 status code 背景。</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/c949e3bb/">https://wdfk-prog.space/posts/c949e3bb/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/WIFI-Direct/">WIFI-Direct</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/09.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/5a8672d6/" title="14-kernel-wireless-control-path"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">14-kernel-wireless-control-path</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 源码分析（14）：控制面进入 Linux 内核后发生了什么——nl80211、cfg80211、mac80211 与管理帧 TX&#x2F;RX 摘要：从 P2P Listen 与 Action Frame 两条真实路径追到 Linux Wireless 内核和 mac80211_hwsim，补齐 Wi-Fi Direct 控制面进入驱动后的 TX&#x2F;RX 闭环。  [TOC] 第 01～13 篇已经把 Wi-Fi Direct 的主要用户态机制闭环：wpa_cli 命令进入 wpa_supplicant，P2P Core 完成 Discovery、GO Negotiation、Group Formation、Teardown 与 Persistent Group；eloop、radio work、callback 和状态机也已经有了明确的运行模型。 到这里还剩一个有意保留的黑盒： 1234567wpa_supplicant    ↓driver_nl80211    ↓Linux kernel / Wi-Fi driver    ↓802....</div></div></div></a><a class="pagination-related" href="/posts/9aa160b6/" title="12-group-teardown"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">12-group-teardown</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 源码分析（12）：P2P Group 如何结束——P2P_GROUP_REMOVE、资源释放与 P2P-GROUP-REMOVED 摘要：沿 P2P_GROUP_REMOVE 追踪 Group teardown：定位目标接口、安全延迟删除、P2P-GROUP-REMOVED、Group 资源与 IP&#x2F;DHCP 清理，并说明自动移除原因和 P2P Device 保留边界。   @[toc]第 11 篇已经把一次已建立的 P2P Group 追到真正可用的数据通路： 123456789P2P-GROUP-STARTED    ↓Group Interface    ↓GO / Client    ↓IP Address Allocation 或 DHCP    ↓TCP / UDP / ICMP  但 Group 不会永久存在。用户可以主动结束 Group，GO 也可能因为空闲超时、频率冲突、驱动资源变化等原因被系统自动终止；Client 还可能因为 GO 宣告 session 结束而退出。 第 12 篇只解决这一条新的生命周期主线： 1234...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/c260404/" title="01-wifi-direct-lab"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">01-wifi-direct-lab</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct教程 01：在 Ubuntu 搭建双 mac80211_hwsim + wpa_supplicant 2.12 摘要：Ubuntu Host 提供双 mac80211_hwsim radio，Docker 固化 wpa_supplicant 2.12 源码、构建依赖和 F12&#x2F;F5 调试环境，并说明 nl80211&#x2F;Netlink 边界。   @[toc]实验环境固定分成两层：Ubuntu Host 负责 Linux kernel 与 mac80211_hwsim，Docker 负责 wpa_supplicant 2.12 userspace、源码、编译依赖和调试工具。本文固定使用下面的工程路径： 12Ubuntu Host: /home/wdfk/share/wifi-directContainer:   /workspace  12345678910111213141516Ubuntu x86 VM│├── Linux kernel│   └── mac80211_hwsim radios=2│       ├── virtua...</div></div></div></a><a class="pagination-related" href="/posts/a2a54a10/" title="02-wpa-cli-to-p2p-find"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">02-wpa-cli-to-p2p-find</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct教程 02：从 wpa_cli main() 到 P2P_FIND——用源码注释追踪 CLI 控制命令发送 摘要：沿 wpa_supplicant 2.12 的 wpa_cli 实际执行路径，用连续源码片段和行内注释说明参数解析、eloop、UNIX datagram control socket、命令分发以及 P2P_FIND 的发送与同步回复。   @[toc]上一篇已经完成双 mac80211_hwsim radio、双 wpa_supplicant 2.12 实例和独立 control interface。本篇只追踪下面这条命令在 wpa_cli 进程内部如何执行： 1234sudo wpa_cli-2.12 \    -p /run/wpa_supplicant-p2p-a \    -i wlan0 \    p2p_find  目标是回答： 1234567891011Shell 输入 p2p_find    ↓wpa_cli 如何解析 -p / -i / p2p_find    ↓如何建立本地 control socket    ↓p2p...</div></div></div></a><a class="pagination-related" href="/posts/90da79e7/" title="05-ctrl-iface-eloop"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">05-ctrl-iface-eloop</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 05：control socket 与 eloop——P2P_FIND 怎样进入 wpa_supplicant 命令解析器 摘要：从 interface 初始化后的运行阶段追踪 AF_UNIX control socket、eloop 唤醒、recvfrom() 与 P2P_FIND 命令分发。   @[toc]wpa_supplicant 的 interface 初始化完成后，进程进入事件驱动阶段。本文只追踪 control server：配置中的 ctrl_interface 怎样变成 AF_UNIX&#x2F;SOCK_DGRAM socket，socket fd 怎样注册进 eloop，以及 wpa_cli 发出的 P2P_FIND datagram 怎样被唤醒、读取并进入 command parser。 ATTACH 也属于这个本地 control interface：它只让 control client 订阅异步事件，与空口 Probe Request、WPS IE、P2P IE 的发送无关。  1. control socket ...</div></div></div></a><a class="pagination-related" href="/posts/f713c98e/" title="03-wpa-supplicant-startup-driver"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">03-wpa-supplicant-startup-driver</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 03：wpa_supplicant 启动到 driver 就绪——main、Interface 对象与 nl80211 backend 摘要：从 main() 追踪 global&#x2F;eloop、interface 对象与 driver backend 选择，明确 nl80211 userspace backend 和 mac80211_hwsim 的层次。   @[toc]本文从 wpa_supplicant main() 开始，只追踪启动骨架：命令行参数如何形成 interface 配置，global&#x2F;eloop 如何建立，struct wpa_supplicant 怎样创建，以及 -Dnl80211 最终怎样选中 wpa_driver_nl80211_ops。 需要特别区分两层“driver”：driver_nl80211.c 是 wpa_supplicant userspace backend；当前实验真正运行在 Linux kernel 中的无线驱动是 mac80211_hwsim。  1. 从 wpa_supplic...</div></div></div></a><a class="pagination-related" href="/posts/3fe6d478/" title="07-p2p-first-scan"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">07-p2p-first-scan</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 07：第一次 P2P Scan 如何真正发出——WPS&#x2F;P2P IE、radio work 与 driver request 摘要：追踪 P2P Probe Request、radio work 与 nl80211 扫描提交，解释 no-CCK 速率约束及 Generic Netlink 的用户态&#x2F;内核态边界。   @[toc]P2P Core 已经请求第一轮 scan。本文从 wpas_p2p_scan() 开始，解释 P2P Wildcard SSID、WPS IE、P2P IE、频段分类与 radio work queue，并继续沿 wpa_drv_scan()、driver_nl80211_scan2()、wpa_driver_nl80211_scan() 追到 NL80211_CMD_TRIGGER_SCAN 被提交给 Linux kernel。进入 nl80211 backend 后，还需要回答两个直接影响调用链理解的问题：p2p_probe 为什么会禁用 2.4 GHz 的 802.11b legacy rat...</div></div></div></a><a class="pagination-related" href="/posts/33170b43/" title="04-interface-protocol-init"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-29</div><div class="info-item-2">04-interface-protocol-init</div></div><div class="info-2"><div class="info-item-1">  Wi-Fi Direct 教程 04：Interface 协议子系统初始化——WPA&#x2F;EAPOL、WPS、DPP&#x2F;NAN、GAS 与 P2P callback 摘要：继续 wpa_supplicant_init_iface()，解释 WPA&#x2F;EAPOL、WPS、DPP&#x2F;NAN、GAS&#x2F;ANQP 与 P2P Core callback 的初始化。   @[toc]driver backend 已经选定后，wpa_supplicant_init_iface() 还要继续建立真正的协议运行环境。本文集中解释这部分：association&#x2F;EAPOL 相关状态为什么要准备，L2&#x2F;TKIP&#x2F;PMKID 分别承担什么，WPS、DPP、NAN、EAP_PROXY、GAS&#x2F;ANQP 是什么，以及 wpas_p2p_init() 在哪里绑定 P2P Core callbacks。  1. wpa_supplicant_init_wpa()：建立 WPA&#x2F;RSN 状态机wpas_init_driv...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">626</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">66</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Wi-Fi-Direct-%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%EF%BC%8813%EF%BC%89%EF%BC%9APersistent-Group-%E5%A6%82%E4%BD%95%E5%86%8D%E6%AC%A1%E5%BB%BA%E7%AB%8B%E2%80%94%E2%80%94P2P-INVITE%E3%80%81Invitation-%E4%B8%8E-Reinvocation"><span class="toc-number">1.</span> <span class="toc-text">Wi-Fi Direct 源码分析（13）：Persistent Group 如何再次建立——P2P_INVITE、Invitation 与 Reinvocation</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-Persistent-Group-%E6%8C%81%E4%B9%85%E5%8C%96%E7%9A%84%E4%B8%8D%E6%98%AF%E2%80%9C%E6%AD%A3%E5%9C%A8%E8%BF%90%E8%A1%8C%E7%9A%84-Group%E2%80%9D"><span class="toc-number">1.1.</span> <span class="toc-text">1. Persistent Group 持久化的不是“正在运行的 Group”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-wpas-p2p-store-persistent-group-%E5%88%B0%E5%BA%95%E4%BF%9D%E5%AD%98%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.</span> <span class="toc-text">2. wpas_p2p_store_persistent_group() 到底保存了什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#disabled-2-%E4%B8%8D%E6%98%AF%E6%99%AE%E9%80%9A%E7%9A%84%E2%80%9C%E7%A6%81%E7%94%A8%E7%BD%91%E7%BB%9C%E2%80%9D"><span class="toc-number">1.2.1.</span> <span class="toc-text">disabled &#x3D;&#x3D; 2 不是普通的“禁用网络”</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E4%B8%BA%E4%BB%80%E4%B9%88-list-networks-%E8%83%BD%E7%9C%8B%E5%88%B0-P2P-PERSISTENT"><span class="toc-number">1.3.</span> <span class="toc-text">3. 为什么 list_networks 能看到 [P2P-PERSISTENT]</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-Reinvocation-%E7%9A%84%E7%9C%9F%E6%AD%A3%E7%94%A8%E6%88%B7%E6%80%81%E5%85%A5%E5%8F%A3%EF%BC%9AP2P-INVITE-persistent"><span class="toc-number">1.4.</span> <span class="toc-text">4. Reinvocation 的真正用户态入口：P2P_INVITE persistent&#x3D;&lt;id&gt;</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-wpas-p2p-invite-%E5%85%88%E4%BB%8E%E4%BF%9D%E5%AD%98%E9%85%8D%E7%BD%AE%E6%81%A2%E5%A4%8D%E8%A7%92%E8%89%B2"><span class="toc-number">1.5.</span> <span class="toc-text">5. wpas_p2p_invite() 先从保存配置恢复角色</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BF%9D%E5%AD%98%E6%9D%A1%E7%9B%AE%E8%A1%A8%E6%98%8E%E6%9C%AC%E7%AB%AF%E5%8E%9F%E6%9D%A5%E6%98%AF-GO"><span class="toc-number">1.5.1.</span> <span class="toc-text">保存条目表明本端原来是 GO</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BF%9D%E5%AD%98%E6%9D%A1%E7%9B%AE%E8%A1%A8%E6%98%8E%E6%9C%AC%E7%AB%AF%E5%8E%9F%E6%9D%A5%E6%98%AF-Client"><span class="toc-number">1.5.2.</span> <span class="toc-text">保存条目表明本端原来是 Client</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-Invitation-%E5%BC%80%E5%A7%8B%E5%89%8D%E4%BC%9A%E5%81%9C%E6%AD%A2-Find%EF%BC%8C%E5%B9%B6%E6%8A%8A%E6%B5%81%E7%A8%8B%E4%BA%A4%E7%BB%99-P2P-Core"><span class="toc-number">1.6.</span> <span class="toc-text">6. Invitation 开始前会停止 Find，并把流程交给 P2P Core</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E4%B8%BA%E4%BB%80%E4%B9%88-P2P-Core-%E8%83%BD%E5%9B%9E%E5%88%B0-wpas-invitation-process-%E5%92%8C-wpas-invitation-result"><span class="toc-number">1.7.</span> <span class="toc-text">7. 为什么 P2P Core 能回到 wpas_invitation_process() 和 wpas_invitation_result()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E6%8E%A5%E6%94%B6%E7%AB%AF%E6%94%B6%E5%88%B0-Invitation-Request-%E5%90%8E%EF%BC%8C%E5%85%88%E5%88%A4%E6%96%AD%E2%80%9C%E8%BF%99%E4%B8%AA-Group-%E6%88%91%E8%AE%A4%E4%B8%8D%E8%AE%A4%E8%AF%86%E2%80%9D"><span class="toc-number">1.8.</span> <span class="toc-text">8. 接收端收到 Invitation Request 后，先判断“这个 Group 我认不认识”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-persistent-reconnect-%E6%8E%A7%E5%88%B6%E7%9A%84%E6%98%AF%E2%80%9C%E6%98%AF%E5%90%A6%E8%87%AA%E5%8A%A8%E6%8E%A5%E5%8F%97%E2%80%9D%EF%BC%8C%E4%B8%8D%E6%98%AF%E2%80%9C%E6%9C%89%E6%B2%A1%E6%9C%89%E4%BF%9D%E5%AD%98%E9%85%8D%E7%BD%AE%E2%80%9D"><span class="toc-number">1.9.</span> <span class="toc-text">9. persistent_reconnect 控制的是“是否自动接受”，不是“有没有保存配置”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E6%8E%A5%E6%94%B6%E7%AB%AF%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BC%9A%E4%BA%A7%E7%94%9F-P2P-INVITATION-RECEIVED-%E6%88%96-P2P-INVITATION-ACCEPTED"><span class="toc-number">1.10.</span> <span class="toc-text">10. 接收端为什么会产生 P2P-INVITATION-RECEIVED 或 P2P-INVITATION-ACCEPTED</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B7%B2%E7%BB%8F%E6%8E%A5%E5%8F%97-Invitation"><span class="toc-number">1.10.1.</span> <span class="toc-text">已经接受 Invitation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BD%93%E5%89%8D%E4%B8%8D%E8%83%BD%E8%87%AA%E5%8A%A8%E6%8E%A5%E5%8F%97"><span class="toc-number">1.10.2.</span> <span class="toc-text">当前不能自动接受</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%8F%91%E8%B5%B7%E7%AB%AF%E6%94%B6%E5%88%B0-Invitation-Response-%E5%90%8E%E6%80%8E%E6%A0%B7%E7%BB%A7%E7%BB%AD"><span class="toc-number">1.11.</span> <span class="toc-text">11. 发起端收到 Invitation Response 后怎样继续</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-wpas-p2p-group-add-persistent-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%83%BD%E8%B7%B3%E8%BF%87-GO-Negotiation"><span class="toc-number">1.12.</span> <span class="toc-text">12. wpas_p2p_group_add_persistent() 为什么能跳过 GO Negotiation</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E8%A7%92%E8%89%B2%E6%98%AF-GO"><span class="toc-number">1.12.1.</span> <span class="toc-text">原角色是 GO</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E8%A7%92%E8%89%B2%E6%98%AF-Client"><span class="toc-number">1.12.2.</span> <span class="toc-text">原角色是 Client</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%80%E7%BB%88%E4%BB%8D%E7%84%B6%E4%BC%9A%E5%9B%9E%E5%88%B0-P2P-GROUP-STARTED"><span class="toc-number">1.13.</span> <span class="toc-text">13. 为什么最终仍然会回到 P2P-GROUP-STARTED</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-P2P-INVITE-persistent-%E4%B8%8E-P2P-GROUP-ADD-persistent-%E4%B8%8D%E6%98%AF%E5%90%8C%E4%B8%80%E4%BB%B6%E4%BA%8B"><span class="toc-number">1.14.</span> <span class="toc-text">14. P2P_INVITE persistent&#x3D;&lt;id&gt; 与 P2P_GROUP_ADD persistent&#x3D;&lt;id&gt; 不是同一件事</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-P2P-INVITE-group-%E5%8F%88%E6%98%AF%E5%8F%A6%E4%B8%80%E6%9D%A1-Invitation-%E8%B7%AF%E5%BE%84"><span class="toc-number">1.15.</span> <span class="toc-text">15. P2P_INVITE group&#x3D;&lt;ifname&gt; 又是另一条 Invitation 路径</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-%E4%B8%89%E7%A7%8D-Invitation-%E7%BB%93%E6%9E%9C%E6%80%8E%E6%A0%B7%E6%94%B9%E5%8F%98%E5%90%8E%E7%BB%AD%E8%B7%AF%E5%BE%84"><span class="toc-number">1.16.</span> <span class="toc-text">16. 三种 Invitation 结果怎样改变后续路径</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#P2P-SC-SUCCESS"><span class="toc-number">1.16.1.</span> <span class="toc-text">P2P_SC_SUCCESS</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#P2P-SC-FAIL-INFO-CURRENTLY-UNAVAILABLE"><span class="toc-number">1.16.2.</span> <span class="toc-text">P2P_SC_FAIL_INFO_CURRENTLY_UNAVAILABLE</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#P2P-SC-FAIL-UNKNOWN-GROUP"><span class="toc-number">1.16.3.</span> <span class="toc-text">P2P_SC_FAIL_UNKNOWN_GROUP</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-%E4%B8%BA%E4%BB%80%E4%B9%88-Reinvocation-%E4%B8%8D%E6%98%AF%E2%80%9C%E5%85%8D%E8%AE%A4%E8%AF%81%E5%BF%AB%E9%80%9F%E8%BF%9E%E6%8E%A5%E2%80%9D"><span class="toc-number">1.17.</span> <span class="toc-text">17. 为什么 Reinvocation 不是“免认证快速连接”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-%E4%BB%8E%E7%AC%AC-09-%E7%AF%87%E5%88%B0%E7%AC%AC-13-%E7%AF%87%EF%BC%8CPersistent-Group-%E7%9A%84%E5%AE%8C%E6%95%B4%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E5%B7%B2%E7%BB%8F%E9%97%AD%E7%8E%AF"><span class="toc-number">1.18.</span> <span class="toc-text">18. 从第 09 篇到第 13 篇，Persistent Group 的完整生命周期已经闭环</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E6%BA%90%E7%A0%81%E7%B4%A2%E5%BC%95"><span class="toc-number">1.19.</span> <span class="toc-text">关键源码索引</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.20.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-hostap-2-12-Git%EF%BC%9APersistent-Group-Invitation-implementation"><span class="toc-number">1.20.1.</span> <span class="toc-text">[S1] hostap 2.12 Git：Persistent Group &#x2F; Invitation implementation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-hostap-2-12-README-P2P"><span class="toc-number">1.20.2.</span> <span class="toc-text">[S2] hostap 2.12 README-P2P</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-Wi-Fi-Direct-Specification-v1-9"><span class="toc-number">1.20.3.</span> <span class="toc-text">[S3] Wi-Fi Direct Specification v1.9</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="WIFI-Direct学习笔记系列"/></a><div class="content"><a class="title" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列">WIFI-Direct学习笔记系列</a><time datetime="2026-09-29T08:10:22.663Z" title="更新于 2026-09-29 16:10:22">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873586f3/" title="readme"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="readme"/></a><div class="content"><a class="title" href="/posts/873586f3/" title="readme">readme</a><time datetime="2026-09-29T08:10:20.186Z" title="更新于 2026-09-29 16:10:20">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="15-group-data-plane-tx-rx"/></a><div class="content"><a class="title" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx">15-group-data-plane-tx-rx</a><time datetime="2026-09-29T08:09:58.233Z" title="更新于 2026-09-29 16:09:58">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/5a8672d6/" title="14-kernel-wireless-control-path"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="14-kernel-wireless-control-path"/></a><div class="content"><a class="title" href="/posts/5a8672d6/" title="14-kernel-wireless-control-path">14-kernel-wireless-control-path</a><time datetime="2026-09-29T08:09:51.750Z" title="更新于 2026-09-29 16:09:51">2026-09-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/c949e3bb/" title="13-persistent-group"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="13-persistent-group"/></a><div class="content"><a class="title" href="/posts/c949e3bb/" title="13-persistent-group">13-persistent-group</a><time datetime="2026-09-29T08:09:45.343Z" title="更新于 2026-09-29 16:09:45">2026-09-29</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/09.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '15d82c90364a27fc02c91d3ca61bb6ba'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":40}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43},{"name":"MCU","value":40}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":47}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"rt-thread","value":47}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"hpatch","children":[{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"},{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"}],"count":10,"path":"hpatch"},{"name":"linux","children":[{"name":"drivers","children":[{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"}],"count":60,"path":"linux/drivers"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"}],"count":63,"path":"linux/kernel"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
