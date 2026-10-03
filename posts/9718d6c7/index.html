@@ -1,0 +1,1453 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>19-checksum-hardware-offload | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="教程 19：从 ip_chksum_pseudo() 到 netif-&gt;linkoutput()——lwIP 校验和、Checksum Offload 与驱动边界 摘要：沿 UDP&#x2F;TCP 的真实收发路径解释 lwIP Internet checksum、pseudo header、per-netif checksum 控制，并明确软件校验和与 MAC&#x2F;DMA 硬件卸">
+<meta property="og:type" content="article">
+<meta property="og:title" content="19-checksum-hardware-offload">
+<meta property="og:url" content="https://wdfk-prog.space/posts/9718d6c7/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="教程 19：从 ip_chksum_pseudo() 到 netif-&gt;linkoutput()——lwIP 校验和、Checksum Offload 与驱动边界 摘要：沿 UDP&#x2F;TCP 的真实收发路径解释 lwIP Internet checksum、pseudo header、per-netif checksum 控制，并明确软件校验和与 MAC&#x2F;DMA 硬件卸">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/07.jpg">
+<meta property="article:published_time" content="2026-10-03T08:27:36.000Z">
+<meta property="article:modified_time" content="2026-10-03T08:27:40.102Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="LWIP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/07.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "19-checksum-hardware-offload",
+  "url": "https://wdfk-prog.space/posts/9718d6c7/",
+  "image": "https://wdfk-prog.space/images/covers/07.jpg",
+  "datePublished": "2026-10-03T08:27:36.000Z",
+  "dateModified": "2026-10-03T08:27:40.102Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/9718d6c7/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '19-checksum-hardware-offload',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/07.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">19-checksum-hardware-offload</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">19-checksum-hardware-offload<a class="post-edit-link" href="null_posts/LWIP/19-checksum-hardware-offload.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-03T08:27:36.000Z" title="发表于 2026-10-03 16:27:36">2026-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-03T08:27:40.102Z" title="更新于 2026-10-03 16:27:40">2026-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/LWIP/">LWIP</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">7.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>31分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/9718d6c7/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-10-03 16:27:40&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="教程-19：从-ip-chksum-pseudo-到-netif-linkoutput-——lwIP-校验和、Checksum-Offload-与驱动边界"><a href="#教程-19：从-ip-chksum-pseudo-到-netif-linkoutput-——lwIP-校验和、Checksum-Offload-与驱动边界" class="headerlink" title="教程 19：从 ip_chksum_pseudo() 到 netif-&gt;linkoutput()——lwIP 校验和、Checksum Offload 与驱动边界"></a>教程 19：从 <code>ip_chksum_pseudo()</code> 到 <code>netif-&gt;linkoutput()</code>——lwIP 校验和、Checksum Offload 与驱动边界</h1><blockquote>
+<p>摘要：沿 UDP&#x2F;TCP 的真实收发路径解释 lwIP Internet checksum、pseudo header、per-netif checksum 控制，并明确软件校验和与 MAC&#x2F;DMA 硬件卸载之间的驱动职责边界。</p>
+</blockquote>
+<p>[TOC]</p>
+<p>Checksum（校验和）用于让接收方发现报文头部或 payload 在传输过程中发生的比特错误。lwIP 的 IPv4、TCP、UDP、ICMP&#x2F;ICMPv6 会在不同层生成或验证各自的 Internet checksum；**Checksum Offload（校验和卸载）**则表示把其中一部分工作从 CPU&#x2F;lwIP Core 交给 NIC（Network Interface Controller，网卡控制器）、Ethernet MAC（Media Access Control，媒体访问控制）或 DMA（Direct Memory Access，直接内存访问）hardware 完成。</p>
+<p>标题中的 <code>ip_chksum_pseudo()</code> 对应 TCP&#x2F;UDP 等 upper-layer checksum 使用的 <strong>pseudo header（伪首部）</strong>：它不是线上真实存在的一段 header，而是把 source&#x2F;destination address、协议号&#x2F;Next Header 和长度等网络层（L3）信息加入 checksum 运算，从而让传输层（L4）checksum 也覆盖关键网络层端点信息。<a href="#source-s1">S1</a><a href="#source-s4">S4</a><a href="#source-s5">S5</a></p>
+<h2 id="0-进入源码前：先把软件-checksum-与-hardware-offload-分开"><a href="#0-进入源码前：先把软件-checksum-与-hardware-offload-分开" class="headerlink" title="0. 进入源码前：先把软件 checksum 与 hardware offload 分开"></a>0. 进入源码前：先把软件 checksum 与 hardware offload 分开</h2><p>推荐资料只承担标准算法和平台对照，不替代正文：</p>
+<ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1071.html">RFC 1071 — Computing the Internet Checksum</a>：用于 one’s-complement（反码）加法、carry folding（进位回卷）等算法基础。<a href="#source-s3">S3</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/opt_8h.html">lwIP <code>opt.h</code> checksum options</a>：确认 <code>CHECKSUM_GEN_*</code>、<code>CHECKSUM_CHECK_*</code>、<code>LWIP_CHECKSUM_CTRL_PER_NETIF</code> 等配置契约。<a href="#source-s8">S8</a> <a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/optimization.html">lwIP Optimization Hints</a> 还说明 <code>LWIP_CHKSUM</code> 可以由 Port 覆盖成更快的软件实现；这仍然是 software checksum optimization，不等于 MAC&#x2F;DMA hardware offload。<a href="#source-s9">S9</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://docs.kernel.org/networking/checksum-offloads.html">Linux Kernel — Checksum Offloads</a>：只作为“成熟 OS 如何定义 stack↔NIC offload contract”的对照，不把 Linux metadata 模型套到 lwIP。<a href="#source-s7">S7</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://wiki.wireshark.org/CaptureSetup/Offloading">Wireshark CaptureSetup — Offloading</a>：解释为什么 Host 本机 TX 抓包可能在硬件补齐 checksum 之前被捕获。<a href="#source-s6">S6</a></li>
+</ol>
+<p>Internet checksum 的核心运算可以先建立一个最小模型：把数据按 16-bit word 做 one’s-complement 加法，进位回卷到低位，最后按位取反。lwIP 的 <code>LWIP_CHKSUM()</code>&#x2F;<code>inet_chksum_*()</code> 会把这套运算应用到连续 buffer 或 <code>pbuf chain</code>（多个 <code>pbuf</code> 串成的报文缓冲链）；协议层再决定哪些 header&#x2F;payload 以及 pseudo header 要参与。<a href="#source-s1">S1</a><a href="#source-s3">S3</a></p>
+<p>同时必须区分三个层次：</p>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>谁负责</th>
+<th>关闭&#x2F;启用意味着什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>lwIP software checksum</td>
+<td>Core 中的 <code>CHECKSUM_GEN_*</code> &#x2F; <code>CHECKSUM_CHECK_*</code> 路径</td>
+<td>CPU 生成或验证 checksum</td>
+</tr>
+<tr>
+<td>optimized software routine</td>
+<td>Port 覆盖 <code>LWIP_CHKSUM</code></td>
+<td>仍然由 CPU&#x2F;软件计算，只是换成更快实现</td>
+</tr>
+<tr>
+<td>MAC&#x2F;DMA&#x2F;NIC hardware offload</td>
+<td>具体 Driver + hardware descriptor&#x2F;config</td>
+<td>Core 可以不生成，但 Driver 必须明确把工作交给硬件</td>
+</tr>
+</tbody></table>
+<p>因此最重要的工程边界是：<strong>把 <code>CHECKSUM_GEN_TCP</code> 或 <code>CHECKSUM_GEN_UDP</code> 设为 0，并不会自动打开任何硬件功能。</strong> 如果 Driver 没有同时设置对应 MAC&#x2F;DMA offload，线上报文就可能带着无效 checksum 离开设备。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>当前发送路径先看成：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;UDP/TCP builds L4 packet&quot;] --&gt; B[&quot;software checksum enabled?&quot;]</span><br><span class="line">    B --&gt;|yes| C[&quot;ip_chksum_pseudo() / inet_chksum&quot;]</span><br><span class="line">    B --&gt;|no| D[&quot;Driver must provide offload contract&quot;]</span><br><span class="line">    C --&gt; E[&quot;IP/Ethernet output&quot;]</span><br><span class="line">    D --&gt; E</span><br><span class="line">    E --&gt; F[&quot;netif-&gt;linkoutput()&quot;]</span><br><span class="line">    F --&gt; G[&quot;Port / Driver / MAC / DMA&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>下面先用当前 Unix TAP 配置回答“默认到底是谁算 checksum”，再沿 UDP&#x2F;TCP 的真实 TX&#x2F;RX 代码下钻。</p>
+<h2 id="1-当前-Unix-TAP-路径默认是谁算-checksum"><a href="#1-当前-Unix-TAP-路径默认是谁算-checksum" class="headerlink" title="1. 当前 Unix TAP 路径默认是谁算 checksum"></a>1. 当前 Unix TAP 路径默认是谁算 checksum</h2><p>先从配置事实开始。<code>src/include/lwip/opt.h</code> 与官方 Doxygen 都显示 <code>LWIP_CHECKSUM_CTRL_PER_NETIF</code> 默认是 <code>0</code>；<code>CHECKSUM_GEN_IP/UDP/TCP/ICMP/ICMP6</code> 与对应的 <code>CHECKSUM_CHECK_*</code> 默认都是 <code>1</code>。<a href="#source-s1">S1</a><a href="#source-s8">S8</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> !defined LWIP_CHECKSUM_CTRL_PER_NETIF || defined __DOXYGEN__</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_CHECKSUM_CTRL_PER_NETIF    0</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !defined CHECKSUM_GEN_UDP || defined __DOXYGEN__</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_UDP                1</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !defined CHECKSUM_GEN_TCP || defined __DOXYGEN__</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_TCP                1</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !defined CHECKSUM_CHECK_UDP || defined __DOXYGEN__</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_UDP              1</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> !defined CHECKSUM_CHECK_TCP || defined __DOXYGEN__</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_TCP              1</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>因此在没有 <code>lwipopts.h</code> 覆盖时，TX 由 lwIP Core 生成常用 L3&#x2F;L4 checksum，RX 也由 Core 验证。IPv4 header、ICMP&#x2F;ICMPv6 对应宏同样默认启用。<a href="#source-s1">S1</a></p>
+<p>这与当前 Unix TAP 的 Driver 行为匹配。<code>tapif_init()</code> 把 L2 发送函数绑定为 <code>low_level_output()</code>：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">tapif_init</span><span class="params">(<span class="keyword">struct</span> netif *netif)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">tapif</span> *<span class="title">tapif</span> =</span> (<span class="keyword">struct</span> tapif *)mem_malloc(<span class="keyword">sizeof</span>(<span class="keyword">struct</span> tapif));</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (tapif == <span class="literal">NULL</span>) &#123;</span><br><span class="line">    LWIP_DEBUGF(NETIF_DEBUG, (<span class="string">&quot;tapif_init: out of memory for tapif\n&quot;</span>));</span><br><span class="line">    <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">  &#125;</span><br><span class="line">  netif-&gt;state = tapif;</span><br><span class="line">  MIB2_INIT_NETIF(netif, snmp_ifType_other, <span class="number">100000000</span>);</span><br><span class="line"></span><br><span class="line">  netif-&gt;name[<span class="number">0</span>] = IFNAME0;</span><br><span class="line">  netif-&gt;name[<span class="number">1</span>] = IFNAME1;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IPV4</span></span><br><span class="line">  netif-&gt;output = etharp_output;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IPV6</span></span><br><span class="line">  netif-&gt;output_ip6 = ethip6_output;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">  netif-&gt;linkoutput = low_level_output;</span><br><span class="line">  netif-&gt;mtu = <span class="number">1500</span>;</span><br><span class="line"></span><br><span class="line">  low_level_init(netif);</span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里没有 DMA checksum insertion 或 checksum descriptor metadata。后文会回到这个 Port 边界。</p>
+<h2 id="2-从真实-UDP-发送入口继续：checksum-在进入-IP-层前完成"><a href="#2-从真实-UDP-发送入口继续：checksum-在进入-IP-层前完成" class="headerlink" title="2. 从真实 UDP 发送入口继续：checksum 在进入 IP 层前完成"></a>2. 从真实 UDP 发送入口继续：checksum 在进入 IP 层前完成</h2><p>Stage 5 已介绍 UDP Raw API，Stage 18 已完成 route 与 outgoing <code>netif</code>。这里从已经得到 <code>netif</code>、<code>src_ip</code>、<code>dst_ip</code> 的位置继续。</p>
+<p><code>udp_sendto_if_src()</code> 在默认未启用 checksum-on-copy 的路径下进入 <code>udp_sendto_if_src_chksum()</code> 的主体；该函数为 UDP header 准备空间，最终让 <code>q</code> 表示完整 UDP datagram。<a href="#source-s1">S1</a></p>
+<p>继续阅读 <code>udp_sendto_if_src_chksum()</code> 的 header 初始化：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">udphdr = (<span class="keyword">struct</span> udp_hdr *)q-&gt;payload;</span><br><span class="line">udphdr-&gt;src = lwip_htons(pcb-&gt;local_port);</span><br><span class="line">udphdr-&gt;dest = lwip_htons(dst_port);</span><br><span class="line"><span class="comment">/* in UDP, 0 checksum means &#x27;no checksum&#x27; */</span></span><br><span class="line">udphdr-&gt;chksum = <span class="number">0x0000</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这里的 <code>0</code> 首先是计算前初始值，后面的分支才决定是否跳过生成。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<p>继续阅读同一个函数的普通 UDP checksum 分支：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_GEN_UDP</span></span><br><span class="line">    IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_UDP) &#123;</span><br><span class="line">      <span class="comment">/* Checksum is mandatory over IPv6. */</span></span><br><span class="line">      <span class="keyword">if</span> (IP_IS_V6(dst_ip) || (pcb-&gt;flags &amp; UDP_FLAGS_NOCHKSUM) == <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="type">u16_t</span> udpchksum;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CHECKSUM_ON_COPY</span></span><br><span class="line">        <span class="keyword">if</span> (have_chksum) &#123;</span><br><span class="line">          <span class="type">u32_t</span> acc;</span><br><span class="line">          udpchksum = ip_chksum_pseudo_partial(q, IP_PROTO_UDP,</span><br><span class="line">                                               q-&gt;tot_len, UDP_HLEN, src_ip, dst_ip);</span><br><span class="line">          acc = udpchksum + (<span class="type">u16_t</span>)~(chksum);</span><br><span class="line">          udpchksum = FOLD_U32T(acc);</span><br><span class="line">        &#125; <span class="keyword">else</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">        &#123;</span><br><span class="line">          udpchksum = ip_chksum_pseudo(q, IP_PROTO_UDP, q-&gt;tot_len,</span><br><span class="line">                                       src_ip, dst_ip);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (udpchksum == <span class="number">0x0000</span>) &#123;</span><br><span class="line">          udpchksum = <span class="number">0xffff</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        udphdr-&gt;chksum = udpchksum;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>这里有三层关键控制：compile-time <code>CHECKSUM_GEN_UDP</code>、可选的 per-netif <code>NETIF_CHECKSUM_GEN_UDP</code>，以及 IPv4 可选 zero checksum 与 IPv6 默认 mandatory checksum 的协议差异。<a href="#source-s1">S1</a><a href="#source-s4">S4</a><a href="#source-s5">S5</a></p>
+<p>RFC 768 规定计算结果恰好为 <code>0x0000</code> 时线上写成 <code>0xffff</code>，因为全零在 IPv4 UDP 中表示发送端没有生成 checksum；当前 lwIP 代码与此直接对应。<a href="#source-s4">S4</a></p>
+<h2 id="3-ip-chksum-pseudo-为什么不是只算-UDP-TCP-header"><a href="#3-ip-chksum-pseudo-为什么不是只算-UDP-TCP-header" class="headerlink" title="3. ip_chksum_pseudo() 为什么不是只算 UDP&#x2F;TCP header"></a>3. <code>ip_chksum_pseudo()</code> 为什么不是只算 UDP&#x2F;TCP header</h2><p><code>udp_sendto_if_src_chksum()</code> 调用的是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ip_chksum_pseudo(q, IP_PROTO_UDP, q-&gt;tot_len, src_ip, dst_ip);</span><br></pre></td></tr></table></figure>
+
+<p>进入 <code>ip_chksum_pseudo()</code>。它先根据 destination 的地址族选择 IPv4 或 IPv6 pseudo checksum 实现：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">u16_t</span></span><br><span class="line"><span class="title function_">ip_chksum_pseudo</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="type">u8_t</span> proto, <span class="type">u16_t</span> proto_len,</span></span><br><span class="line"><span class="params">                 <span class="type">const</span> <span class="type">ip_addr_t</span> *src, <span class="type">const</span> <span class="type">ip_addr_t</span> *dest)</span></span><br><span class="line">&#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IPV6</span></span><br><span class="line">  <span class="keyword">if</span> (IP_IS_V6(dest)) &#123;</span><br><span class="line">    <span class="keyword">return</span> ip6_chksum_pseudo(p, proto, proto_len, ip_2_ip6(src), ip_2_ip6(dest));</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IPV4 &amp;&amp; LWIP_IPV6</span></span><br><span class="line">  <span class="keyword">else</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IPV4</span></span><br><span class="line">  &#123;</span><br><span class="line">    <span class="keyword">return</span> inet_chksum_pseudo(p, proto, proto_len, ip_2_ip4(src), ip_2_ip4(dest));</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>Pseudo header 不是线上 TCP&#x2F;UDP packet 前面真的多出一个 header。它是 <strong>仅参与 checksum 运算的逻辑输入</strong>。IPv4 UDP 的 pseudo header 至少包含：source address、destination address、protocol 和 UDP length；IPv6 则使用 128-bit source&#x2F;destination、upper-layer length 与 Next Header。<a href="#source-s4">S4</a><a href="#source-s5">S5</a></p>
+<p>它的作用不是代替 IP Header checksum，而是让 TCP&#x2F;UDP checksum 同时保护一部分关键 L3 端点信息。</p>
+<p>因此必须区分：</p>
+<table>
+<thead>
+<tr>
+<th>checksum</th>
+<th>实际覆盖范围</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>IPv4 Header checksum</td>
+<td>IPv4 header 本身</td>
+</tr>
+<tr>
+<td>TCP checksum</td>
+<td>pseudo header + TCP header + TCP payload</td>
+</tr>
+<tr>
+<td>UDP checksum</td>
+<td>pseudo header + UDP header + UDP payload</td>
+</tr>
+<tr>
+<td>ICMPv4 checksum</td>
+<td>ICMPv4 message，不带 IPv4 pseudo header</td>
+</tr>
+<tr>
+<td>ICMPv6 checksum</td>
+<td>IPv6 pseudo header + ICMPv6 message</td>
+</tr>
+</tbody></table>
+<p>IPv6 基本 header 本身没有类似 IPv4 Header checksum；RFC 8200 同时规定 UDP over IPv6 默认不能使用 zero checksum，并说明 ICMPv6 也把 IPv6 pseudo header 纳入 checksum。<a href="#source-s5">S5</a></p>
+<h2 id="4-进入-inet-chksum-pseudo-：先累计地址，再遍历整个-pbuf-chain"><a href="#4-进入-inet-chksum-pseudo-：先累计地址，再遍历整个-pbuf-chain" class="headerlink" title="4. 进入 inet_chksum_pseudo()：先累计地址，再遍历整个 pbuf chain"></a>4. 进入 <code>inet_chksum_pseudo()</code>：先累计地址，再遍历整个 <code>pbuf</code> chain</h2><p>IPv4 路径进入 <code>inet_chksum_pseudo()</code>。函数先把 source 和 destination IPv4 address 分成 16-bit word 加到 accumulator，然后进入公共的 <code>inet_cksum_pseudo_base()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">u16_t</span></span><br><span class="line"><span class="title function_">inet_chksum_pseudo</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="type">u8_t</span> proto, <span class="type">u16_t</span> proto_len,</span></span><br><span class="line"><span class="params">                   <span class="type">const</span> <span class="type">ip4_addr_t</span> *src, <span class="type">const</span> <span class="type">ip4_addr_t</span> *dest)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">u32_t</span> acc;</span><br><span class="line">  <span class="type">u32_t</span> addr;</span><br><span class="line"></span><br><span class="line">  addr = ip4_addr_get_u32(src);</span><br><span class="line">  acc = (addr &amp; <span class="number">0xffffU</span>L);</span><br><span class="line">  acc = (<span class="type">u32_t</span>)(acc + ((addr &gt;&gt; <span class="number">16</span>) &amp; <span class="number">0xffffU</span>L));</span><br><span class="line">  addr = ip4_addr_get_u32(dest);</span><br><span class="line">  acc = (<span class="type">u32_t</span>)(acc + (addr &amp; <span class="number">0xffffU</span>L));</span><br><span class="line">  acc = (<span class="type">u32_t</span>)(acc + ((addr &gt;&gt; <span class="number">16</span>) &amp; <span class="number">0xffffU</span>L));</span><br><span class="line">  acc = FOLD_U32T(acc);</span><br><span class="line">  acc = FOLD_U32T(acc);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">return</span> inet_cksum_pseudo_base(p, proto, proto_len, acc);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>进入 <code>inet_cksum_pseudo_base()</code>。这里是理解 <code>pbuf chain</code> 与 checksum 关系的关键位置：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">u16_t</span></span><br><span class="line"><span class="title function_">inet_cksum_pseudo_base</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="type">u8_t</span> proto, <span class="type">u16_t</span> proto_len, <span class="type">u32_t</span> acc)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">pbuf</span> *<span class="title">q</span>;</span></span><br><span class="line">  <span class="type">int</span> swapped = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">for</span> (q = p; q != <span class="literal">NULL</span>; q = q-&gt;next) &#123;</span><br><span class="line">    acc += LWIP_CHKSUM(q-&gt;payload, q-&gt;len);</span><br><span class="line">    acc = FOLD_U32T(acc);</span><br><span class="line">    <span class="keyword">if</span> (q-&gt;len % <span class="number">2</span> != <span class="number">0</span>) &#123;</span><br><span class="line">      swapped = !swapped;</span><br><span class="line">      acc = SWAP_BYTES_IN_WORD(acc);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (swapped) &#123;</span><br><span class="line">    acc = SWAP_BYTES_IN_WORD(acc);</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  acc += (<span class="type">u32_t</span>)lwip_htons((<span class="type">u16_t</span>)proto);</span><br><span class="line">  acc += (<span class="type">u32_t</span>)lwip_htons(proto_len);</span><br><span class="line"></span><br><span class="line">  acc = FOLD_U32T(acc);</span><br><span class="line">  acc = FOLD_U32T(acc);</span><br><span class="line">  <span class="keyword">return</span> (<span class="type">u16_t</span>)~(acc &amp; <span class="number">0xffffU</span>L);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这个循环说明 checksum 并不要求 UDP&#x2F;TCP packet 物理上是一块连续内存。Stage 3 的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">pbuf A -&gt; pbuf B -&gt; pbuf C</span><br></pre></td></tr></table></figure>
+
+<p>可以直接作为一个逻辑 datagram&#x2F;segment 被累计。</p>
+<p>真正需要处理的是 <strong>奇数字节边界</strong>。Internet checksum 把连续字节按 16 bit 成对解释；若某个 <code>pbuf</code> 恰好以奇数字节结束，下一个 <code>pbuf</code> 的首字节在逻辑报文里仍要与前一个尾字节配成同一个 16-bit word。所以当前实现通过 <code>swapped</code> 和 <code>SWAP_BYTES_IN_WORD()</code> 保持跨 <code>pbuf</code> 边界的字节配对关系。<a href="#source-s1">S1</a><a href="#source-s3">S3</a></p>
+<p>RFC 1071 描述的基础算法就是 16-bit one’s-complement addition，并要求 end-around carry；lwIP 的 <code>FOLD_U32T()</code> 正是在累计过程中把高位 carry 折回低 16 bit。<a href="#source-s3">S3</a></p>
+<h2 id="5-从-ip-chksum-pseudo-返回-UDP：checksum-完成后才进入-IP-输出"><a href="#5-从-ip-chksum-pseudo-返回-UDP：checksum-完成后才进入-IP-输出" class="headerlink" title="5. 从 ip_chksum_pseudo() 返回 UDP：checksum 完成后才进入 IP 输出"></a>5. 从 <code>ip_chksum_pseudo()</code> 返回 UDP：checksum 完成后才进入 IP 输出</h2><p><code>ip_chksum_pseudo()</code> 返回后，<code>udp_sendto_if_src_chksum()</code> 把结果写入 <code>udphdr-&gt;chksum</code>，然后继续走本来就存在的 IP 输出链：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">NETIF_SET_HINTS(netif, &amp;(pcb-&gt;netif_hints));</span><br><span class="line">err = ip_output_if_src(q, src_ip, dst_ip, ttl, pcb-&gt;tos, ip_proto, netif);</span><br><span class="line">NETIF_RESET_HINTS(netif);</span><br></pre></td></tr></table></figure>
+
+<p>因此当前默认 UDP TX 顺序是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;udp_sendto_if_src_chksum()&quot;] --&gt; B[&quot;构造 UDP header&quot;]</span><br><span class="line">    B --&gt; C[&quot;ip_chksum_pseudo()&quot;]</span><br><span class="line">    C --&gt; D[&quot;写 udphdr-&gt;chksum&quot;]</span><br><span class="line">    D --&gt; E[&quot;ip_output_if_src()&quot;]</span><br><span class="line">    E --&gt; F[&quot;IPv4 / IPv6 output&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>L4 checksum 在 IP header 构造之前已经可以完成，是因为 pseudo header 所需的 source&#x2F;destination&#x2F;protocol&#x2F;length 已经由上层参数确定，并不需要先把真实 IP header 放入 <code>pbuf</code>。</p>
+<h2 id="6-IPv4-Header-checksum-是另一条独立路径"><a href="#6-IPv4-Header-checksum-是另一条独立路径" class="headerlink" title="6. IPv4 Header checksum 是另一条独立路径"></a>6. IPv4 Header checksum 是另一条独立路径</h2><p>若 destination 是 IPv4，<code>ip_output_if_src()</code> 最终进入 <code>ip4_output_if()</code> 系列。继续阅读 IPv4 header 构造中的 checksum 分支：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_GEN_IP_INLINE</span></span><br><span class="line">    chk_sum += ip4_addr_get_u32(&amp;iphdr-&gt;src) &amp; <span class="number">0xFFFF</span>;</span><br><span class="line">    chk_sum += ip4_addr_get_u32(&amp;iphdr-&gt;src) &gt;&gt; <span class="number">16</span>;</span><br><span class="line">    chk_sum = (chk_sum &gt;&gt; <span class="number">16</span>) + (chk_sum &amp; <span class="number">0xFFFF</span>);</span><br><span class="line">    chk_sum = (chk_sum &gt;&gt; <span class="number">16</span>) + chk_sum;</span><br><span class="line">    chk_sum = ~chk_sum;</span><br><span class="line">    IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_IP) &#123;</span><br><span class="line">      iphdr-&gt;_chksum = (<span class="type">u16_t</span>)chk_sum;</span><br><span class="line">    &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CHECKSUM_CTRL_PER_NETIF</span></span><br><span class="line">    <span class="keyword">else</span> &#123;</span><br><span class="line">      IPH_CHKSUM_SET(iphdr, <span class="number">0</span>);</span><br><span class="line">    &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line">    IPH_CHKSUM_SET(iphdr, <span class="number">0</span>);</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_GEN_IP</span></span><br><span class="line">    IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_IP) &#123;</span><br><span class="line">      IPH_CHKSUM_SET(iphdr, inet_chksum(iphdr, ip_hlen));</span><br><span class="line">    &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>这条路径只处理 <strong>IPv4 header checksum</strong>。它不会替代已经在 UDP&#x2F;TCP 层生成的 transport checksum。</p>
+<p>因此一个 IPv4 UDP packet 在 software checksum 全开的情况下至少发生两次不同的 checksum 计算：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">UDP layer:</span><br><span class="line">pseudo header + UDP header + payload</span><br><span class="line"></span><br><span class="line">IPv4 layer:</span><br><span class="line">IPv4 header only</span><br></pre></td></tr></table></figure>
+
+<p>IPv6 不存在第二项 IPv6 base-header checksum，所以 IPv6 数据面更依赖 TCP&#x2F;UDP&#x2F;ICMPv6 自身的 end-to-end checksum。<a href="#source-s5">S5</a></p>
+<h2 id="7-TCP-TX-使用相同-pseudo-header-机制，但还要处理重传与-checksum-on-copy"><a href="#7-TCP-TX-使用相同-pseudo-header-机制，但还要处理重传与-checksum-on-copy" class="headerlink" title="7. TCP TX 使用相同 pseudo-header 机制，但还要处理重传与 checksum-on-copy"></a>7. TCP TX 使用相同 pseudo-header 机制，但还要处理重传与 checksum-on-copy</h2><p>TCP 发送最终在 <code>tcp_output_segment()</code> 中把 segment 送入 IP 层。进入该函数准备 checksum 的位置，代码先把 TCP checksum 字段清零：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">  seg-&gt;p-&gt;payload = seg-&gt;tcphdr;</span><br><span class="line"></span><br><span class="line">  seg-&gt;tcphdr-&gt;chksum = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> LWIP_HOOK_TCP_OUT_ADD_TCPOPTS</span></span><br><span class="line">  opts = LWIP_HOOK_TCP_OUT_ADD_TCPOPTS(seg-&gt;p, seg-&gt;tcphdr, pcb, opts);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>tcp_output_segment()</code> 的 checksum 分支：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_GEN_TCP</span></span><br><span class="line">  IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_TCP) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> TCP_CHECKSUM_ON_COPY</span></span><br><span class="line">    <span class="type">u32_t</span> acc;</span><br><span class="line">    <span class="keyword">if</span> ((seg-&gt;flags &amp; TF_SEG_DATA_CHECKSUMMED) == <span class="number">0</span>) &#123;</span><br><span class="line">      LWIP_ASSERT(<span class="string">&quot;data included but not checksummed&quot;</span>,</span><br><span class="line">                  seg-&gt;p-&gt;tot_len == TCPH_HDRLEN_BYTES(seg-&gt;tcphdr));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    acc = ip_chksum_pseudo_partial(seg-&gt;p, IP_PROTO_TCP,</span><br><span class="line">                                   seg-&gt;p-&gt;tot_len, TCPH_HDRLEN_BYTES(seg-&gt;tcphdr), &amp;pcb-&gt;local_ip, &amp;pcb-&gt;remote_ip);</span><br><span class="line">    <span class="keyword">if</span> (seg-&gt;chksum_swapped) &#123;</span><br><span class="line">      seg_chksum_was_swapped = <span class="number">1</span>;</span><br><span class="line">      seg-&gt;chksum = SWAP_BYTES_IN_WORD(seg-&gt;chksum);</span><br><span class="line">      seg-&gt;chksum_swapped = <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line">    acc = (<span class="type">u16_t</span>)~acc + seg-&gt;chksum;</span><br><span class="line">    seg-&gt;tcphdr-&gt;chksum = (<span class="type">u16_t</span>)~FOLD_U32T(acc);</span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line">    seg-&gt;tcphdr-&gt;chksum = ip_chksum_pseudo(seg-&gt;p, IP_PROTO_TCP,</span><br><span class="line">                                           seg-&gt;p-&gt;tot_len, &amp;pcb-&gt;local_ip, &amp;pcb-&gt;remote_ip);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>默认 <code>LWIP_CHECKSUM_ON_COPY</code> 是 <code>0</code>，因此普通路径直接对完整 <code>pbuf chain</code> 调用 <code>ip_chksum_pseudo()</code>。<a href="#source-s1">S1</a></p>
+<p>若项目启用 <code>LWIP_CHECKSUM_ON_COPY=1</code>，payload 在从 application buffer 拷进 <code>pbuf</code> 时就可以同步累计 checksum，最终发送只需要重新计算会变化的 TCP header&#x2F;pseudo-header 部分，再合并之前保存的 payload checksum。这是 <strong>software optimization</strong>，不是 hardware offload。<a href="#source-s1">S1</a></p>
+<p>两者不要混淆：</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>谁计算</th>
+<th>什么时候计算</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>普通 software checksum</td>
+<td>CPU &#x2F; lwIP</td>
+<td>packet 发送前完整遍历</td>
+</tr>
+<tr>
+<td><code>LWIP_CHECKSUM_ON_COPY</code></td>
+<td>CPU &#x2F; lwIP</td>
+<td>copy payload 时先累计一部分</td>
+</tr>
+<tr>
+<td>Hardware checksum offload</td>
+<td>MAC&#x2F;NIC&#x2F;DMA engine</td>
+<td>Driver 提交 descriptor 后、真正上线前</td>
+</tr>
+</tbody></table>
+<h2 id="8-TX-checksum-完成后，Core-最终只把-pbuf-交给-linkoutput"><a href="#8-TX-checksum-完成后，Core-最终只把-pbuf-交给-linkoutput" class="headerlink" title="8. TX checksum 完成后，Core 最终只把 pbuf 交给 linkoutput"></a>8. TX checksum 完成后，Core 最终只把 <code>pbuf</code> 交给 <code>linkoutput</code></h2><p>Stage 4 已经讲过 ARP，Stage 15 已经讲过 ND6。无论 IPv4 最终经 <code>etharp_output()</code>，还是 IPv6 经 <code>ethip6_output()</code>，解析出 destination MAC 后都会进入 <code>ethernet_output()</code>。</p>
+<p>进入 <code>ethernet_output()</code>。它增加 Ethernet header，填写 EtherType、source MAC 和 destination MAC，然后只有一个真正的发送调用：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">ethernet_output</span><span class="params">(<span class="keyword">struct</span> netif * netif, <span class="keyword">struct</span> pbuf * p,</span></span><br><span class="line"><span class="params">                <span class="type">const</span> <span class="keyword">struct</span> eth_addr * src, <span class="type">const</span> <span class="keyword">struct</span> eth_addr * dst,</span></span><br><span class="line"><span class="params">                <span class="type">u16_t</span> eth_type)</span> &#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">eth_hdr</span> *<span class="title">ethhdr</span>;</span></span><br><span class="line">  <span class="type">u16_t</span> eth_type_be = lwip_htons(eth_type);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (pbuf_add_header(p, SIZEOF_ETH_HDR) != <span class="number">0</span>) &#123;</span><br><span class="line">    <span class="keyword">goto</span> pbuf_header_failed;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  LWIP_ASSERT_CORE_LOCKED();</span><br><span class="line"></span><br><span class="line">  ethhdr = (<span class="keyword">struct</span> eth_hdr *)p-&gt;payload;</span><br><span class="line">  ethhdr-&gt;type = eth_type_be;</span><br><span class="line">  SMEMCPY(&amp;ethhdr-&gt;dest, dst, ETH_HWADDR_LEN);</span><br><span class="line">  SMEMCPY(&amp;ethhdr-&gt;src,  src, ETH_HWADDR_LEN);</span><br><span class="line"></span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;netif-&gt;hwaddr_len must be 6 for ethernet_output!&quot;</span>,</span><br><span class="line">              (netif-&gt;hwaddr_len == ETH_HWADDR_LEN));</span><br><span class="line"></span><br><span class="line">  <span class="keyword">return</span> netif-&gt;linkoutput(netif, p);</span><br><span class="line"></span><br><span class="line">pbuf_header_failed:</span><br><span class="line">  LINK_STATS_INC(link.lenerr);</span><br><span class="line">  <span class="keyword">return</span> ERR_BUF;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这一接口非常值得注意：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">netif-&gt;linkoutput(netif, p)</span><br></pre></td></tr></table></figure>
+
+<p>参数只有 <code>netif</code> 和 <code>pbuf</code>。当前通用 <code>struct pbuf</code> flags 里也没有一个标准化的“这个 packet 需要硬件从 offset X 计算 TCP checksum，并写到 offset Y”的 metadata。<a href="#source-s1">S1</a></p>
+<p>所以 <strong>lwIP Core 的 per-netif checksum 开关只负责决定 Core 自己算不算，不构成一个完整的通用硬件 descriptor 协议。</strong> 真正的硬件 offload 对接仍由具体 Port&#x2F;Driver 决定。</p>
+<h2 id="9-当前-Unix-tapif-为什么没有-hardware-checksum-offload"><a href="#9-当前-Unix-tapif-为什么没有-hardware-checksum-offload" class="headerlink" title="9. 当前 Unix tapif 为什么没有 hardware checksum offload"></a>9. 当前 Unix <code>tapif</code> 为什么没有 hardware checksum offload</h2><p>回到 <code>tapif_init()</code> 绑定的 <code>low_level_output()</code>。当前实现把整个 <code>pbuf chain</code> copy 到栈上的 <code>buf[1518]</code>，然后直接写入 TAP fd：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">low_level_output</span><span class="params">(<span class="keyword">struct</span> netif *netif, <span class="keyword">struct</span> pbuf *p)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">tapif</span> *<span class="title">tapif</span> =</span> (<span class="keyword">struct</span> tapif *)netif-&gt;state;</span><br><span class="line">  <span class="type">char</span> buf[<span class="number">1518</span>];</span><br><span class="line">  <span class="type">ssize_t</span> written;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (p-&gt;tot_len &gt; <span class="keyword">sizeof</span>(buf)) &#123;</span><br><span class="line">    MIB2_STATS_NETIF_INC(netif, ifoutdiscards);</span><br><span class="line">    perror(<span class="string">&quot;tapif: packet too large&quot;</span>);</span><br><span class="line">    <span class="keyword">return</span> ERR_IF;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  pbuf_copy_partial(p, buf, p-&gt;tot_len, <span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">  written = write(tapif-&gt;fd, buf, p-&gt;tot_len);</span><br><span class="line">  <span class="keyword">if</span> (written &lt; p-&gt;tot_len) &#123;</span><br><span class="line">    MIB2_STATS_NETIF_INC(netif, ifoutdiscards);</span><br><span class="line">    perror(<span class="string">&quot;tapif: write&quot;</span>);</span><br><span class="line">    <span class="keyword">return</span> ERR_IF;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    MIB2_STATS_NETIF_ADD(netif, ifoutoctets, (<span class="type">u32_t</span>)written);</span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里没有：</p>
+<ul>
+<li>DMA TX descriptor；</li>
+<li>checksum insertion bit；</li>
+<li>checksum start offset；</li>
+<li>checksum field offset；</li>
+<li>protocol-specific hardware command。</li>
+</ul>
+<p>因此当前实验路径的正确模型是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">lwIP Core</span><br><span class="line">  先生成正确 L3/L4 checksum</span><br><span class="line">        ↓</span><br><span class="line">etif-&gt;linkoutput()</span><br><span class="line">        ↓</span><br><span class="line">tapif low_level_output()</span><br><span class="line">        ↓</span><br><span class="line">pbuf_copy_partial()</span><br><span class="line">        ↓</span><br><span class="line">write(TAP fd)</span><br></pre></td></tr></table></figure>
+
+<p>如果仅仅把 <code>CHECKSUM_GEN_UDP/TCP/IP</code> 关掉，却不改变 <code>tapif</code>，得到的不是“开启硬件 offload”，而是 <strong>直接把未由软件完成的 checksum 字段交给 TAP</strong>。</p>
+<h2 id="10-LWIP-CHECKSUM-CTRL-PER-NETIF-解决的是“不同网卡能力不同”"><a href="#10-LWIP-CHECKSUM-CTRL-PER-NETIF-解决的是“不同网卡能力不同”" class="headerlink" title="10. LWIP_CHECKSUM_CTRL_PER_NETIF 解决的是“不同网卡能力不同”"></a>10. <code>LWIP_CHECKSUM_CTRL_PER_NETIF</code> 解决的是“不同网卡能力不同”</h2><p>Stage 18 引入 multi-netif 后，一个现实问题出现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">netif0 = MCU Ethernet MAC</span><br><span class="line">         支持部分 checksum offload</span><br><span class="line"></span><br><span class="line">netif1 = software/tunnel/TAP</span><br><span class="line">         没有 checksum offload</span><br></pre></td></tr></table></figure>
+
+<p>如果只靠全局：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_TCP 0</span></span><br></pre></td></tr></table></figure>
+
+<p>两张网卡都会失去 lwIP software TCP checksum。这不适合能力不同的接口。</p>
+<p>于是 <code>LWIP_CHECKSUM_CTRL_PER_NETIF</code> 提供 runtime <code>netif</code> 粒度控制。<code>netif.h</code> 定义了每种生成&#x2F;校验 bit：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CHECKSUM_CTRL_PER_NETIF</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_GEN_IP       0x0001</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_GEN_UDP      0x0002</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_GEN_TCP      0x0004</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_GEN_ICMP     0x0008</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_GEN_ICMP6    0x0010</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_CHECK_IP     0x0100</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_CHECK_UDP    0x0200</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_CHECK_TCP    0x0400</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_CHECK_ICMP   0x0800</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_CHECK_ICMP6  0x1000</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_ENABLE_ALL   0xFFFF</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_DISABLE_ALL  0x0000</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p><code>struct netif</code> 在该配置打开后才真正拥有 <code>chksum_flags</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CHECKSUM_CTRL_PER_NETIF</span></span><br><span class="line">  <span class="type">u16_t</span> chksum_flags;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>而 <code>netif_add()</code> 初始化接口时默认把这些 bit 全部打开：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">NETIF_SET_CHECKSUM_CTRL(netif, NETIF_CHECKSUM_ENABLE_ALL);</span><br><span class="line">netif-&gt;mtu = <span class="number">0</span>;</span><br><span class="line">netif-&gt;flags = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这表示：<strong>开启 per-netif 功能并不会自动关闭软件 checksum。</strong> Driver 或 board port 必须根据硬件实际能力主动修改 <code>chksum_flags</code>。</p>
+<h2 id="11-IF-NETIF-CHECKSUM-ENABLED-如何把-compile-time-与-runtime-两层合起来"><a href="#11-IF-NETIF-CHECKSUM-ENABLED-如何把-compile-time-与-runtime-两层合起来" class="headerlink" title="11. IF__NETIF_CHECKSUM_ENABLED() 如何把 compile-time 与 runtime 两层合起来"></a>11. <code>IF__NETIF_CHECKSUM_ENABLED()</code> 如何把 compile-time 与 runtime 两层合起来</h2><p>真正控制每个 checksum call site 的宏是：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CHECKSUM_CTRL_PER_NETIF</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_SET_CHECKSUM_CTRL(netif, chksumflags) do &#123; \</span></span><br><span class="line"><span class="meta">  (netif)-&gt;chksum_flags = chksumflags; &#125; while(0)</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_ENABLED(netif, chksumflag) (((netif) == NULL) || (((netif)-&gt;chksum_flags &amp; (chksumflag)) != 0))</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> IF__NETIF_CHECKSUM_ENABLED(netif, chksumflag) <span class="keyword">if</span> NETIF_CHECKSUM_ENABLED(netif, chksumflag)</span></span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_CHECKSUM_ENABLED(netif, chksumflag) 0</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> NETIF_SET_CHECKSUM_CTRL(netif, chksumflags)</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> IF__NETIF_CHECKSUM_ENABLED(netif, chksumflag)</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>它产生两种不同编译结果。</p>
+<h3 id="per-netif-关闭"><a href="#per-netif-关闭" class="headerlink" title="per-netif 关闭"></a>per-netif 关闭</h3><p>例如：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_GEN_TCP</span></span><br><span class="line">  IF__NETIF_CHECKSUM_ENABLED(netif, NETIF_CHECKSUM_GEN_TCP) &#123;</span><br><span class="line">    seg-&gt;tcphdr-&gt;chksum = ip_chksum_pseudo(...);</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>当 <code>LWIP_CHECKSUM_CTRL_PER_NETIF=0</code> 时，<code>IF__NETIF_CHECKSUM_ENABLED()</code> 展开为空，所以只要 <code>CHECKSUM_GEN_TCP=1</code>，内部 block 就无条件执行。</p>
+<h3 id="per-netif-开启"><a href="#per-netif-开启" class="headerlink" title="per-netif 开启"></a>per-netif 开启</h3><p>当 <code>LWIP_CHECKSUM_CTRL_PER_NETIF=1</code> 时，它真正展开成 <code>if (...)</code>，同一个 Core binary 才能对不同 <code>netif</code> 采用不同策略。</p>
+<p><code>opt.h</code> 还明确要求：启用 per-netif 控制时，相应 <code>CHECKSUM_GEN_*</code> &#x2F; <code>CHECKSUM_CHECK_*</code> compile-time 选项本身必须保持启用，否则那段代码已经被预处理器整个裁掉，runtime bit 没有机会重新打开。<a href="#source-s1">S1</a></p>
+<h2 id="12-一个典型的“部分硬件-offload”配置应该怎样理解"><a href="#12-一个典型的“部分硬件-offload”配置应该怎样理解" class="headerlink" title="12. 一个典型的“部分硬件 offload”配置应该怎样理解"></a>12. 一个典型的“部分硬件 offload”配置应该怎样理解</h2><p>下面不是当前 Unix Port 的上游代码，而是 <strong>Driver 集成示意</strong>。假设某 MCU Ethernet MAC 只负责 TCP&#x2F;UDP TX checksum 和 TCP&#x2F;UDP RX verify，但 IPv4 header checksum、ICMP&#x2F;ICMPv6 仍让 lwIP 软件处理。</p>
+<p>首先保留对应 Core 代码，并打开 per-netif 控制：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_CHECKSUM_CTRL_PER_NETIF 1</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_IP      1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_UDP     1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_TCP     1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_ICMP    1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_GEN_ICMP6   1</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_IP    1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_UDP   1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_TCP   1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_ICMP  1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHECKSUM_CHECK_ICMP6 1</span></span><br></pre></td></tr></table></figure>
+
+<p>随后在该硬件 <code>netif</code> 初始化完成时，才根据真实能力关闭 lwIP 的对应 software bit。示意代码如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">u16_t</span> checksum_flags;</span><br><span class="line"></span><br><span class="line">checksum_flags = NETIF_CHECKSUM_ENABLE_ALL;</span><br><span class="line">checksum_flags &amp;= (<span class="type">u16_t</span>)~NETIF_CHECKSUM_GEN_UDP;</span><br><span class="line">checksum_flags &amp;= (<span class="type">u16_t</span>)~NETIF_CHECKSUM_GEN_TCP;</span><br><span class="line">checksum_flags &amp;= (<span class="type">u16_t</span>)~NETIF_CHECKSUM_CHECK_UDP;</span><br><span class="line">checksum_flags &amp;= (<span class="type">u16_t</span>)~NETIF_CHECKSUM_CHECK_TCP;</span><br><span class="line">NETIF_SET_CHECKSUM_CTRL(netif, checksum_flags);</span><br></pre></td></tr></table></figure>
+
+<p>此时只建立了一个 <strong>Core contract</strong>：这张 <code>netif</code> 的 TCP&#x2F;UDP checksum 不再由 lwIP Core 生成&#x2F;验证。</p>
+<p>还必须同时存在 <strong>Driver&#x2F;hardware contract</strong>：Driver 要把相应生成&#x2F;验证任务明确配置给 MAC&#x2F;DMA，并正确解释 TX descriptor 或 RX status。前者不能替代后者。</p>
+<h2 id="13-TX-hardware-offload-真正发生在-lwIP-Core-之后"><a href="#13-TX-hardware-offload-真正发生在-lwIP-Core-之后" class="headerlink" title="13. TX hardware offload 真正发生在 lwIP Core 之后"></a>13. TX hardware offload 真正发生在 lwIP Core 之后</h2><p>典型 MCU Ethernet TX 可以抽象成：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;lwIP 构造 TCP/UDP/IP/Ethernet headers&quot;] --&gt; B[&quot;netif-&gt;linkoutput(netif, p)&quot;]</span><br><span class="line">    B --&gt; C[&quot;Driver 准备 DMA descriptor&quot;]</span><br><span class="line">    C --&gt; D[&quot;设置硬件 checksum insertion 模式&quot;]</span><br><span class="line">    D --&gt; E[&quot;DMA 读取 frame&quot;]</span><br><span class="line">    E --&gt; F[&quot;MAC checksum engine 写入 checksum&quot;]</span><br><span class="line">    F --&gt; G[&quot;PHY / wire&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>图中 <code>C～F</code> 不属于 lwIP Core 的通用实现。不同 MCU&#x2F;SoC 可能要求：</p>
+<ul>
+<li>Driver 设置 descriptor bit；</li>
+<li>Driver 指定 L3&#x2F;L4 类型；</li>
+<li>Driver 指定 checksum 起始位置；</li>
+<li>Driver 只支持 IPv4 TCP&#x2F;UDP，不支持 ICMP；</li>
+<li>Driver 对 IPv6 extension header 有额外限制；</li>
+<li>hardware 完全不支持 chained buffer，Driver 必须先线性化。</li>
+</ul>
+<p>这些都是芯片&#x2F;Driver 契约，不能从 <code>CHECKSUM_GEN_TCP=0</code> 推导出来。</p>
+<p>这也是为什么当前通用 <code>netif-&gt;linkoutput(netif, p)</code> 只能视为 <strong>Port ownership boundary</strong>：Core 把最终 L2 frame 交出去，具体怎样映射成 DMA descriptor 由 Port 决定。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<h2 id="14-RX-方向先看-IPv4-Header-checksum"><a href="#14-RX-方向先看-IPv4-Header-checksum" class="headerlink" title="14. RX 方向先看 IPv4 Header checksum"></a>14. RX 方向先看 IPv4 Header checksum</h2><p>接收路径反过来。Driver 构造 <code>pbuf</code> 后，经 <code>netif-&gt;input()</code> 进入 <code>ethernet_input()</code>，再进入 <code>ip4_input()</code>。</p>
+<p>继续阅读 <code>ip4_input()</code> 的 IPv4 header verify：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_CHECK_IP</span></span><br><span class="line">  IF__NETIF_CHECKSUM_ENABLED(inp, NETIF_CHECKSUM_CHECK_IP) &#123;</span><br><span class="line">    <span class="keyword">if</span> (inet_chksum(iphdr, iphdr_hlen) != <span class="number">0</span>) &#123;</span><br><span class="line"></span><br><span class="line">      LWIP_DEBUGF(IP_DEBUG | LWIP_DBG_LEVEL_SERIOUS,</span><br><span class="line">                  (<span class="string">&quot;Checksum (0x%&quot;</span>X16_F<span class="string">&quot;) failed, IP packet dropped.\n&quot;</span>, inet_chksum(iphdr, iphdr_hlen)));</span><br><span class="line">      ip4_debug_print(p);</span><br><span class="line">      pbuf_free(p);</span><br><span class="line">      IP_STATS_INC(ip.chkerr);</span><br><span class="line">      IP_STATS_INC(ip.drop);</span><br><span class="line">      MIB2_STATS_INC(mib2.ipinhdrerrors);</span><br><span class="line">      <span class="keyword">return</span> ERR_OK;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>若软件验证启用，坏 IPv4 header 在进入 UDP&#x2F;TCP 之前就被丢弃。</p>
+<p>若某硬件已经可靠验证 IPv4 header checksum，并且 Port 为这张 <code>netif</code> 关闭 <code>NETIF_CHECKSUM_CHECK_IP</code>，Core 就跳过这一步。</p>
+<h2 id="15-进入-udp-input-：IPv4-zero-checksum-与真正的-checksum-error-不相同"><a href="#15-进入-udp-input-：IPv4-zero-checksum-与真正的-checksum-error-不相同" class="headerlink" title="15. 进入 udp_input()：IPv4 zero checksum 与真正的 checksum error 不相同"></a>15. 进入 <code>udp_input()</code>：IPv4 zero checksum 与真正的 checksum error 不相同</h2><p>UDP RX 进入 <code>udp_input()</code> 后，只有 packet 确认是本机接收对象，才进入 checksum verify。继续阅读该分支：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_CHECK_UDP</span></span><br><span class="line">    IF__NETIF_CHECKSUM_ENABLED(inp, NETIF_CHECKSUM_CHECK_UDP) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_UDPLITE</span></span><br><span class="line">      <span class="keyword">if</span> (ip_current_header_proto() == IP_PROTO_UDPLITE) &#123;</span><br><span class="line">        <span class="type">u16_t</span> chklen = lwip_ntohs(udphdr-&gt;len);</span><br><span class="line">        <span class="keyword">if</span> (chklen &lt; <span class="keyword">sizeof</span>(<span class="keyword">struct</span> udp_hdr)) &#123;</span><br><span class="line">          <span class="keyword">if</span> (chklen == <span class="number">0</span>) &#123;</span><br><span class="line">            chklen = p-&gt;tot_len;</span><br><span class="line">          &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="keyword">goto</span> chkerr;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (ip_chksum_pseudo_partial(p, IP_PROTO_UDPLITE,</span><br><span class="line">                                     p-&gt;tot_len, chklen,</span><br><span class="line">                                     ip_current_src_addr(), ip_current_dest_addr()) != <span class="number">0</span>) &#123;</span><br><span class="line">          <span class="keyword">goto</span> chkerr;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; <span class="keyword">else</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">      &#123;</span><br><span class="line">        <span class="keyword">if</span> (udphdr-&gt;chksum != <span class="number">0</span>) &#123;</span><br><span class="line">          <span class="keyword">if</span> (ip_chksum_pseudo(p, IP_PROTO_UDP, p-&gt;tot_len,</span><br><span class="line">                               ip_current_src_addr(),</span><br><span class="line">                               ip_current_dest_addr()) != <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="keyword">goto</span> chkerr;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>在普通 IPv4 UDP 中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">udphdr-&gt;chksum == 0</span><br></pre></td></tr></table></figure>
+
+<p>表示发送端没有提供 checksum，不等于“checksum 算出来恰好是 0”。后者在线上要编码成 <code>0xffff</code>。<a href="#source-s4">S4</a></p>
+<p>IPv6 默认规则不同：zero UDP checksum 不能作为普通数据报的默认合法形式。<a href="#source-s5">S5</a></p>
+<h2 id="16-进入-tcp-input-：软件-RX-verify-失败后不会继续状态机"><a href="#16-进入-tcp-input-：软件-RX-verify-失败后不会继续状态机" class="headerlink" title="16. 进入 tcp_input()：软件 RX verify 失败后不会继续状态机"></a>16. 进入 <code>tcp_input()</code>：软件 RX verify 失败后不会继续状态机</h2><p>TCP RX 的对应逻辑在 <code>tcp_input()</code>。函数在解析 TCP header length、查 PCB、推进状态机之前先验证 checksum：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_CHECK_TCP</span></span><br><span class="line">  IF__NETIF_CHECKSUM_ENABLED(inp, NETIF_CHECKSUM_CHECK_TCP) &#123;</span><br><span class="line">    <span class="type">u16_t</span> chksum = ip_chksum_pseudo(p, IP_PROTO_TCP, p-&gt;tot_len,</span><br><span class="line">                                    ip_current_src_addr(), ip_current_dest_addr());</span><br><span class="line">    <span class="keyword">if</span> (chksum != <span class="number">0</span>) &#123;</span><br><span class="line">      LWIP_DEBUGF(TCP_INPUT_DEBUG, (<span class="string">&quot;tcp_input: packet discarded due to failing checksum 0x%04&quot;</span>X16_F<span class="string">&quot;\n&quot;</span>,</span><br><span class="line">                                    chksum));</span><br><span class="line">      tcp_debug_print(tcphdr);</span><br><span class="line">      TCP_STATS_INC(tcp.chkerr);</span><br><span class="line">      <span class="keyword">goto</span> dropped;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>所以 software checksum 验证属于 TCP 状态机之前的输入完整性门槛。坏 checksum packet 不会继续进入 <code>tcp_process()</code>、ACK handling 或 receive queue。</p>
+<p>这也意味着，如果关闭 <code>NETIF_CHECKSUM_CHECK_TCP</code>：</p>
+<blockquote>
+<p>Core 不再对这一张 <code>netif</code> 的 TCP packet 做第二次软件确认。</p>
+</blockquote>
+<p>因此 Driver&#x2F;硬件接管不能只是“硬件有 checksum 状态位”，还必须把这个状态可靠地转成 Port 的接收策略。</p>
+<h2 id="17-lwIP-当前-pbuf-没有通用的-RX-checksum-valid-状态"><a href="#17-lwIP-当前-pbuf-没有通用的-RX-checksum-valid-状态" class="headerlink" title="17. lwIP 当前 pbuf 没有通用的 RX checksum-valid 状态"></a>17. lwIP 当前 <code>pbuf</code> 没有通用的 RX checksum-valid 状态</h2><p>查看当前 <code>pbuf.h</code>，通用 flags 包括 <code>PBUF_FLAG_PUSH</code>、<code>PBUF_FLAG_IS_CUSTOM</code>、multicast&#x2F;broadcast 以及 TCP FIN 等，但没有类似 Linux <code>skb-&gt;ip_summed</code> 的标准 per-packet checksum-valid metadata。<a href="#source-s1">S1</a></p>
+<p>因此在当前通用接口中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">硬件 RX checksum result</span><br><span class="line">        ↓</span><br><span class="line">Driver 自己解释 descriptor status</span><br><span class="line">        ↓</span><br><span class="line">Driver 决定 packet 是否可交给 lwIP</span><br><span class="line">        ↓</span><br><span class="line">若 NETIF_CHECKSUM_CHECK_* 已关闭</span><br><span class="line">Core 不再重算</span><br></pre></td></tr></table></figure>
+
+<p>这不是说所有 Driver 都必须采用“坏包在 Driver 直接 drop”这一种策略，而是说：<strong>一旦关闭 Core software verify，就必须由 Port 自己定义并保证等价的错误处理契约。</strong> lwIP 通用 <code>pbuf</code> 不会替 Driver 保存一个跨平台统一的硬件校验结果。</p>
+<p>Linux 的 <code>sk_buff</code> 有自己的一套 <code>ip_summed</code>&#x2F;<code>CHECKSUM_PARTIAL</code> 等 offload contract，但那是 Linux network stack 与 Linux driver 之间的接口，不能直接套成 lwIP <code>pbuf</code> 语义。<a href="#source-s7">S7</a></p>
+<h2 id="18-TX-generation-与-RX-verification-必须分别建立-contract"><a href="#18-TX-generation-与-RX-verification-必须分别建立-contract" class="headerlink" title="18. TX generation 与 RX verification 必须分别建立 contract"></a>18. TX generation 与 RX verification 必须分别建立 contract</h2><p>硬件 TX generation 与 RX verification 是两套独立能力；是否关闭某个 <code>GEN_*</code> 或 <code>CHECK_*</code>，必须分别有对应 MAC&#x2F;DMA capability 与 Driver descriptor&#x2F;status 处理作为证据。<code>LWIP_CHECKSUM_CTRL_PER_NETIF</code> 只提供 Core 侧开关，不替硬件声明能力。<a href="#source-s1">S1</a><a href="#source-s8">S8</a></p>
+<h2 id="19-Ethernet-FCS-不是这里的-Internet-checksum"><a href="#19-Ethernet-FCS-不是这里的-Internet-checksum" class="headerlink" title="19. Ethernet FCS 不是这里的 Internet checksum"></a>19. Ethernet FCS 不是这里的 Internet checksum</h2><p>FCS（Frame Check Sequence，帧校验序列）是 Ethernet 二层（L2）frame trailer，通常使用 CRC-32 由 MAC 生成&#x2F;校验；它与 IPv4&#x2F;TCP&#x2F;UDP 使用的 Internet checksum 不是同一种机制。即使 Stage 0 已经介绍过 FCS，这里仍需要重新做最小消歧，因为“网卡硬件校验”很容易把两类机制混在一起。</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>所在层</th>
+<th>典型算法</th>
+<th>lwIP <code>pbuf</code> 是否通常携带</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>IPv4 Header checksum</td>
+<td>L3</td>
+<td>one’s-complement</td>
+<td>是，位于 IPv4 header</td>
+</tr>
+<tr>
+<td>TCP&#x2F;UDP checksum</td>
+<td>L4</td>
+<td>pseudo header + one’s-complement</td>
+<td>是，位于 TCP&#x2F;UDP header</td>
+</tr>
+<tr>
+<td>ICMP&#x2F;ICMPv6 checksum</td>
+<td>L3 control &#x2F; upper-layer</td>
+<td>Internet checksum</td>
+<td>是</td>
+</tr>
+<tr>
+<td>Ethernet FCS</td>
+<td>L2 frame trailer</td>
+<td>CRC-32</td>
+<td>通常不作为 lwIP Ethernet <code>pbuf</code> 内容</td>
+</tr>
+</tbody></table>
+<p>当前 Unix <code>tapif.c</code> 自己已经给出一个很直观的边界提示：它的 <code>buf[1518]</code> 注释写的是 <code>excluding CRC</code>。<a href="#source-s2">S2</a></p>
+<p>也就是说当前 <code>netif-&gt;linkoutput()</code> 看到的是 Ethernet header + payload，但 Ethernet FCS 仍不属于这条 lwIP Core checksum 主线。</p>
+<p>因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">关闭 TCP checksum software generation</span><br></pre></td></tr></table></figure>
+
+<p>和：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">让 MAC 自动生成 Ethernet FCS</span><br></pre></td></tr></table></figure>
+
+<p>是两件不同的事。</p>
+<h2 id="20-Wireshark-为什么会把本机-TX-packet-标成-bad-checksum"><a href="#20-Wireshark-为什么会把本机-TX-packet-标成-bad-checksum" class="headerlink" title="20. Wireshark 为什么会把本机 TX packet 标成 bad checksum"></a>20. Wireshark 为什么会把本机 TX packet 标成 bad checksum</h2><p>这部分属于 Host&#x2F;NIC 行为，不是当前 TAP Port 的 lwIP Core 行为。</p>
+<p>Wireshark 官方文档说明，在操作系统使用 TX checksum offload 时，抓包点可能位于 NIC 真正填入 checksum <strong>之前</strong>。于是抓到的本机 outgoing packet 里 checksum 字段仍是未完成值，Wireshark 会显示 incorrect&#x2F;partial，但实际线上的 NIC 已经在发送前补好。<a href="#source-s6">S6</a></p>
+<p>Linux kernel 的 checksum-offload 文档也明确把 TX offload 定义成 stack 请求 device 在指定 checksum start&#x2F;offset 上完成 one’s-complement checksum；Driver&#x2F;NIC 负责兑现该请求。<a href="#source-s7">S7</a></p>
+<p>典型关系是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant Stack as Host Network Stack</span><br><span class="line">    participant Capture as Wireshark capture point</span><br><span class="line">    participant NIC as NIC offload engine</span><br><span class="line">    participant Wire as Wire</span><br><span class="line"></span><br><span class="line">    Stack-&gt;&gt;Capture: checksum 尚未由 NIC 最终填写</span><br><span class="line">    Capture--&gt;&gt;Stack: 显示 partial / apparent bad checksum</span><br><span class="line">    Stack-&gt;&gt;NIC: 提交 packet + offload metadata</span><br><span class="line">    NIC-&gt;&gt;NIC: 计算并写入 checksum</span><br><span class="line">    NIC-&gt;&gt;Wire: 线上 packet checksum 正确</span><br></pre></td></tr></table></figure>
+
+<p>但 <strong>当前 lwIP Unix TAP 实验不能直接用这个理由解释 bad checksum</strong>。当前路径是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">lwIP software checksum</span><br><span class="line">→ tapif copy</span><br><span class="line">→ write(TAP)</span><br></pre></td></tr></table></figure>
+
+<p><code>tapif</code> 没有一个后置 NIC checksum engine 帮它补字段。因此若直接在 <code>lwip0</code>&#x2F;TAP 路径抓到 UDP&#x2F;TCP checksum 错误，首先应该检查 lwIP 配置、packet 构造和 Port 修改，而不是先假设“这是 offload 假象”。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>只有抓包位置已经进入 Linux 主机自己的真实物理 NIC TX 路径时，才需要把 Linux&#x2F;NIC offload 作为解释因素之一。<a href="#source-s6">S6</a><a href="#source-s7">S7</a></p>
+<h2 id="21-在当前-TAP-实验里观察-checksum，证据应该怎样对应源码"><a href="#21-在当前-TAP-实验里观察-checksum，证据应该怎样对应源码" class="headerlink" title="21. 在当前 TAP 实验里观察 checksum，证据应该怎样对应源码"></a>21. 在当前 TAP 实验里观察 checksum，证据应该怎样对应源码</h2><p>当前实验不需要先修改 Driver。只要已有 TAP&#x2F;Ping&#x2F;UDP&#x2F;TCP 路径能运行，就可以在 Host 侧抓当前 TAP frame：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> tcpdump -i lwip0 -nn -vv -s 0 -w captures/checksum-stage19.pcap</span><br></pre></td></tr></table></figure>
+
+<p>随后触发已有 UDP 或 TCP traffic，再用 Wireshark 查看：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">IPv4 Header checksum</span><br><span class="line">UDP/TCP checksum</span><br><span class="line">source/destination IP</span><br><span class="line">source/destination port</span><br></pre></td></tr></table></figure>
+
+<p>观察结果应与源码位置一一对应：</p>
+<table>
+<thead>
+<tr>
+<th>PCAP 字段</th>
+<th>lwIP 生成&#x2F;验证位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>IPv4 Header Checksum</td>
+<td><code>ip4_output_if()</code> &#x2F; <code>ip4_input()</code></td>
+</tr>
+<tr>
+<td>UDP Checksum</td>
+<td><code>udp_sendto_if_src_chksum()</code> &#x2F; <code>udp_input()</code></td>
+</tr>
+<tr>
+<td>TCP Checksum</td>
+<td><code>tcp_output_segment()</code> &#x2F; <code>tcp_input()</code></td>
+</tr>
+<tr>
+<td>Ethernet FCS</td>
+<td>不属于当前 TAP <code>pbuf</code> 内容</td>
+</tr>
+</tbody></table>
+<p>如果 <code>LWIP_CHECKSUM_CTRL_PER_NETIF=0</code> 且 <code>CHECKSUM_GEN_*</code> 仍保持默认 <code>1</code>，当前 TAP packet 应在 <code>write()</code> 之前已经具备由 lwIP 完成的 checksum。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>本篇不声称已经执行上述抓包；命令只是复用 Stage 2&#x2F;4 已经建立的 TAP 抓包方法，把 PCAP 字段重新连接到 checksum 源码位置。</p>
+<h2 id="22-一个真正的-MCU-Driver-接入时，职责应怎样分层"><a href="#22-一个真正的-MCU-Driver-接入时，职责应怎样分层" class="headerlink" title="22. 一个真正的 MCU Driver 接入时，职责应怎样分层"></a>22. 一个真正的 MCU Driver 接入时，职责应怎样分层</h2><p>把前面的边界压缩成四层即可：lwIP Core 根据 checksum option 决定是否做软件工作；<code>netif-&gt;linkoutput()</code>&#x2F;RX glue 把 <code>pbuf</code> 交给 Port；Driver 把 frame 映射为 DMA descriptor 并解释 RX status；MAC&#x2F;DMA engine 最终执行硬件生成或验证。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;lwIP Core&quot;] --&gt; B[&quot;netif-&gt;linkoutput()&quot;]</span><br><span class="line">    B --&gt; C[&quot;Ethernet Driver&quot;]</span><br><span class="line">    C --&gt; D[&quot;DMA descriptor&quot;]</span><br><span class="line">    D --&gt; E[&quot;MAC checksum engine&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>任何一层都不能靠另一层的宏自动替代。</p>
+<h2 id="23-错配的本质是-checksum-ownership-没有闭环"><a href="#23-错配的本质是-checksum-ownership-没有闭环" class="headerlink" title="23. 错配的本质是 checksum ownership 没有闭环"></a>23. 错配的本质是 checksum ownership 没有闭环</h2><p>最危险的错配只有两类：Core 已停止软件工作但 Driver 没有真正接管；或硬件只覆盖部分协议，却把未覆盖协议的 Core generation&#x2F;verification 一并关闭。排查时按 Core option → per-netif bit → Driver descriptor&#x2F;status → 抓包位置检查 ownership 即可。</p>
+<h2 id="24-从-Stage-18-到-Stage-19，packet-的完整路径已经延伸到-Driver-边界"><a href="#24-从-Stage-18-到-Stage-19，packet-的完整路径已经延伸到-Driver-边界" class="headerlink" title="24. 从 Stage 18 到 Stage 19，packet 的完整路径已经延伸到 Driver 边界"></a>24. 从 Stage 18 到 Stage 19，packet 的完整路径已经延伸到 Driver 边界</h2><p>Stage 19 把 Stage 18 的 <code>route → netif → next hop</code> 继续延伸到 <code>software checksum → ethernet_output() → linkoutput → Driver/MAC</code>。由此可以明确区分：<code>ip_chksum_pseudo*()</code> 是 lwIP software checksum；<code>LWIP_CHECKSUM_ON_COPY</code> 是 CPU copy&#x2F;checksum 合并优化；MAC&#x2F;DMA checksum offload 则属于 Port&#x2F;Driver 与硬件的契约。</p>
+<p>核心判断是：<strong>lwIP checksum option 描述 Core 是否执行软件工作，不描述某块具体 Ethernet MAC 的能力，也不替 Driver 配置硬件。</strong> 下一阶段自然进入 <code>pbuf</code>、DMA descriptor、zero-copy 与 TX&#x2F;RX ring ownership。</p>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-lwIP-Core-checksum、协议输入输出与-netif-源码"><a href="#S1-lwIP-Core-checksum、协议输入输出与-netif-源码" class="headerlink" title="[S1] lwIP Core checksum、协议输入输出与 netif 源码"></a>[S1] lwIP Core checksum、协议输入输出与 netif 源码</h3><ul>
+<li>类型：目标版本上游源码</li>
+<li>版本：commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>src/core/inet_chksum.c</code>；<code>src/core/udp.c</code>；<code>src/core/tcp_in.c</code>；<code>src/core/tcp_out.c</code>；<code>src/core/ipv4/ip4.c</code>；<code>src/core/ipv4/icmp.c</code>；<code>src/core/ipv6/icmp6.c</code>；<code>src/core/pbuf.c</code>；<code>src/core/netif.c</code>；<code>src/netif/ethernet.c</code>；<code>src/include/lwip/opt.h</code>、<code>netif.h</code>、<code>pbuf.h</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9">lwIP upstream commit</a></li>
+<li>使用位置：UDP&#x2F;TCP TX&#x2F;RX、pseudo-header、IPv4 header checksum、per-netif checksum control、<code>linkoutput</code> 边界</li>
+<li>支撑内容：证明软件 checksum 的真实调用点、<code>pbuf chain</code> 累计方式、compile-time&#x2F;runtime 控制以及 Core 到 Driver 的函数边界</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-lwIP-Unix-TAP-Port-与通用-Ethernet-Driver-模板"><a href="#S2-lwIP-Unix-TAP-Port-与通用-Ethernet-Driver-模板" class="headerlink" title="[S2] lwIP Unix TAP Port 与通用 Ethernet Driver 模板"></a>[S2] lwIP Unix TAP Port 与通用 Ethernet Driver 模板</h3><ul>
+<li>类型：目标版本上游 Port&#x2F;示例</li>
+<li>版本：commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>contrib/ports/unix/port/netif/tapif.c</code>：<code>tapif_init()</code>、<code>low_level_output()</code>、<code>low_level_input()</code>；<code>contrib/examples/ethernetif/ethernetif.c</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/ports/unix">lwIP Unix Port</a></li>
+<li>使用位置：“当前 Unix TAP”“Driver boundary”“FCS 边界”“MCU Driver 对照”</li>
+<li>支撑内容：证明 TAP TX 只是 pbuf copy + fd write，以及通用 Ethernet Port 由 <code>linkoutput</code> 接管真实硬件发送</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-RFC-1071：Internet-Checksum-算法"><a href="#S3-RFC-1071：Internet-Checksum-算法" class="headerlink" title="[S3] RFC 1071：Internet Checksum 算法"></a>[S3] RFC 1071：Internet Checksum 算法</h3><ul>
+<li>类型：IETF 技术文档</li>
+<li>版本：RFC 1071，September 1988</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1071.html">RFC 1071 - Computing the Internet Checksum</a></li>
+<li>使用位置：“pbuf chain checksum”“one’s-complement &#x2F; fold”</li>
+<li>支撑内容：说明 16-bit one’s-complement sum、end-around carry 以及 checksum 实现的基础性质</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-RFC-768：UDP-checksum-与-IPv4-zero-checksum-语义"><a href="#S4-RFC-768：UDP-checksum-与-IPv4-zero-checksum-语义" class="headerlink" title="[S4] RFC 768：UDP checksum 与 IPv4 zero-checksum 语义"></a>[S4] RFC 768：UDP checksum 与 IPv4 zero-checksum 语义</h3><ul>
+<li>类型：IETF 标准</li>
+<li>版本：RFC 768，August 1980</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc768.html">RFC 768 - User Datagram Protocol</a></li>
+<li>使用位置：“UDP TX”“pseudo header”“UDP RX”</li>
+<li>支撑内容：定义 UDP pseudo header、computed-zero 写成 all ones，以及 transmitted zero 表示未生成 checksum</li>
+</ul>
+<p><a id="source-s5"></a></p>
+<h3 id="S5-RFC-8200：IPv6-Upper-Layer-Checksum"><a href="#S5-RFC-8200：IPv6-Upper-Layer-Checksum" class="headerlink" title="[S5] RFC 8200：IPv6 Upper-Layer Checksum"></a>[S5] RFC 8200：IPv6 Upper-Layer Checksum</h3><ul>
+<li>类型：IETF Internet Standard</li>
+<li>版本：RFC 8200，July 2017</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc8200.html">RFC 8200 - Internet Protocol, Version 6 (IPv6) Specification</a></li>
+<li>使用位置：“IPv6 UDP mandatory checksum”“IPv6 pseudo header”“ICMPv6”</li>
+<li>支撑内容：说明 IPv6 upper-layer pseudo header、普通 UDP over IPv6 checksum 默认必需，以及 ICMPv6 checksum 使用 pseudo header</li>
+</ul>
+<p><a id="source-s6"></a></p>
+<h3 id="S6-Wireshark-Checksum-Offload-抓包说明"><a href="#S6-Wireshark-Checksum-Offload-抓包说明" class="headerlink" title="[S6] Wireshark Checksum Offload 抓包说明"></a>[S6] Wireshark Checksum Offload 抓包说明</h3><ul>
+<li>类型：官方工具文档</li>
+<li>版本：访问日期 2026-10-02</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://wiki.wireshark.org/CaptureSetup/Offloading">Wireshark CaptureSetup - Offloading</a></li>
+<li>使用位置：“Wireshark 为什么显示 bad checksum”</li>
+<li>支撑内容：说明本机 TX 抓包点可能位于 NIC checksum completion 之前，因此会出现 apparent&#x2F;partial checksum</li>
+</ul>
+<p><a id="source-s7"></a></p>
+<h3 id="S7-Linux-Kernel-Checksum-Offload-接口"><a href="#S7-Linux-Kernel-Checksum-Offload-接口" class="headerlink" title="[S7] Linux Kernel Checksum Offload 接口"></a>[S7] Linux Kernel Checksum Offload 接口</h3><ul>
+<li>类型：官方内核文档</li>
+<li>版本：访问日期 2026-10-02</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://docs.kernel.org/networking/checksum-offloads.html">Linux Kernel - Checksum Offloads</a></li>
+<li>使用位置：“Host&#x2F;NIC offload 对照”“TX&#x2F;RX Driver contract”</li>
+<li>支撑内容：说明 Linux stack 与 NIC&#x2F;Driver 之间的 checksum offload metadata 与职责，用于和 lwIP 的 <code>pbuf</code>&#x2F;<code>linkoutput</code> 边界做对照</li>
+</ul>
+<p><a id="source-s8"></a></p>
+<h3 id="S8-lwIP-官方-checksum-配置文档"><a href="#S8-lwIP-官方-checksum-配置文档" class="headerlink" title="[S8] lwIP 官方 checksum 配置文档"></a>[S8] lwIP 官方 checksum 配置文档</h3><ul>
+<li>类型：upstream 官方配置文档</li>
+<li>版本：lwIP 2.1.x Doxygen，访问日期 2026-10-03</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/opt_8h.html">lwIP opt.h checksum options</a></li>
+<li>使用位置：默认 checksum 配置、per-netif 控制与 Core contract</li>
+<li>支撑内容：列出 <code>LWIP_CHECKSUM_CTRL_PER_NETIF</code>、<code>CHECKSUM_GEN_*</code>、<code>CHECKSUM_CHECK_*</code> 与 <code>LWIP_CHECKSUM_ON_COPY</code> 的默认配置值</li>
+</ul>
+<p><a id="source-s9"></a></p>
+<h3 id="S9-lwIP-官方-Optimization-Hints"><a href="#S9-lwIP-官方-Optimization-Hints" class="headerlink" title="[S9] lwIP 官方 Optimization Hints"></a>[S9] lwIP 官方 Optimization Hints</h3><ul>
+<li>类型：upstream 官方优化文档</li>
+<li>版本：lwIP 2.1.x，访问日期 2026-10-03</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/optimization.html">lwIP Optimization hints</a></li>
+<li>使用位置：软件 checksum 与硬件 offload 的边界说明</li>
+<li>支撑内容：说明 Port 可以通过 <code>LWIP_CHKSUM</code> 替换&#x2F;优化软件 checksum 实现；该优化入口与 MAC&#x2F;DMA checksum offload 是不同层次</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/9718d6c7/">https://wdfk-prog.space/posts/9718d6c7/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LWIP/">LWIP</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/07.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/6f027247/" title="20-ethernet-dma-zero-copy"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">20-ethernet-dma-zero-copy</div></div><div class="info-2"><div class="info-item-1">  教程 20：从 netif-&gt;linkoutput() 到 pbuf_custom——Ethernet Driver、DMA Buffer、所有权与 Zero-copy 摘要：建立 lwIP pbuf、Ethernet Driver、DMA buffer 与 zero-copy 的 ownership 模型，解释 TX&#x2F;RX copy、scatter-gather、custom pbuf 与 Cache 边界。  [TOC] Stage 19 已经把发送路径追到 netif-&gt;linkoutput()：从这一层开始，lwIP Core 不再决定 MAC&#x2F;DMA 怎样搬运 frame，而是把已经形成的 Ethernet frame 交给 Port&#x2F;Driver。对带 Ethernet DMA 的 MCU 而言，真正困难的部分不是“会不会调用 DMA”，而是 pbuf、Driver buffer、DMA descriptor 和硬件之间的所有权何时转移，哪一方什么时候可以重新使用内存。S1 Zero-copy（零拷贝）在本文中特指：尽量让...</div></div></div></a><a class="pagination-related" href="/posts/bd2c5fba/" title="17-igmp-ipv4-multicast"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">17-igmp-ipv4-multicast</div></div><div class="info-2"><div class="info-item-1">  教程 17：从 IP_ADD_MEMBERSHIP 到 igmp_input()——IPv4 Multicast、IGMPv2、MAC Filter 与组成员状态机 摘要：从 RTP multicast example 的 IP_ADD_MEMBERSHIP 入口追踪 IGMPv2 加组、Report&#x2F;Query&#x2F;Leave、定时器与 MAC 映射，并用真实 PCAP 验证调用链。  [TOC] IPv4 multicast（IPv4 组播）让发送者把一个 IPv4 datagram 发送到 multicast group address（组播组地址），所有已经加入该组、并且链路路径允许该组流量通过的接收者都可以获得同一份数据。IGMP（Internet Group Management Protocol，互联网组管理协议）不是业务数据协议，而是 IPv4 Host 与本地 multicast router 之间维护“哪些组当前有成员”的控制协议。S3S4 本文标题中的 MAC Filter 指 Ethernet MAC（Media Access Cont...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/b313493/" title="39-rtthread-lwip-port"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">39-rtthread-lwip-port</div></div><div class="info-2"><div class="info-item-1">  教程 39：从 lwip_system_init() 到 tcpip_input()——RT-Thread 如何把 lwIP 接进 RTOS 与 Ethernet Device 摘要：从 RT-Thread 的 lwIP 初始化入口追踪 Kconfig、sys_arch、eth_device、RX&#x2F;TX 线程与 tcpip_input，建立真实 RTOS Port 的完整桥接流程。  [TOC] Stage 38 已经把 lwIP Port Contract 拆成四块：lwipopts.h 配置、源码构建选择、OS&#x2F;Arch Port、Network Port。Stage 39 不再重复这些抽象的原理，而是直接拿 RT-Thread 当前源码回答一个问题：RT-Thread 怎样把这些 contract 一项项落成可运行代码，并把一个 Ethernet Driver 最终接到 tcpip_thread。 RT-Thread 的完整 Device Framework、NetDev、SAL、DFS 并不是本篇目标。它们只在当前调用链真正出现时说明接口位置；So...</div></div></div></a><a class="pagination-related" href="/posts/4b242a34/" title="18-multi-netif-routing"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">18-multi-netif-routing</div></div><div class="info-2"><div class="info-item-1">  教程 18：从 udp_sendto() 到 etharp_output()——Multi-netif IPv4 路由、Default Netif、Gateway 与下一跳 摘要：从 UDP&#x2F;TCP 发送入口追踪 IPv4 multi-netif 出口选择、默认接口、源地址与 Gateway 下一跳，厘清 route 与 ARP 的职责边界。  [TOC] Multi-netif 表示同一个 lwIP 实例同时存在多个 struct netif 网络接口。本文标题中的 Default Netif（默认接口） 是没有更具体匹配时的 fallback outgoing interface；Gateway（网关） 是已经选定某张接口以后，在当前二层链路上需要直接发送给的下一跳 IP。两者不是同一个对象，也不等价于“默认路由 &#x3D; 网关地址”。 Stage 18 只回答 IPv4 发送方向上的一个问题：应用没有显式固定接口时，lwIP 怎样先选择 outgoing netif，然后怎样决定 Ethernet 下一跳是 destination 本身还是该接口的 gat...</div></div></div></a><a class="pagination-related" href="/posts/f66d8c4d/" title="16-ipv4-fragmentation-reassembly"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">16-ipv4-fragmentation-reassembly</div></div><div class="info-2"><div class="info-item-1">  教程 16：从 MTU 到 ip4_frag() &#x2F; ip4_reass()——IPv4 分片、重组、超时与内存压力 摘要：沿 IPv4 发送与接收源码链，理解 MTU 如何触发分片、Offset&#x2F;MF&#x2F;ID 如何组织片段，以及 lwIP 怎样排序、重组、超时清理并限制资源占用。  [TOC] IPv4 fragmentation（IPv4 分片）解决的是“一个 IPv4 datagram 比当前可发送路径允许的 packet 更大时，怎样把它拆成多个 fragment”；reassembly（重组）则在最终目的主机把这些 fragment 恢复成原始 datagram。Fragment 不是新的传输层或 ICMP message，每一片仍然携带自己的 IPv4 Header，并通过 Identification、MF（More Fragments）和 Fragment Offset 表明自己属于哪个原始 datagram、位于什么位置、后面是否还有片段。S4S12 MTU（Maximum Transmission Unit，最大传输单元）表示某...</div></div></div></a><a class="pagination-related" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">02-netif-tap-first-ping</div></div><div class="info-2"><div class="info-item-1">  教程 02：从 main() 到第一次 Ping——netif、TAP、ARP 与 ICMP 的完整源码链 摘要：先建立 IPv4 Ping 的 Ethernet、ARP、IPv4 与 ICMP 交互模型，再从 Unix example_app 入口追到 TAP 接收、协议栈线程、Echo Reply 与二层发送。   [TOC] 这一阶段要回答的不是“Ping 命令怎么用”，而是一个完整的数据路径问题：  Linux Host 执行 ping 198.18.0.200 后，为什么会先出现 ARP，再出现 ICMP；这些 Ethernet frame 又怎样从 Linux TAP 进入 lwIP，经过 netif、tcpip_thread、ARP、IPv4、ICMP 后返回 Host？  先把标题里的四个对象说清楚。netif 是 lwIP 的 network interface（网络接口）抽象对象，把协议栈 **Core（核心协议处理代码与执行上下文）**和具体 **Port（面向操作系统&#x2F;设备的适配层）**连接起来；TAP 是 Linux 提供给 userspa...</div></div></div></a><a class="pagination-related" href="/posts/8c3324b0/" title="00-series-index"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-series-index</div></div><div class="info-2"><div class="info-item-1">lwIP Source Lab 教程索引本系列持续跟踪官方 lwip-tcpip/lwip 的 master。绝大多数源码篇采用 Source-driven 主线：从当前行为的真实入口函数、注册入口或外部 API 开始，沿实际调用、数据与状态变化向下追踪。 Stage 00、15、31、38 与 45 属于 Theory of Operation &#x2F; Application Note 型总览：先建立系统位置和完整数据流，再解释关键机制；它们不会覆盖后续源码篇“从真实入口开始”的硬约束。 Stage 00～45 Stage 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界从 Ethernet Frame、PHY&#x2F;MAC 分层出发，沿 DMA&#x2F;Driver、pbuf、netif 建立完整软硬件边界，并区分链路、接口、IP 与上层就绪状态。 Stage 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图沿 submodule、Host 依赖、Debug build ...</div></div></div></a><a class="pagination-related" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-ethernet-physical-layer-and-network-stack</div></div><div class="info-2"><div class="info-item-1">  教程 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界 摘要：从初学者视角建立 Ethernet 的 PHY、MAC 与 Frame 心智模型，再沿 PHY→MAC→DMA&#x2F;Driver→pbuf→netif 解释 MCU 与 lwIP 的真实边界。   [TOC] Ethernet（以太网）是局域网里最常见的链路技术之一。Ethernet Frame（以太网帧）是 MAC 在链路上传输和接收的基本二层数据单元。对 MCU 网络开发而言，真正需要同时看懂的是两条边界：一条是 网线上的信号怎样经过 PHY、MAC 和 DMA 变成内存里的 Ethernet Frame，另一条是 这些 Frame 怎样通过 Driver、pbuf 和 netif 进入 lwIP。 本文第一次使用几个后面会反复出现的对象：**PHY（Physical Layer transceiver，物理层收发器）**负责把网线侧的模拟&#x2F;符号信号与 MAC 侧的数字接口互相转换；**MAC（Media Access Control，介质访问控制器）**...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E6%95%99%E7%A8%8B-19%EF%BC%9A%E4%BB%8E-ip-chksum-pseudo-%E5%88%B0-netif-linkoutput-%E2%80%94%E2%80%94lwIP-%E6%A0%A1%E9%AA%8C%E5%92%8C%E3%80%81Checksum-Offload-%E4%B8%8E%E9%A9%B1%E5%8A%A8%E8%BE%B9%E7%95%8C"><span class="toc-number">1.</span> <span class="toc-text">教程 19：从 ip_chksum_pseudo() 到 netif-&gt;linkoutput()——lwIP 校验和、Checksum Offload 与驱动边界</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#0-%E8%BF%9B%E5%85%A5%E6%BA%90%E7%A0%81%E5%89%8D%EF%BC%9A%E5%85%88%E6%8A%8A%E8%BD%AF%E4%BB%B6-checksum-%E4%B8%8E-hardware-offload-%E5%88%86%E5%BC%80"><span class="toc-number">1.1.</span> <span class="toc-text">0. 进入源码前：先把软件 checksum 与 hardware offload 分开</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%BD%93%E5%89%8D-Unix-TAP-%E8%B7%AF%E5%BE%84%E9%BB%98%E8%AE%A4%E6%98%AF%E8%B0%81%E7%AE%97-checksum"><span class="toc-number">1.2.</span> <span class="toc-text">1. 当前 Unix TAP 路径默认是谁算 checksum</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E4%BB%8E%E7%9C%9F%E5%AE%9E-UDP-%E5%8F%91%E9%80%81%E5%85%A5%E5%8F%A3%E7%BB%A7%E7%BB%AD%EF%BC%9Achecksum-%E5%9C%A8%E8%BF%9B%E5%85%A5-IP-%E5%B1%82%E5%89%8D%E5%AE%8C%E6%88%90"><span class="toc-number">1.3.</span> <span class="toc-text">2. 从真实 UDP 发送入口继续：checksum 在进入 IP 层前完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-ip-chksum-pseudo-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E6%98%AF%E5%8F%AA%E7%AE%97-UDP-TCP-header"><span class="toc-number">1.4.</span> <span class="toc-text">3. ip_chksum_pseudo() 为什么不是只算 UDP&#x2F;TCP header</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E8%BF%9B%E5%85%A5-inet-chksum-pseudo-%EF%BC%9A%E5%85%88%E7%B4%AF%E8%AE%A1%E5%9C%B0%E5%9D%80%EF%BC%8C%E5%86%8D%E9%81%8D%E5%8E%86%E6%95%B4%E4%B8%AA-pbuf-chain"><span class="toc-number">1.5.</span> <span class="toc-text">4. 进入 inet_chksum_pseudo()：先累计地址，再遍历整个 pbuf chain</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E4%BB%8E-ip-chksum-pseudo-%E8%BF%94%E5%9B%9E-UDP%EF%BC%9Achecksum-%E5%AE%8C%E6%88%90%E5%90%8E%E6%89%8D%E8%BF%9B%E5%85%A5-IP-%E8%BE%93%E5%87%BA"><span class="toc-number">1.6.</span> <span class="toc-text">5. 从 ip_chksum_pseudo() 返回 UDP：checksum 完成后才进入 IP 输出</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-IPv4-Header-checksum-%E6%98%AF%E5%8F%A6%E4%B8%80%E6%9D%A1%E7%8B%AC%E7%AB%8B%E8%B7%AF%E5%BE%84"><span class="toc-number">1.7.</span> <span class="toc-text">6. IPv4 Header checksum 是另一条独立路径</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-TCP-TX-%E4%BD%BF%E7%94%A8%E7%9B%B8%E5%90%8C-pseudo-header-%E6%9C%BA%E5%88%B6%EF%BC%8C%E4%BD%86%E8%BF%98%E8%A6%81%E5%A4%84%E7%90%86%E9%87%8D%E4%BC%A0%E4%B8%8E-checksum-on-copy"><span class="toc-number">1.8.</span> <span class="toc-text">7. TCP TX 使用相同 pseudo-header 机制，但还要处理重传与 checksum-on-copy</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-TX-checksum-%E5%AE%8C%E6%88%90%E5%90%8E%EF%BC%8CCore-%E6%9C%80%E7%BB%88%E5%8F%AA%E6%8A%8A-pbuf-%E4%BA%A4%E7%BB%99-linkoutput"><span class="toc-number">1.9.</span> <span class="toc-text">8. TX checksum 完成后，Core 最终只把 pbuf 交给 linkoutput</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E5%BD%93%E5%89%8D-Unix-tapif-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%B2%A1%E6%9C%89-hardware-checksum-offload"><span class="toc-number">1.10.</span> <span class="toc-text">9. 当前 Unix tapif 为什么没有 hardware checksum offload</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-LWIP-CHECKSUM-CTRL-PER-NETIF-%E8%A7%A3%E5%86%B3%E7%9A%84%E6%98%AF%E2%80%9C%E4%B8%8D%E5%90%8C%E7%BD%91%E5%8D%A1%E8%83%BD%E5%8A%9B%E4%B8%8D%E5%90%8C%E2%80%9D"><span class="toc-number">1.11.</span> <span class="toc-text">10. LWIP_CHECKSUM_CTRL_PER_NETIF 解决的是“不同网卡能力不同”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-IF-NETIF-CHECKSUM-ENABLED-%E5%A6%82%E4%BD%95%E6%8A%8A-compile-time-%E4%B8%8E-runtime-%E4%B8%A4%E5%B1%82%E5%90%88%E8%B5%B7%E6%9D%A5"><span class="toc-number">1.12.</span> <span class="toc-text">11. IF__NETIF_CHECKSUM_ENABLED() 如何把 compile-time 与 runtime 两层合起来</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#per-netif-%E5%85%B3%E9%97%AD"><span class="toc-number">1.12.1.</span> <span class="toc-text">per-netif 关闭</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#per-netif-%E5%BC%80%E5%90%AF"><span class="toc-number">1.12.2.</span> <span class="toc-text">per-netif 开启</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E4%B8%80%E4%B8%AA%E5%85%B8%E5%9E%8B%E7%9A%84%E2%80%9C%E9%83%A8%E5%88%86%E7%A1%AC%E4%BB%B6-offload%E2%80%9D%E9%85%8D%E7%BD%AE%E5%BA%94%E8%AF%A5%E6%80%8E%E6%A0%B7%E7%90%86%E8%A7%A3"><span class="toc-number">1.13.</span> <span class="toc-text">12. 一个典型的“部分硬件 offload”配置应该怎样理解</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-TX-hardware-offload-%E7%9C%9F%E6%AD%A3%E5%8F%91%E7%94%9F%E5%9C%A8-lwIP-Core-%E4%B9%8B%E5%90%8E"><span class="toc-number">1.14.</span> <span class="toc-text">13. TX hardware offload 真正发生在 lwIP Core 之后</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-RX-%E6%96%B9%E5%90%91%E5%85%88%E7%9C%8B-IPv4-Header-checksum"><span class="toc-number">1.15.</span> <span class="toc-text">14. RX 方向先看 IPv4 Header checksum</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E8%BF%9B%E5%85%A5-udp-input-%EF%BC%9AIPv4-zero-checksum-%E4%B8%8E%E7%9C%9F%E6%AD%A3%E7%9A%84-checksum-error-%E4%B8%8D%E7%9B%B8%E5%90%8C"><span class="toc-number">1.16.</span> <span class="toc-text">15. 进入 udp_input()：IPv4 zero checksum 与真正的 checksum error 不相同</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-%E8%BF%9B%E5%85%A5-tcp-input-%EF%BC%9A%E8%BD%AF%E4%BB%B6-RX-verify-%E5%A4%B1%E8%B4%A5%E5%90%8E%E4%B8%8D%E4%BC%9A%E7%BB%A7%E7%BB%AD%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.17.</span> <span class="toc-text">16. 进入 tcp_input()：软件 RX verify 失败后不会继续状态机</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-lwIP-%E5%BD%93%E5%89%8D-pbuf-%E6%B2%A1%E6%9C%89%E9%80%9A%E7%94%A8%E7%9A%84-RX-checksum-valid-%E7%8A%B6%E6%80%81"><span class="toc-number">1.18.</span> <span class="toc-text">17. lwIP 当前 pbuf 没有通用的 RX checksum-valid 状态</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-TX-generation-%E4%B8%8E-RX-verification-%E5%BF%85%E9%A1%BB%E5%88%86%E5%88%AB%E5%BB%BA%E7%AB%8B-contract"><span class="toc-number">1.19.</span> <span class="toc-text">18. TX generation 与 RX verification 必须分别建立 contract</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#19-Ethernet-FCS-%E4%B8%8D%E6%98%AF%E8%BF%99%E9%87%8C%E7%9A%84-Internet-checksum"><span class="toc-number">1.20.</span> <span class="toc-text">19. Ethernet FCS 不是这里的 Internet checksum</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#20-Wireshark-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BC%9A%E6%8A%8A%E6%9C%AC%E6%9C%BA-TX-packet-%E6%A0%87%E6%88%90-bad-checksum"><span class="toc-number">1.21.</span> <span class="toc-text">20. Wireshark 为什么会把本机 TX packet 标成 bad checksum</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#21-%E5%9C%A8%E5%BD%93%E5%89%8D-TAP-%E5%AE%9E%E9%AA%8C%E9%87%8C%E8%A7%82%E5%AF%9F-checksum%EF%BC%8C%E8%AF%81%E6%8D%AE%E5%BA%94%E8%AF%A5%E6%80%8E%E6%A0%B7%E5%AF%B9%E5%BA%94%E6%BA%90%E7%A0%81"><span class="toc-number">1.22.</span> <span class="toc-text">21. 在当前 TAP 实验里观察 checksum，证据应该怎样对应源码</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-%E4%B8%80%E4%B8%AA%E7%9C%9F%E6%AD%A3%E7%9A%84-MCU-Driver-%E6%8E%A5%E5%85%A5%E6%97%B6%EF%BC%8C%E8%81%8C%E8%B4%A3%E5%BA%94%E6%80%8E%E6%A0%B7%E5%88%86%E5%B1%82"><span class="toc-number">1.23.</span> <span class="toc-text">22. 一个真正的 MCU Driver 接入时，职责应怎样分层</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#23-%E9%94%99%E9%85%8D%E7%9A%84%E6%9C%AC%E8%B4%A8%E6%98%AF-checksum-ownership-%E6%B2%A1%E6%9C%89%E9%97%AD%E7%8E%AF"><span class="toc-number">1.24.</span> <span class="toc-text">23. 错配的本质是 checksum ownership 没有闭环</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#24-%E4%BB%8E-Stage-18-%E5%88%B0-Stage-19%EF%BC%8Cpacket-%E7%9A%84%E5%AE%8C%E6%95%B4%E8%B7%AF%E5%BE%84%E5%B7%B2%E7%BB%8F%E5%BB%B6%E4%BC%B8%E5%88%B0-Driver-%E8%BE%B9%E7%95%8C"><span class="toc-number">1.25.</span> <span class="toc-text">24. 从 Stage 18 到 Stage 19，packet 的完整路径已经延伸到 Driver 边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.26.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-lwIP-Core-checksum%E3%80%81%E5%8D%8F%E8%AE%AE%E8%BE%93%E5%85%A5%E8%BE%93%E5%87%BA%E4%B8%8E-netif-%E6%BA%90%E7%A0%81"><span class="toc-number">1.26.1.</span> <span class="toc-text">[S1] lwIP Core checksum、协议输入输出与 netif 源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-lwIP-Unix-TAP-Port-%E4%B8%8E%E9%80%9A%E7%94%A8-Ethernet-Driver-%E6%A8%A1%E6%9D%BF"><span class="toc-number">1.26.2.</span> <span class="toc-text">[S2] lwIP Unix TAP Port 与通用 Ethernet Driver 模板</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-RFC-1071%EF%BC%9AInternet-Checksum-%E7%AE%97%E6%B3%95"><span class="toc-number">1.26.3.</span> <span class="toc-text">[S3] RFC 1071：Internet Checksum 算法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-RFC-768%EF%BC%9AUDP-checksum-%E4%B8%8E-IPv4-zero-checksum-%E8%AF%AD%E4%B9%89"><span class="toc-number">1.26.4.</span> <span class="toc-text">[S4] RFC 768：UDP checksum 与 IPv4 zero-checksum 语义</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S5-RFC-8200%EF%BC%9AIPv6-Upper-Layer-Checksum"><span class="toc-number">1.26.5.</span> <span class="toc-text">[S5] RFC 8200：IPv6 Upper-Layer Checksum</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S6-Wireshark-Checksum-Offload-%E6%8A%93%E5%8C%85%E8%AF%B4%E6%98%8E"><span class="toc-number">1.26.6.</span> <span class="toc-text">[S6] Wireshark Checksum Offload 抓包说明</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S7-Linux-Kernel-Checksum-Offload-%E6%8E%A5%E5%8F%A3"><span class="toc-number">1.26.7.</span> <span class="toc-text">[S7] Linux Kernel Checksum Offload 接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S8-lwIP-%E5%AE%98%E6%96%B9-checksum-%E9%85%8D%E7%BD%AE%E6%96%87%E6%A1%A3"><span class="toc-number">1.26.8.</span> <span class="toc-text">[S8] lwIP 官方 checksum 配置文档</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S9-lwIP-%E5%AE%98%E6%96%B9-Optimization-Hints"><span class="toc-number">1.26.9.</span> <span class="toc-text">[S9] lwIP 官方 Optimization Hints</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/d0bd006c/" title="05-udp-raw-api"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="05-udp-raw-api"/></a><div class="content"><a class="title" href="/posts/d0bd006c/" title="05-udp-raw-api">05-udp-raw-api</a><time datetime="2026-10-03T09:16:32.509Z" title="更新于 2026-10-03 17:16:32">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="04-ethernet-arp-ipv4-icmp"/></a><div class="content"><a class="title" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp">04-ethernet-arp-ipv4-icmp</a><time datetime="2026-10-03T09:12:42.697Z" title="更新于 2026-10-03 17:12:42">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/58451296/" title="03-pbuf"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="03-pbuf"/></a><div class="content"><a class="title" href="/posts/58451296/" title="03-pbuf">03-pbuf</a><time datetime="2026-10-03T09:10:58.106Z" title="更新于 2026-10-03 17:10:58">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="02-netif-tap-first-ping"/></a><div class="content"><a class="title" href="/posts/173fa538/" title="02-netif-tap-first-ping">02-netif-tap-first-ping</a><time datetime="2026-10-03T09:05:15.928Z" title="更新于 2026-10-03 17:05:15">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="00-ethernet-physical-layer-and-network-stack"/></a><div class="content"><a class="title" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack">00-ethernet-physical-layer-and-network-stack</a><time datetime="2026-10-03T08:47:35.913Z" title="更新于 2026-10-03 16:47:35">2026-10-03</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/07.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'aafc224629325f78e653aa562a94a0d8'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18],["2026-10-03",49]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"LWIP","children":[],"count":49,"path":"LWIP"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>

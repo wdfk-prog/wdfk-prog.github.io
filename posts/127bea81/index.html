@@ -1,0 +1,1328 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>37-http-https-client | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="教程 37：从 httpc_get_file_dns() 到 Body Callback——HTTP&#x2F;HTTPS Client、DNS、altcp 与下载数据通路 摘要：从 lwIP HTTP client 公共入口追踪 DNS、altcp&#x2F;TCP、GET、Header&#x2F;Body callback，并说明 TLS allocator 如何把同一客户端切换成 HTT">
+<meta property="og:type" content="article">
+<meta property="og:title" content="37-http-https-client">
+<meta property="og:url" content="https://wdfk-prog.space/posts/127bea81/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="教程 37：从 httpc_get_file_dns() 到 Body Callback——HTTP&#x2F;HTTPS Client、DNS、altcp 与下载数据通路 摘要：从 lwIP HTTP client 公共入口追踪 DNS、altcp&#x2F;TCP、GET、Header&#x2F;Body callback，并说明 TLS allocator 如何把同一客户端切换成 HTT">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/06.jpg">
+<meta property="article:published_time" content="2026-10-03T08:27:36.000Z">
+<meta property="article:modified_time" content="2026-10-03T08:27:40.117Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="LWIP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/06.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "37-http-https-client",
+  "url": "https://wdfk-prog.space/posts/127bea81/",
+  "image": "https://wdfk-prog.space/images/covers/06.jpg",
+  "datePublished": "2026-10-03T08:27:36.000Z",
+  "dateModified": "2026-10-03T08:27:40.117Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/127bea81/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '37-http-https-client',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/06.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">37-http-https-client</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">37-http-https-client<a class="post-edit-link" href="null_posts/LWIP/37-http-https-client.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-03T08:27:36.000Z" title="发表于 2026-10-03 16:27:36">2026-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-03T08:27:40.117Z" title="更新于 2026-10-03 16:27:40">2026-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/LWIP/">LWIP</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">6.6k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>30分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/127bea81/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-10-03 16:27:40&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="教程-37：从-httpc-get-file-dns-到-Body-Callback——HTTP-HTTPS-Client、DNS、altcp-与下载数据通路"><a href="#教程-37：从-httpc-get-file-dns-到-Body-Callback——HTTP-HTTPS-Client、DNS、altcp-与下载数据通路" class="headerlink" title="教程 37：从 httpc_get_file_dns() 到 Body Callback——HTTP&#x2F;HTTPS Client、DNS、altcp 与下载数据通路"></a>教程 37：从 <code>httpc_get_file_dns()</code> 到 Body Callback——HTTP&#x2F;HTTPS Client、DNS、altcp 与下载数据通路</h1><blockquote>
+<p>摘要：从 lwIP HTTP client 公共入口追踪 DNS、altcp&#x2F;TCP、GET、Header&#x2F;Body callback，并说明 TLS allocator 如何把同一客户端切换成 HTTPS。</p>
+</blockquote>
+<p>[TOC]</p>
+<p>HTTP（Hypertext Transfer Protocol）是应用层 request&#x2F;response 协议。**DNS（Domain Name System，域名系统）**负责把 Server hostname 解析成 IP address，<code>altcp</code> 是 lwIP 的 TCP-like transport abstraction，用于让同一应用逻辑选择 plain TCP 或 TLS-over-TCP。Stage 32 已经从 Server 方向建立 HTTP message 与 TCP byte-stream boundary，Stage 33 建立 TLS wrapper；Stage 37 从相反方向研究设备作为 Client 主动访问 Server 的路径：DNS、connect、GET、response Header&#x2F;Body 与可选 HTTPS transport。<a href="#source-s1">S1</a><a href="#source-s2">S2</a><a href="#source-s3">S3</a><a href="#source-s6">S6</a><a href="#source-s7">S7</a></p>
+<p>本文源码继续绑定用户提供的 <code>lwip.zip</code> 与 upstream commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code>。主叙事是 Source-driven，真实公共入口选择 <code>httpc_get_file_dns()</code>。</p>
+<h2 id="0-本篇所需的最小-HTTP-HTTPS-Client-模型"><a href="#0-本篇所需的最小-HTTP-HTTPS-Client-模型" class="headerlink" title="0. 本篇所需的最小 HTTP&#x2F;HTTPS Client 模型"></a>0. 本篇所需的最小 HTTP&#x2F;HTTPS Client 模型</h2><p>Stage 32～33 是协议主讲位置，本篇不再复制整套 HTTP&#x2F;TLS 教程；但即使不回看前文，也需要先恢复以下最小模型。</p>
+<p>进入时序图前先锁定五个术语边界：</p>
+<ul>
+<li><strong>GET</strong> 是 HTTP Method，表示获取 Request Target 指向的资源；当前 <code>httpc</code> 生成 HTTP&#x2F;1.1 GET request。<a href="#source-s2">S2</a><a href="#source-s6">S6</a></li>
+<li><strong>HTTP status</strong>（例如 <code>200</code>）是 Server 对 request 的应用层结果；它与 DNS success、TCP connect success、TLS handshake success、最终 transfer completion 都不是同一个状态。<a href="#source-s6">S6</a></li>
+<li><strong>Header&#x2F;Body boundary</strong> 由 HTTP message framing 决定，不等于单个 TCP segment 或 <code>pbuf</code> 的边界。当前 parser 会在连续 RX 数据中寻找 Header 结束，并把 Body 单独交给 <code>recv_fn</code>。<a href="#source-s2">S2</a><a href="#source-s7">S7</a></li>
+<li><code>Host</code> Header 指明 HTTP request 目标主机&#x2F;authority；当前域名入口会把 <code>server_name</code> 同时用于 DNS&#x2F;address 处理与 HTTP <code>Host</code> Header 构造。<a href="#source-s2">S2</a><a href="#source-s6">S6</a></li>
+<li><code>Connection: Close</code> 是当前 request 明确发送的 HTTP Header，表示本次 response 完成后不复用这条 connection。源码也直接注明当前 <code>httpc</code> 尚不支持 persistent connection。<a href="#source-s2">S2</a><a href="#source-s7">S7</a></li>
+<li><strong>HTTPS</strong> 只改变 transport：HTTP request&#x2F;response 仍保持同样的语义和 parser；<code>altcp</code> 是 lwIP 的 TCP-like transport abstraction，<code>altcp_allocator</code> 决定创建 plain TCP 还是 TLS-over-TCP connection。<a href="#source-s3">S3</a><a href="#source-s4">S4</a></li>
+</ul>
+<p>一次 lwIP <code>httpc</code> 下载主线因此是：<a href="#source-s6">S6</a><a href="#source-s7">S7</a></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant C as &quot;lwIP HTTP Client&quot;</span><br><span class="line">    participant S as &quot;HTTP Server&quot;</span><br><span class="line"></span><br><span class="line">    C-&gt;&gt;S: TCP or TLS-protected connection established</span><br><span class="line">    C-&gt;&gt;S: GET /firmware/app.bin HTTP/1.1&lt;br/&gt;Host: example.com&lt;br/&gt;Connection: Close</span><br><span class="line">    S--&gt;&gt;C: HTTP/1.1 status line&lt;br/&gt;Headers&lt;br/&gt;Body bytes</span><br><span class="line">    Note over C: Header parser extracts status and framing info&lt;br/&gt;Body pbuf is delivered to application callback</span><br><span class="line">    S--&gt;&gt;C: connection close after response</span><br></pre></td></tr></table></figure>
+
+<p>“使用 TLS allocator”仍不等于已经完成完整 Web PKI identity verification。Client 需要合适的 CA&#x2F;trust configuration、hostname verification，并在启用证书有效期检查时提供正确系统时间；这些安全边界会在后文回到当前 Mbed TLS port 的实际配置。<a href="#source-s5">S5</a><a href="#source-s10">S10</a></p>
+<p>推荐进一步阅读 <a target="_blank" rel="noopener external nofollow noreferrer" href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages">MDN HTTP messages</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9110.html">RFC 9110</a> 与 <a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9112.html">RFC 9112</a>，用于核对 HTTP 语义与 wire-format；正文后续仍直接解释当前源码真正依赖的字段和状态。<a href="#source-s9">S9</a><a href="#source-s6">S6</a><a href="#source-s7">S7</a></p>
+<h2 id="1-为什么从-httpc-get-file-dns-开始，而不是从某个-example-开始"><a href="#1-为什么从-httpc-get-file-dns-开始，而不是从某个-example-开始" class="headerlink" title="1. 为什么从 httpc_get_file_dns() 开始，而不是从某个 example 开始"></a>1. 为什么从 <code>httpc_get_file_dns()</code> 开始，而不是从某个 example 开始</h2><p>当前 upstream 没有像 MQTT&#x2F;SNTP 那样提供一条独立的 <code>contrib/examples/http_client/...</code> application 入口；HTTP client 的真实对外入口就在 public API 中。因此本篇 Source-driven 主线从：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">httpc_get_file_dns()</span><br></pre></td></tr></table></figure>
+
+<p>开始，而不是人为制造一个不存在的 upstream demo。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>public header 给出两条主要 GET 入口：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span> <span class="title function_">httpc_get_file</span><span class="params">(<span class="type">const</span> <span class="type">ip_addr_t</span>* server_addr, <span class="type">u16_t</span> port, <span class="type">const</span> <span class="type">char</span>* uri, <span class="type">const</span> <span class="type">httpc_connection_t</span> *settings,</span></span><br><span class="line"><span class="params">                     altcp_recv_fn recv_fn, <span class="type">void</span>* callback_arg, <span class="type">httpc_state_t</span> **connection)</span>;</span><br><span class="line"><span class="type">err_t</span> <span class="title function_">httpc_get_file_dns</span><span class="params">(<span class="type">const</span> <span class="type">char</span>* server_name, <span class="type">u16_t</span> port, <span class="type">const</span> <span class="type">char</span>* uri, <span class="type">const</span> <span class="type">httpc_connection_t</span> *settings,</span></span><br><span class="line"><span class="params">                     altcp_recv_fn recv_fn, <span class="type">void</span>* callback_arg, <span class="type">httpc_state_t</span> **connection)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>区别很直接：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">httpc_get_file()</span><br><span class="line">    -&gt; application 已经有 ip_addr_t</span><br><span class="line"></span><br><span class="line">httpc_get_file_dns()</span><br><span class="line">    -&gt; application 给 hostname/IP string</span><br><span class="line">    -&gt; httpc 自己经过 DNS/address parse</span><br></pre></td></tr></table></figure>
+
+<p>因此本篇选 <code>httpc_get_file_dns()</code> 作为域名访问主入口。</p>
+<h2 id="2-应用给-httpc-的四类信息分别控制什么"><a href="#2-应用给-httpc-的四类信息分别控制什么" class="headerlink" title="2. 应用给 httpc 的四类信息分别控制什么"></a>2. 应用给 httpc 的四类信息分别控制什么</h2><p>进入源码前先只解释 <code>httpc_get_file_dns()</code> 此刻真正用到的参数：<a href="#source-s1">S1</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">server_name</span><br><span class="line">    -&gt; DNS 查询目标 + HTTP Host header</span><br><span class="line"></span><br><span class="line">port</span><br><span class="line">    -&gt; TCP/TLS remote port</span><br><span class="line"></span><br><span class="line">uri</span><br><span class="line">    -&gt; GET request-target，例如 /firmware/app.bin</span><br><span class="line"></span><br><span class="line">settings</span><br><span class="line">    -&gt; result callback / headers callback /</span><br><span class="line">       proxy / altcp allocator</span><br><span class="line"></span><br><span class="line">recv_fn</span><br><span class="line">    -&gt; Body pbuf 的消费 callback</span><br></pre></td></tr></table></figure>
+
+<p>其中 <code>httpc_connection_t</code> 最关键：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span> _<span class="title">httpc_connection</span> &#123;</span></span><br><span class="line">  <span class="type">ip_addr_t</span> proxy_addr;</span><br><span class="line">  <span class="type">u16_t</span> proxy_port;</span><br><span class="line">  <span class="type">u8_t</span> use_proxy;</span><br><span class="line">  <span class="comment">/* @todo: add username:pass? */</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_ALTCP</span></span><br><span class="line">  <span class="type">altcp_allocator_t</span> *altcp_allocator;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">  <span class="comment">/* this callback is called when the transfer is finished (or aborted) */</span></span><br><span class="line">  httpc_result_fn result_fn;</span><br><span class="line">  <span class="comment">/* this callback is called after receiving the http headers</span></span><br><span class="line"><span class="comment">     It can abort the connection by returning != ERR_OK */</span></span><br><span class="line">  httpc_headers_done_fn headers_done_fn;</span><br><span class="line">&#125; <span class="type">httpc_connection_t</span>;</span><br></pre></td></tr></table></figure>
+
+<p><code>altcp_allocator</code> 就是 Stage 33 已经见过的 transport 注入点：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">NULL</span><br><span class="line">  -&gt; plain TCP</span><br><span class="line"></span><br><span class="line">TLS allocator</span><br><span class="line">  -&gt; TLS outer + TCP inner</span><br></pre></td></tr></table></figure>
+
+<p>所以 HTTP 与 HTTPS 并不是两套 httpc parser。</p>
+<h2 id="3-进入-httpc-get-file-dns-：先创建-request-state，再启动-DNS-Connect"><a href="#3-进入-httpc-get-file-dns-：先创建-request-state，再启动-DNS-Connect" class="headerlink" title="3. 进入 httpc_get_file_dns()：先创建 request state，再启动 DNS&#x2F;Connect"></a>3. 进入 <code>httpc_get_file_dns()</code>：先创建 request state，再启动 DNS&#x2F;Connect</h2><p>下面是完整 public entry。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">httpc_get_file_dns</span><span class="params">(<span class="type">const</span> <span class="type">char</span>* server_name, <span class="type">u16_t</span> port, <span class="type">const</span> <span class="type">char</span>* uri, <span class="type">const</span> <span class="type">httpc_connection_t</span> *settings,</span></span><br><span class="line"><span class="params">                   altcp_recv_fn recv_fn, <span class="type">void</span>* callback_arg, <span class="type">httpc_state_t</span> **connection)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">err_t</span> err;</span><br><span class="line">  <span class="type">httpc_state_t</span>* req;</span><br><span class="line"></span><br><span class="line">  LWIP_ERROR(<span class="string">&quot;invalid parameters&quot;</span>, (server_name != <span class="literal">NULL</span>) &amp;&amp; (uri != <span class="literal">NULL</span>) &amp;&amp; (recv_fn != <span class="literal">NULL</span>), <span class="keyword">return</span> ERR_ARG;);</span><br><span class="line"></span><br><span class="line">  err = httpc_init_connection(&amp;req, settings, server_name, port, uri, recv_fn, callback_arg);</span><br><span class="line">  <span class="keyword">if</span> (err != ERR_OK) &#123;</span><br><span class="line">    <span class="keyword">return</span> err;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (settings &amp;&amp; settings-&gt;use_proxy) &#123;</span><br><span class="line">    err = httpc_get_internal_addr(req, &amp;settings-&gt;proxy_addr);</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    err = httpc_get_internal_dns(req, server_name);</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">if</span> (err != ERR_OK) &#123;</span><br><span class="line">    httpc_free_state(req);</span><br><span class="line">    <span class="keyword">return</span> err;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (connection != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    *connection = req;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>主流程因此先分成两步：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;httpc_get_file_dns()&quot;] --&gt; B[&quot;httpc_init_connection()&quot;]</span><br><span class="line">    B --&gt; C[&quot;create state + request + altcp pcb&quot;]</span><br><span class="line">    C --&gt; D&#123;&quot;proxy?&quot;&#125;</span><br><span class="line">    D --&gt;|&quot;no&quot;| E[&quot;httpc_get_internal_dns()&quot;]</span><br><span class="line">    D --&gt;|&quot;yes&quot;| F[&quot;connect proxy address&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>这一点很重要：<code>ERR_OK</code> 表示“异步 HTTP request 已经成功启动”，不是“文件已经下载完成”。最终结果必须等待 <code>result_fn</code>。</p>
+<h2 id="4-进入-httpc-init-connection-common-：HTTP-request-在-connect-前就已经生成"><a href="#4-进入-httpc-init-connection-common-：HTTP-request-在-connect-前就已经生成" class="headerlink" title="4. 进入 httpc_init_connection_common()：HTTP request 在 connect 前就已经生成"></a>4. 进入 <code>httpc_init_connection_common()</code>：HTTP request 在 connect 前就已经生成</h2><p><code>httpc_init_connection()</code> 很薄，只转入 <code>httpc_init_connection_common()</code>。这个函数同时创建 state、构造 GET request、创建 altcp connection，并注册全部 callback。<a href="#source-s2">S2</a></p>
+<p>先看对象关系：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;httpc_state_t&quot;] --&gt; B[&quot;request pbuf&quot;]</span><br><span class="line">    A --&gt; C[&quot;altcp_pcb&quot;]</span><br><span class="line">    A --&gt; D[&quot;DNS/remote address&quot;]</span><br><span class="line">    A --&gt; E[&quot;parse state&quot;]</span><br><span class="line">    A --&gt; F[&quot;body recv_fn&quot;]</span><br><span class="line">    A --&gt; G[&quot;httpc_connection_t settings&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>当前 <code>httpc_state_t</code> 保存：</p>
+<ul>
+<li><code>pcb</code>：当前 altcp connection；</li>
+<li><code>remote_addr/remote_port</code>：连接目标；</li>
+<li><code>request</code>：还没有发出的 HTTP GET request；</li>
+<li><code>rx_hdrs</code>：Header 尚未收完整时的 pbuf chain；</li>
+<li><code>rx_status</code>：HTTP status code；</li>
+<li><code>hdr_content_len</code> &#x2F; <code>rx_content_len</code>：Header 声明长度与实际接收 Body 长度；</li>
+<li><code>parse_state</code>：当前正在等 status line、Header 还是 Body。</li>
+</ul>
+<p><code>settings</code> 本身不是深拷贝，而是以 pointer 保存到 <code>req-&gt;conn_settings</code>。因此应用不能用一个已经离开生命周期的临时 <code>httpc_connection_t</code> 给长期异步 request 使用；至少要保证它存活到 transfer 完成 callback。<a href="#source-s2">S2</a></p>
+<h2 id="5-httpc-create-request-string-：当前-client-是一个刻意最小化的-HTTP-1-1-GET-client"><a href="#5-httpc-create-request-string-：当前-client-是一个刻意最小化的-HTTP-1-1-GET-client" class="headerlink" title="5. httpc_create_request_string()：当前 client 是一个刻意最小化的 HTTP&#x2F;1.1 GET client"></a>5. <code>httpc_create_request_string()</code>：当前 client 是一个刻意最小化的 HTTP&#x2F;1.1 GET client</h2><p>state 分配前，<code>httpc_init_connection_common()</code> 会两次调用 <code>httpc_create_request_string()</code>：第一次用 <code>buffer=NULL</code> 计算长度，分配完成后第二次把 request 真正写入 <code>PBUF_RAM</code>。<a href="#source-s2">S2</a> 先进入 request 构造函数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span></span><br><span class="line"><span class="title function_">httpc_create_request_string</span><span class="params">(<span class="type">const</span> <span class="type">httpc_connection_t</span> *settings, <span class="type">const</span> <span class="type">char</span>* server_name, <span class="type">int</span> server_port, <span class="type">const</span> <span class="type">char</span>* uri,</span></span><br><span class="line"><span class="params">                            <span class="type">int</span> use_host, <span class="type">char</span> *buffer, <span class="type">size_t</span> buffer_size)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="keyword">if</span> (settings &amp;&amp; settings-&gt;use_proxy) &#123;</span><br><span class="line">    LWIP_ASSERT(<span class="string">&quot;server_name != NULL&quot;</span>, server_name != <span class="literal">NULL</span>);</span><br><span class="line">    <span class="keyword">if</span> (server_port != HTTP_DEFAULT_PORT) &#123;</span><br><span class="line">      <span class="keyword">return</span> <span class="built_in">snprintf</span>(buffer, buffer_size, HTTPC_REQ_11_PROXY_PORT_FORMAT(server_name, server_port, uri, server_name));</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      <span class="keyword">return</span> <span class="built_in">snprintf</span>(buffer, buffer_size, HTTPC_REQ_11_PROXY_FORMAT(server_name, uri, server_name));</span><br><span class="line">    &#125;</span><br><span class="line">  &#125; <span class="keyword">else</span> <span class="keyword">if</span> (use_host) &#123;</span><br><span class="line">    LWIP_ASSERT(<span class="string">&quot;server_name != NULL&quot;</span>, server_name != <span class="literal">NULL</span>);</span><br><span class="line">    <span class="keyword">return</span> <span class="built_in">snprintf</span>(buffer, buffer_size, HTTPC_REQ_11_HOST_FORMAT(uri, server_name));</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="built_in">snprintf</span>(buffer, buffer_size, HTTPC_REQ_11_FORMAT(uri));</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>它根据 proxy 与 <code>use_host</code> 选择不同 format；普通 <code>httpc_get_file_dns()</code> 路径会使用带 <code>Host</code> header 的 HTTP&#x2F;1.1 format。对应 request template 是：<a href="#source-s2">S2</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">GET &lt;uri&gt; HTTP/1.1\r\n</span><br><span class="line">User-Agent: lwIP/&lt;version&gt; ...\r\n</span><br><span class="line">Accept: */*\r\n</span><br><span class="line">Host: &lt;server_name&gt;\r\n</span><br><span class="line">Connection: Close\r\n</span><br><span class="line">\r\n</span><br></pre></td></tr></table></figure>
+
+<p>从源码开头的 TODO 与 request template 可以直接确定当前能力边界；GET&#x2F;HTTP request-response 语义由 HTTP Semantics 定义，而这里具体生成的是 HTTP&#x2F;1.1 message syntax。<a href="#source-s2">S2</a><a href="#source-s6">S6</a><a href="#source-s7">S7</a></p>
+<ul>
+<li>request method 固定为 GET；</li>
+<li>HTTP version 固定生成 HTTP&#x2F;1.1；</li>
+<li>明确发送 <code>Connection: Close</code>，当前不做 persistent connection；</li>
+<li>源码 TODO 明确还没有自动 follow redirect；</li>
+<li>支持简单 HTTP proxy；</li>
+<li>Header parser 是轻量实现，不是完整通用 HTTP framework。</li>
+</ul>
+<p>所以它非常适合：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">下载一个明确资源</span><br><span class="line">配置拉取</span><br><span class="line">OTA metadata</span><br><span class="line">固件/资源 GET</span><br><span class="line">简单 REST GET</span><br></pre></td></tr></table></figure>
+
+<p>但不应该因为名字叫 HTTP Client 就推断它具备完整 Browser&#x2F;cURL 功能。</p>
+<h2 id="6-同一个初始化点决定-HTTP-还是-HTTPS：altcp-new-看-allocator"><a href="#6-同一个初始化点决定-HTTP-还是-HTTPS：altcp-new-看-allocator" class="headerlink" title="6. 同一个初始化点决定 HTTP 还是 HTTPS：altcp_new() 看 allocator"></a>6. 同一个初始化点决定 HTTP 还是 HTTPS：<code>altcp_new()</code> 看 allocator</h2><p><code>httpc_init_connection_common()</code> 中最关键的一行是：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">req-&gt;pcb = altcp_new(settings ? settings-&gt;altcp_allocator : <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p><code>altcp_new_ip_type()</code> 的实现规则非常简单：<a href="#source-s3">S3</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">allocator == NULL</span><br><span class="line">    -&gt; altcp_tcp_new_ip_type()</span><br><span class="line">    -&gt; plain TCP</span><br><span class="line"></span><br><span class="line">allocator != NULL</span><br><span class="line">    -&gt; allocator-&gt;alloc(allocator-&gt;arg, ip_type)</span><br><span class="line">    -&gt; application 决定 transport layer</span><br></pre></td></tr></table></figure>
+
+<p>因此 HTTP&#x2F;HTTPS 的分界点不是 request parser，而是 connection allocator：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;httpc_init_connection_common()&quot;] --&gt; B[&quot;altcp_new(settings-&gt;altcp_allocator)&quot;]</span><br><span class="line">    B --&gt; C&#123;&quot;allocator ?&quot;&#125;</span><br><span class="line">    C --&gt;|&quot;NULL&quot;| D[&quot;altcp TCP&quot;]</span><br><span class="line">    C --&gt;|&quot;TLS allocator&quot;| E[&quot;altcp TLS outer&quot;]</span><br><span class="line">    E --&gt; F[&quot;inner altcp TCP&quot;]</span><br><span class="line">    D --&gt; G[&quot;same httpc callbacks/parser&quot;]</span><br><span class="line">    F --&gt; G</span><br></pre></td></tr></table></figure>
+
+<p>这就是 Stage 32～35 一直在建立的 altcp 价值：应用协议不需要重新实现一套 TLS 版本。</p>
+<h2 id="7-callback-在真正-connect-之前就全部注册完成"><a href="#7-callback-在真正-connect-之前就全部注册完成" class="headerlink" title="7. callback 在真正 connect 之前就全部注册完成"></a>7. callback 在真正 connect 之前就全部注册完成</h2><p>继续阅读 <code>httpc_init_connection_common()</code>。创建 transport 以后，callback、request buffer 和 application context 在同一个初始化函数里一起固定下来：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">req-&gt;pcb = altcp_new(settings ? settings-&gt;altcp_allocator : <span class="literal">NULL</span>);</span><br><span class="line"><span class="keyword">if</span>(req-&gt;pcb == <span class="literal">NULL</span>) &#123;</span><br><span class="line">  httpc_free_state(req);</span><br><span class="line">  <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">&#125;</span><br><span class="line">req-&gt;remote_port = (settings &amp;&amp; settings-&gt;use_proxy) ? settings-&gt;proxy_port : server_port;</span><br><span class="line">altcp_arg(req-&gt;pcb, req);</span><br><span class="line">altcp_recv(req-&gt;pcb, httpc_tcp_recv);</span><br><span class="line">altcp_err(req-&gt;pcb, httpc_tcp_err);</span><br><span class="line">altcp_poll(req-&gt;pcb, httpc_tcp_poll, HTTPC_POLL_INTERVAL);</span><br><span class="line">altcp_sent(req-&gt;pcb, httpc_tcp_sent);</span><br><span class="line"></span><br><span class="line"><span class="comment">/* set up request buffer */</span></span><br><span class="line">req_len2 = httpc_create_request_string(settings, server_name, server_port, uri, use_host,</span><br><span class="line">  (<span class="type">char</span> *)req-&gt;request-&gt;payload, req_len + <span class="number">1</span>);</span><br><span class="line"><span class="keyword">if</span> (req_len2 != req_len) &#123;</span><br><span class="line">  httpc_free_state(req);</span><br><span class="line">  <span class="keyword">return</span> ERR_VAL;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">req-&gt;recv_fn = recv_fn;</span><br><span class="line">req-&gt;conn_settings = settings;</span><br><span class="line">req-&gt;callback_arg = callback_arg;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>这里的顺序很关键：<code>altcp_recv/err/poll/sent</code> 在 DNS 和 connect 之前已经绑定，因此后续无论 plain TCP 还是 TLS outer connection，都通过同一个 <code>httpc_state_t</code> 回到这组 callback。</p>
+<p>因此后面出现：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">connected</span><br><span class="line">recv</span><br><span class="line">error</span><br><span class="line">poll timeout</span><br></pre></td></tr></table></figure>
+
+<p>都能通过同一个 <code>httpc_state_t</code> 找回当前 request state。</p>
+<p>这条初始化链要在第一次使用 callback 前说明清楚，否则后面的 <code>httpc_tcp_recv()</code> 会显得像凭空出现。</p>
+<h2 id="8-回到-httpc-get-file-dns-：进入-httpc-get-internal-dns"><a href="#8-回到-httpc-get-file-dns-：进入-httpc-get-internal-dns" class="headerlink" title="8. 回到 httpc_get_file_dns()：进入 httpc_get_internal_dns()"></a>8. 回到 <code>httpc_get_file_dns()</code>：进入 <code>httpc_get_internal_dns()</code></h2><p>state 与 callback 都准备好后，<code>httpc_get_file_dns()</code> 调用 <code>httpc_get_internal_dns()</code>。<a href="#source-s2">S2</a></p>
+<p>继续进入 <code>httpc_get_internal_dns()</code>；<code>LWIP_DNS=1</code> 时，resolver 的 callback 和 <code>req</code> context 就在这里绑定：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">httpc_get_internal_dns</span><span class="params">(<span class="type">httpc_state_t</span>* req, <span class="type">const</span> <span class="type">char</span>* server_name)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">err_t</span> err;</span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;req != NULL&quot;</span>, req != <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_DNS</span></span><br><span class="line">  err = dns_gethostbyname(server_name, &amp;req-&gt;remote_addr, httpc_dns_found, req);</span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line">  err = ipaddr_aton(server_name, &amp;req-&gt;remote_addr) ? ERR_OK : ERR_ARG;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">    <span class="comment">/* cached or IP-string */</span></span><br><span class="line">    err = httpc_get_internal_addr(req, &amp;req-&gt;remote_addr);</span><br><span class="line">  &#125; <span class="keyword">else</span> <span class="keyword">if</span> (err == ERR_INPROGRESS) &#123;</span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> err;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>ERR_OK</code> 表示 cache&#x2F;IP string 已立即得到地址；<code>ERR_INPROGRESS</code> 表示函数先返回，等待 resolver 日后调用 <code>httpc_dns_found()</code>。继续进入这个 callback：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">httpc_dns_found</span><span class="params">(<span class="type">const</span> <span class="type">char</span>* hostname, <span class="type">const</span> <span class="type">ip_addr_t</span> *ipaddr, <span class="type">void</span> *arg)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">httpc_state_t</span>* req = (<span class="type">httpc_state_t</span>*)arg;</span><br><span class="line">  <span class="type">err_t</span> err;</span><br><span class="line">  <span class="type">httpc_result_t</span> result;</span><br><span class="line"></span><br><span class="line">  LWIP_UNUSED_ARG(hostname);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (ipaddr != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    err = httpc_get_internal_addr(req, ipaddr);</span><br><span class="line">    <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">      <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line">    result = HTTPC_RESULT_ERR_CONNECT;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    LWIP_DEBUGF(HTTPC_DEBUG_WARN_STATE, (<span class="string">&quot;httpc_dns_found: failed to resolve hostname: %s\n&quot;</span>,</span><br><span class="line">      hostname));</span><br><span class="line">    result = HTTPC_RESULT_ERR_HOSTNAME;</span><br><span class="line">    err = ERR_ARG;</span><br><span class="line">  &#125;</span><br><span class="line">  httpc_close(req, result, <span class="number">0</span>, err);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>异步 DNS 成功后 callback 直接调用 <code>httpc_get_internal_addr()</code>；失败则通过 <code>httpc_close()</code> 把 <code>HTTPC_RESULT_ERR_HOSTNAME</code> 送到最终 result callback。于是三种结果是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;dns_gethostbyname()&quot;] --&gt;|&quot;ERR_OK&quot;| B[&quot;cached / immediate address&quot;]</span><br><span class="line">    A --&gt;|&quot;ERR_INPROGRESS&quot;| C[&quot;DNS request in progress&quot;]</span><br><span class="line">    A --&gt;|&quot;other error&quot;| D[&quot;request start fails&quot;]</span><br><span class="line">    B --&gt; E[&quot;httpc_get_internal_addr()&quot;]</span><br><span class="line">    C --&gt; F[&quot;httpc_dns_found()&quot;]</span><br><span class="line">    F --&gt;|&quot;ipaddr != NULL&quot;| E</span><br><span class="line">    F --&gt;|&quot;NULL&quot;| G[&quot;httpc_close(HOSTNAME error)&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>当 <code>LWIP_DNS=0</code>，这个函数只能尝试把 <code>server_name</code> 当成 IP address string 解析；普通域名不会神奇地被解析。<a href="#source-s2">S2</a></p>
+<p>Stage 14 已经完整讲过 DNS cache &#x2F; UDP &#x2F; async callback，本篇只保留这条 bridge。</p>
+<h2 id="9-DNS-返回以后进入-httpc-get-internal-addr-：开始真正的-transport-connect"><a href="#9-DNS-返回以后进入-httpc-get-internal-addr-：开始真正的-transport-connect" class="headerlink" title="9. DNS 返回以后进入 httpc_get_internal_addr()：开始真正的 transport connect"></a>9. DNS 返回以后进入 <code>httpc_get_internal_addr()</code>：开始真正的 transport connect</h2><p><code>httpc_dns_found()</code> 成功时直接调用 <code>httpc_get_internal_addr(req, ipaddr)</code>。下面进入这个函数。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">httpc_get_internal_addr</span><span class="params">(<span class="type">httpc_state_t</span>* req, <span class="type">const</span> <span class="type">ip_addr_t</span> *ipaddr)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">err_t</span> err;</span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;req != NULL&quot;</span>, req != <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (&amp;req-&gt;remote_addr != ipaddr) &#123;</span><br><span class="line">    <span class="comment">/* fill in remote addr if called externally */</span></span><br><span class="line">    req-&gt;remote_addr = *ipaddr;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  err = altcp_connect(req-&gt;pcb, &amp;req-&gt;remote_addr, req-&gt;remote_port, httpc_tcp_connected);</span><br><span class="line">  <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line">  LWIP_DEBUGF(HTTPC_DEBUG_WARN_STATE, (<span class="string">&quot;tcp_connect failed: %d\n&quot;</span>, (<span class="type">int</span>)err));</span><br><span class="line">  <span class="keyword">return</span> err;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果是 plain HTTP：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">altcp_connect()</span><br><span class="line">  -&gt; TCP active open</span><br><span class="line">  -&gt; TCP handshake completes</span><br><span class="line">  -&gt; httpc_tcp_connected()</span><br></pre></td></tr></table></figure>
+
+<p>如果是 TLS allocator：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">altcp_connect(TLS outer)</span><br><span class="line">  -&gt; inner TCP connect</span><br><span class="line">  -&gt; TLS handshake</span><br><span class="line">  -&gt; secure transport ready</span><br><span class="line">  -&gt; httpc_tcp_connected()</span><br></pre></td></tr></table></figure>
+
+<p>也就是说，HTTPS 模式下 <code>httpc_tcp_connected()</code> 和 Stage 35 的 <code>mqtt_tcp_connect_cb()</code> 一样，看到的是 <strong>altcp transport 已 ready</strong>，而不只是裸 TCP 三次握手刚结束。<a href="#source-s4">S4</a><a href="#source-s5">S5</a></p>
+<h2 id="10-进入-httpc-tcp-connected-：GET-request-只发送一次"><a href="#10-进入-httpc-tcp-connected-：GET-request-只发送一次" class="headerlink" title="10. 进入 httpc_tcp_connected()：GET request 只发送一次"></a>10. 进入 <code>httpc_tcp_connected()</code>：GET request 只发送一次</h2><p>transport connect 成功后进入 <code>httpc_tcp_connected()</code>。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">httpc_tcp_connected</span><span class="params">(<span class="type">void</span> *arg, <span class="keyword">struct</span> altcp_pcb *pcb, <span class="type">err_t</span> err)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">err_t</span> r;</span><br><span class="line">  <span class="type">httpc_state_t</span>* req = (<span class="type">httpc_state_t</span>*)arg;</span><br><span class="line">  LWIP_UNUSED_ARG(pcb);</span><br><span class="line">  LWIP_UNUSED_ARG(err);</span><br><span class="line"></span><br><span class="line">  <span class="comment">/* send request; last char is zero termination */</span></span><br><span class="line">  r = altcp_write(req-&gt;pcb, req-&gt;request-&gt;payload, req-&gt;request-&gt;len - <span class="number">1</span>, TCP_WRITE_FLAG_COPY);</span><br><span class="line">  <span class="keyword">if</span> (r != ERR_OK) &#123;</span><br><span class="line">     <span class="comment">/* could not write the single small request -&gt; fail, don&#x27;t retry */</span></span><br><span class="line">     <span class="keyword">return</span> httpc_close(req, HTTPC_RESULT_ERR_MEM, <span class="number">0</span>, r);</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="comment">/* everything written, we can free the request */</span></span><br><span class="line">  pbuf_free(req-&gt;request);</span><br><span class="line">  req-&gt;request = <span class="literal">NULL</span>;</span><br><span class="line"></span><br><span class="line">  altcp_output(req-&gt;pcb);</span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里有两个明确的实现选择：</p>
+<ol>
+<li>整个 request 在 connect 前已经准备好；</li>
+<li><code>altcp_write()</code> 如果不能一次接受这个“小 request”，当前代码直接失败，不建立像 HTTPD&#x2F;MQTT 那样复杂的 request TX state machine。</li>
+</ol>
+<p>成功写入后 request pbuf 就释放，因为 <code>TCP_WRITE_FLAG_COPY</code> 已要求下层复制数据。</p>
+<p>plain HTTP 与 HTTPS 到这里仍使用同样代码：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">HTTP request bytes</span><br><span class="line">   -&gt; altcp_write()</span><br><span class="line">      -&gt; TCP</span><br><span class="line"></span><br><span class="line">HTTP request bytes</span><br><span class="line">   -&gt; altcp_write(TLS outer)</span><br><span class="line">      -&gt; mbedtls_ssl_write()</span><br><span class="line">      -&gt; encrypted TLS records</span><br><span class="line">      -&gt; inner TCP</span><br></pre></td></tr></table></figure>
+
+<h2 id="11-Server-response-到达：httpc-tcp-recv-先积累-Header，再把-Body-交给应用"><a href="#11-Server-response-到达：httpc-tcp-recv-先积累-Header，再把-Body-交给应用" class="headerlink" title="11. Server response 到达：httpc_tcp_recv() 先积累 Header，再把 Body 交给应用"></a>11. Server response 到达：<code>httpc_tcp_recv()</code> 先积累 Header，再把 Body 交给应用</h2><p><code>httpc_init_connection_common()</code> 早已注册：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">altcp_recv(req-&gt;pcb, httpc_tcp_recv);</span><br></pre></td></tr></table></figure>
+
+<p>所以 transport 收到 application plaintext 后会进入 <code>httpc_tcp_recv()</code>。HTTPS 时 TLS 已经先解密，httpc parser 不处理 TLS record。<a href="#source-s2">S2</a><a href="#source-s5">S5</a></p>
+<p>继续阅读 <code>httpc_tcp_recv()</code>。当当前状态还不是 Body，函数先把新收到的 pbuf 接到 <code>rx_hdrs</code>，然后依次推进 status-line 与 Header 两个 parser；Header 完整后通过 <code>pbuf_free_header()</code> 把同一个 pbuf chain 的数据视图推进到 Body，并立即允许本次 callback 继续消费剩余 Body：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (req-&gt;parse_state != HTTPC_PARSE_RX_DATA) &#123;</span><br><span class="line">    <span class="comment">/* did not get RX data yet */</span></span><br><span class="line">    result = HTTPC_RESULT_ERR_CLOSED;</span><br><span class="line">  &#125; <span class="keyword">else</span> <span class="keyword">if</span> ((req-&gt;hdr_content_len != HTTPC_CONTENT_LEN_INVALID) &amp;&amp;</span><br><span class="line">    (req-&gt;hdr_content_len != req-&gt;rx_content_len)) &#123;</span><br><span class="line">    <span class="comment">/* header has been received with content length but not all data received */</span></span><br><span class="line">    result = HTTPC_RESULT_ERR_CONTENT_LEN;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    <span class="comment">/* receiving data and either all data received or no content length header */</span></span><br><span class="line">    result = HTTPC_RESULT_OK;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> httpc_close(req, result, req-&gt;rx_status, ERR_OK);</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> (req-&gt;parse_state != HTTPC_PARSE_RX_DATA) &#123;</span><br><span class="line">  <span class="keyword">if</span> (req-&gt;rx_hdrs == <span class="literal">NULL</span>) &#123;</span><br><span class="line">    req-&gt;rx_hdrs = p;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    pbuf_cat(req-&gt;rx_hdrs, p);</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">if</span> (req-&gt;parse_state == HTTPC_PARSE_WAIT_FIRST_LINE) &#123;</span><br><span class="line">    <span class="type">u16_t</span> status_str_off;</span><br><span class="line">    <span class="type">err_t</span> err = http_parse_response_status(req-&gt;rx_hdrs, &amp;req-&gt;rx_http_version, &amp;req-&gt;rx_status, &amp;status_str_off);</span><br><span class="line">    <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">      <span class="comment">/* don&#x27;t care status string */</span></span><br><span class="line">      req-&gt;parse_state = HTTPC_PARSE_WAIT_HEADERS;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">if</span> (req-&gt;parse_state == HTTPC_PARSE_WAIT_HEADERS) &#123;</span><br><span class="line">    <span class="type">u16_t</span> total_header_len;</span><br><span class="line">    <span class="type">err_t</span> err = http_wait_headers(req-&gt;rx_hdrs, &amp;req-&gt;hdr_content_len, &amp;total_header_len);</span><br><span class="line">    <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">      <span class="class"><span class="keyword">struct</span> <span class="title">pbuf</span> *<span class="title">q</span>;</span></span><br><span class="line">      <span class="comment">/* full header received, send window update for header bytes and call into client callback */</span></span><br><span class="line">      altcp_recved(pcb, total_header_len);</span><br><span class="line">      <span class="keyword">if</span> (req-&gt;conn_settings) &#123;</span><br><span class="line">        <span class="keyword">if</span> (req-&gt;conn_settings-&gt;headers_done_fn) &#123;</span><br><span class="line">          err = req-&gt;conn_settings-&gt;headers_done_fn(req, req-&gt;callback_arg, req-&gt;rx_hdrs, total_header_len, req-&gt;hdr_content_len);</span><br><span class="line">          <span class="keyword">if</span> (err != ERR_OK) &#123;</span><br><span class="line">            <span class="keyword">return</span> httpc_close(req, HTTPC_RESULT_LOCAL_ABORT, req-&gt;rx_status, err);</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">      <span class="comment">/* hide header bytes in pbuf */</span></span><br><span class="line">      q = pbuf_free_header(req-&gt;rx_hdrs, total_header_len);</span><br><span class="line">      p = q;</span><br><span class="line">      req-&gt;rx_hdrs = <span class="literal">NULL</span>;</span><br><span class="line">      <span class="comment">/* go on with data */</span></span><br><span class="line">      req-&gt;parse_state = HTTPC_PARSE_RX_DATA;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> ((p != <span class="literal">NULL</span>) &amp;&amp; (req-&gt;parse_state == HTTPC_PARSE_RX_DATA)) &#123;</span><br><span class="line">  req-&gt;rx_content_len += p-&gt;tot_len;</span><br><span class="line">  <span class="comment">/* received valid data: reset timeout */</span></span><br><span class="line">  req-&gt;timeout_ticks = HTTPC_POLL_TIMEOUT;</span><br><span class="line">  <span class="keyword">if</span> (req-&gt;recv_fn != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    <span class="comment">/* directly return here: the connection might already be aborted from the callback! */</span></span><br><span class="line">    <span class="keyword">return</span> req-&gt;recv_fn(req-&gt;callback_arg, pcb, p, r);</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    altcp_recved(pcb, p-&gt;tot_len);</span><br><span class="line">    pbuf_free(p);</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因此 parser 的三个状态不是抽象说明，而是这个 callback 中真实推进的状态：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">HTTPC_PARSE_WAIT_FIRST_LINE</span><br><span class="line">        ↓</span><br><span class="line">HTTPC_PARSE_WAIT_HEADERS</span><br><span class="line">        ↓</span><br><span class="line">HTTPC_PARSE_RX_DATA</span><br></pre></td></tr></table></figure>
+
+<p>首次数据到达时，如果 Header 跨多个 TCP segment&#x2F;pbuf，<code>httpc_tcp_recv()</code> 会把这些 pbuf 用 <code>pbuf_cat()</code> 暂存到 <code>req-&gt;rx_hdrs</code>，直到能找到完整 <code>\r\n\r\n</code>。HTTP message boundary 与 TCP segment&#x2F;pbuf boundary 的协议背景已经在前置资料中说明；这里的新增信息是：<strong>当前 httpc 通过累积 <code>req-&gt;rx_hdrs</code> 恢复这条 application-level boundary。</strong> <a href="#source-s2">S2</a><a href="#source-s7">S7</a></p>
+<h2 id="12-status-line-与-Header：当前-parser-只提取它真正需要的最小信息"><a href="#12-status-line-与-Header：当前-parser-只提取它真正需要的最小信息" class="headerlink" title="12. status line 与 Header：当前 parser 只提取它真正需要的最小信息"></a>12. status line 与 Header：当前 parser 只提取它真正需要的最小信息</h2><p><code>httpc_tcp_recv()</code> 在 <code>HTTPC_PARSE_WAIT_FIRST_LINE</code> 状态调用 <code>http_parse_response_status()</code>。下面进入该 parser；它必须先找到第一行 <code>\r\n</code>、<code>HTTP/</code> 前缀和空格，再把 version&#x2F;status 写回 caller 提供的字段：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">http_parse_response_status</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="type">u16_t</span> *http_version, <span class="type">u16_t</span> *http_status, <span class="type">u16_t</span> *http_status_str_offset)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">u16_t</span> end1 = pbuf_memfind(p, <span class="string">&quot;\r\n&quot;</span>, <span class="number">2</span>, <span class="number">0</span>);</span><br><span class="line">  <span class="keyword">if</span> (end1 != <span class="number">0xFFFF</span>) &#123;</span><br><span class="line">    <span class="comment">/* get parts of first line */</span></span><br><span class="line">    <span class="type">u16_t</span> space1, space2;</span><br><span class="line">    space1 = pbuf_memfind(p, <span class="string">&quot; &quot;</span>, <span class="number">1</span>, <span class="number">0</span>);</span><br><span class="line">    <span class="keyword">if</span> (space1 != <span class="number">0xFFFF</span>) &#123;</span><br><span class="line">      <span class="keyword">if</span> ((pbuf_memcmp(p, <span class="number">0</span>, <span class="string">&quot;HTTP/&quot;</span>, <span class="number">5</span>) == <span class="number">0</span>)  &amp;&amp; (pbuf_get_at(p, <span class="number">6</span>) == <span class="string">&#x27;.&#x27;</span>)) &#123;</span><br><span class="line">        <span class="type">char</span> status_num[<span class="number">10</span>];</span><br><span class="line">        <span class="type">size_t</span> status_num_len;</span><br><span class="line">        <span class="comment">/* parse http version */</span></span><br><span class="line">        <span class="type">u16_t</span> version = pbuf_get_at(p, <span class="number">5</span>) - <span class="string">&#x27;0&#x27;</span>;</span><br><span class="line">        version &lt;&lt;= <span class="number">8</span>;</span><br><span class="line">        version |= pbuf_get_at(p, <span class="number">7</span>) - <span class="string">&#x27;0&#x27;</span>;</span><br><span class="line">        *http_version = version;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/* parse http status number */</span></span><br><span class="line">        space2 = pbuf_memfind(p, <span class="string">&quot; &quot;</span>, <span class="number">1</span>, space1 + <span class="number">1</span>);</span><br><span class="line">        <span class="keyword">if</span> (space2 != <span class="number">0xFFFF</span>) &#123;</span><br><span class="line">          *http_status_str_offset = space2 + <span class="number">1</span>;</span><br><span class="line">          status_num_len = space2 - space1 - <span class="number">1</span>;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">          status_num_len = end1 - space1 - <span class="number">1</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (status_num_len &lt; <span class="keyword">sizeof</span>(status_num)) &#123;</span><br><span class="line">          <span class="keyword">if</span> (pbuf_copy_partial(p, status_num, (<span class="type">u16_t</span>)status_num_len, space1 + <span class="number">1</span>) == status_num_len) &#123;</span><br><span class="line">            <span class="type">int</span> status;</span><br><span class="line">            status_num[status_num_len] = <span class="number">0</span>;</span><br><span class="line">            status = atoi(status_num);</span><br><span class="line">            <span class="keyword">if</span> ((status &gt; <span class="number">0</span>) &amp;&amp; (status &lt;= <span class="number">0xFFFF</span>)) &#123;</span><br><span class="line">              *http_status = (<span class="type">u16_t</span>)status;</span><br><span class="line">              <span class="keyword">return</span> ERR_OK;</span><br><span class="line">            &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> ERR_VAL;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>成功返回后 <code>httpc_tcp_recv()</code> 把状态切到 <code>HTTPC_PARSE_WAIT_HEADERS</code>。随后进入 <code>http_wait_headers()</code>；它搜索完整 Header 结束符，并尝试读取 <code>Content-Length</code>：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">http_wait_headers</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="type">u32_t</span> *content_length, <span class="type">u16_t</span> *total_header_len)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">u16_t</span> end1 = pbuf_memfind(p, <span class="string">&quot;\r\n\r\n&quot;</span>, <span class="number">4</span>, <span class="number">0</span>);</span><br><span class="line">  <span class="keyword">if</span> (end1 &lt; (<span class="number">0xFFFF</span> - <span class="number">2</span>)) &#123;</span><br><span class="line">    <span class="comment">/* all headers received */</span></span><br><span class="line">    <span class="comment">/* check if we have a content length (@todo: case insensitive?) */</span></span><br><span class="line">    <span class="type">u16_t</span> content_len_hdr;</span><br><span class="line">    *content_length = HTTPC_CONTENT_LEN_INVALID;</span><br><span class="line">    *total_header_len = end1 + <span class="number">4</span>;</span><br><span class="line"></span><br><span class="line">    content_len_hdr = pbuf_memfind(p, <span class="string">&quot;Content-Length: &quot;</span>, <span class="number">16</span>, <span class="number">0</span>);</span><br><span class="line">    <span class="keyword">if</span> (content_len_hdr != <span class="number">0xFFFF</span>) &#123;</span><br><span class="line">      <span class="type">u16_t</span> content_len_line_end = pbuf_memfind(p, <span class="string">&quot;\r\n&quot;</span>, <span class="number">2</span>, content_len_hdr);</span><br><span class="line">      <span class="keyword">if</span> (content_len_line_end != <span class="number">0xFFFF</span>) &#123;</span><br><span class="line">        <span class="type">char</span> content_len_num[<span class="number">16</span>];</span><br><span class="line">        <span class="type">u16_t</span> content_len_num_len = (<span class="type">u16_t</span>)(content_len_line_end - content_len_hdr - <span class="number">16</span>);</span><br><span class="line">        <span class="keyword">if</span> (content_len_num_len &lt; <span class="keyword">sizeof</span>(content_len_num)) &#123;</span><br><span class="line">          <span class="keyword">if</span> (pbuf_copy_partial(p, content_len_num, content_len_num_len, content_len_hdr + <span class="number">16</span>) == content_len_num_len) &#123;</span><br><span class="line">            <span class="type">int</span> len;</span><br><span class="line">            content_len_num[content_len_num_len] = <span class="number">0</span>;</span><br><span class="line">            len = atoi(content_len_num);</span><br><span class="line">            <span class="keyword">if</span> ((len &gt;= <span class="number">0</span>) &amp;&amp; ((<span class="type">u32_t</span>)len &lt; HTTPC_CONTENT_LEN_INVALID)) &#123;</span><br><span class="line">              *content_length = (<span class="type">u32_t</span>)len;</span><br><span class="line">            &#125;</span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> ERR_VAL;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>它识别的 Header 结束边界是 <code>\r\n\r\n</code>，并尝试读取：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Content-Length: &lt;number&gt;</span><br></pre></td></tr></table></figure>
+
+<p>当前实现对 <code>Content-Length: </code> 使用直接字符串搜索，源码里还留有“case insensitive?” TODO。<a href="#source-s2">S2</a></p>
+<p>Header 完整后：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">altcp_recved(header bytes)</span><br><span class="line">    ↓</span><br><span class="line">headers_done_fn(...)</span><br><span class="line">    ↓</span><br><span class="line">pbuf_free_header(...)</span><br><span class="line">    ↓</span><br><span class="line">剩余 pbuf view 只保留 Body</span><br><span class="line">    ↓</span><br><span class="line">HTTPC_PARSE_RX_DATA</span><br></pre></td></tr></table></figure>
+
+<p>如果同一个 TCP pbuf 中同时包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">HTTP Header + Body 前几个字节</span><br></pre></td></tr></table></figure>
+
+<p><code>pbuf_free_header()</code> 只移动数据视图，Body 不会被丢掉，而是继续进入后面的 Body callback。</p>
+<h2 id="13-headers-done-fn-与-recv-fn-是两种不同-callback"><a href="#13-headers-done-fn-与-recv-fn-是两种不同-callback" class="headerlink" title="13. headers_done_fn 与 recv_fn 是两种不同 callback"></a>13. <code>headers_done_fn</code> 与 <code>recv_fn</code> 是两种不同 callback</h2><p><code>httpc_connection_t::headers_done_fn</code> 只在完整 Header 被确认后调用一次，可以读取：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">HTTP status/header pbuf</span><br><span class="line">header length</span><br><span class="line">Content-Length（若识别到）</span><br></pre></td></tr></table></figure>
+
+<p>并允许通过返回非 <code>ERR_OK</code> 主动 abort。</p>
+<p>而 <code>recv_fn</code> 接收的是 <strong>Body pbuf</strong>。当前 <code>httpc_tcp_recv()</code> 在进入 Body 状态后会：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">req-&gt;rx_content_len += p-&gt;tot_len</span><br><span class="line">    ↓</span><br><span class="line">reset timeout</span><br><span class="line">    ↓</span><br><span class="line">return req-&gt;recv_fn(..., p, ...)</span><br></pre></td></tr></table></figure>
+
+<p>这里它直接把 pbuf ownership 交给 callback，没有在返回前自动 <code>pbuf_free(p)</code>。<a href="#source-s2">S2</a></p>
+<p>源码自带的 <code>httpc_fs_tcp_recv()</code> 给出了正确消费模式：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">httpc_fs_tcp_recv</span><span class="params">(<span class="type">void</span> *arg, <span class="keyword">struct</span> altcp_pcb *pcb, <span class="keyword">struct</span> pbuf *p, <span class="type">err_t</span> err)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">httpc_filestate_t</span> *filestate = (<span class="type">httpc_filestate_t</span>*)arg;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">pbuf</span>* <span class="title">q</span>;</span></span><br><span class="line">  LWIP_UNUSED_ARG(err);</span><br><span class="line"></span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;p != NULL&quot;</span>, p != <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">for</span> (q = p; q != <span class="literal">NULL</span>; q = q-&gt;next) &#123;</span><br><span class="line">    fwrite(q-&gt;payload, <span class="number">1</span>, q-&gt;len, filestate-&gt;file);</span><br><span class="line">  &#125;</span><br><span class="line">  altcp_recved(pcb, p-&gt;tot_len);</span><br><span class="line">  pbuf_free(p);</span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因此自定义 OTA&#x2F;配置下载 callback 也必须认真处理：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">消费 pbuf chain</span><br><span class="line">    ↓</span><br><span class="line">altcp_recved()</span><br><span class="line">    ↓</span><br><span class="line">pbuf_free()</span><br></pre></td></tr></table></figure>
+
+<p>不能只保存 <code>p-&gt;payload</code> pointer 后立即返回，再假设它长期有效。</p>
+<h2 id="14-p-NULL-才进入-transfer-completion-判断"><a href="#14-p-NULL-才进入-transfer-completion-判断" class="headerlink" title="14. p == NULL 才进入 transfer completion 判断"></a>14. <code>p == NULL</code> 才进入 transfer completion 判断</h2><p>当前 request template 明确发送 <code>Connection: Close</code>，因此 remote close 被纳入这份 client 的 transfer lifecycle。<a href="#source-s2">S2</a><a href="#source-s7">S7</a> RFC 9112 对 close-delimited framing 的一般规则与限制直接参考前置资料；本文只追当前 httpc 收到 <code>p == NULL</code> 后怎样结合 parser state 与可选 <code>Content-Length</code> 判断结果。</p>
+<p><code>httpc_tcp_recv()</code> 收到 <code>p == NULL</code> 时会判断：<a href="#source-s2">S2</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">还没进入 Body</span><br><span class="line">    -&gt; HTTPC_RESULT_ERR_CLOSED</span><br><span class="line"></span><br><span class="line">有 Content-Length，实际 Body 长度不匹配</span><br><span class="line">    -&gt; HTTPC_RESULT_ERR_CONTENT_LEN</span><br><span class="line"></span><br><span class="line">已经接收 Body，长度匹配或没有 Content-Length</span><br><span class="line">    -&gt; HTTPC_RESULT_OK</span><br></pre></td></tr></table></figure>
+
+<p>然后进入：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">httpc_close()</span><br><span class="line">    ↓</span><br><span class="line">settings-&gt;result_fn(...)</span><br><span class="line">    ↓</span><br><span class="line">httpc_free_state()</span><br><span class="line">    ↓</span><br><span class="line">close / abort altcp connection</span><br></pre></td></tr></table></figure>
+
+<p>注意 <code>HTTPC_RESULT_OK</code> 表示 <strong>HTTP transfer 在当前 client 的 transport&#x2F;body 完整性语义下成功完成</strong>。HTTP status code 仍通过 <code>srv_res</code> 单独返回。</p>
+<p>当前实现不会因为收到 404&#x2F;500 就自动把它转换成一个完整的高级“REST exception”模型；应用应该结合 <code>httpc_result</code> 与 <code>srv_res</code> 判断业务结果。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<h2 id="15-Poll-timeout：没有进展的连接最终会被-httpc-tcp-poll-关闭"><a href="#15-Poll-timeout：没有进展的连接最终会被-httpc-tcp-poll-关闭" class="headerlink" title="15. Poll timeout：没有进展的连接最终会被 httpc_tcp_poll() 关闭"></a>15. Poll timeout：没有进展的连接最终会被 <code>httpc_tcp_poll()</code> 关闭</h2><p>初始化时 httpc 注册：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">altcp_poll(req-&gt;pcb, httpc_tcp_poll, HTTPC_POLL_INTERVAL)</span><br></pre></td></tr></table></figure>
+
+<p><code>httpc_state_t::timeout_ticks</code> 初始为 <code>HTTPC_POLL_TIMEOUT</code>。当前源码：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">HTTPC_POLL_INTERVAL = 1</span><br><span class="line">HTTPC_POLL_TIMEOUT  = 30   /* 15 seconds */</span><br></pre></td></tr></table></figure>
+
+<p>收到有效 Body 数据时会把 tick counter 重置。若 poll callback 连续把它减到 0：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">httpc_close(..., HTTPC_RESULT_ERR_TIMEOUT, ...)</span><br></pre></td></tr></table></figure>
+
+<p>所以 timeout 同样属于异步 callback lifecycle，而不是 application thread 阻塞等待一个固定秒数。<a href="#source-s2">S2</a></p>
+<h2 id="16-HTTPS-只替换-transport：HTTP-parser-不变"><a href="#16-HTTPS-只替换-transport：HTTP-parser-不变" class="headerlink" title="16. HTTPS 只替换 transport：HTTP parser 不变"></a>16. HTTPS 只替换 transport：HTTP parser 不变</h2><p>TLS handshake 与 BIO 的完整机制归属 Stage 33；对当前 httpc 主线而言，HTTPS 集成只需要给 <code>httpc_connection_t::altcp_allocator</code> 提供 TLS allocator；<code>httpc_init_connection_common()</code> 仍走同一套 request builder、callback 注册和 parser。<a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<p>下面只保留最小集成关系，代码是基于 upstream API 的集成示意，不是 upstream example：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">tls_config = altcp_tls_create_config_client(ca_cert, ca_cert_len);</span><br><span class="line">tls_allocator.alloc = altcp_tls_alloc;</span><br><span class="line">tls_allocator.arg = tls_config;</span><br><span class="line">settings.altcp_allocator = &amp;tls_allocator;</span><br><span class="line">httpc_get_file_dns(<span class="string">&quot;api.example.com&quot;</span>, <span class="number">443</span>, <span class="string">&quot;/config.json&quot;</span>,</span><br><span class="line">                   &amp;settings, http_body_cb, app_ctx, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p>此时对象关系是 <code>httpc -&gt; altcp TLS outer -&gt; mbedTLS -&gt; altcp TCP inner</code>；HTTP request&#x2F;response parser 不需要第二份实现。</p>
+<h2 id="17-TLS-allocator-不等于完整-HTTPS-身份认证"><a href="#17-TLS-allocator-不等于完整-HTTPS-身份认证" class="headerlink" title="17. TLS allocator 不等于完整 HTTPS 身份认证"></a>17. TLS allocator 不等于完整 HTTPS 身份认证</h2><p>当前 lwIP mbedTLS port 允许 client config 传入 CA，但默认 <code>ALTCP_MBEDTLS_AUTHMODE</code> 是 <code>MBEDTLS_SSL_VERIFY_OPTIONAL</code>。<a href="#source-s5">S5</a> 更关键的是，目标 <code>http_client.c</code> &#x2F; <code>altcp_tls_mbedtls.c</code> 中，<code>server_name</code> 用于 DNS 和 HTTP <code>Host</code>，却没有自动进入 <code>mbedtls_ssl_set_hostname()</code>；Mbed TLS 官方 guidance 明确要求 certificate-authenticated client 把预期 server name 交给 TLS layer 才能完成 hostname authentication。<a href="#source-s2">S2</a><a href="#source-s5">S5</a><a href="#source-s10">S10</a></p>
+<p>因此产品必须单独审核 CA trust、verification mode、certificate validity time、peer hostname verification 与 SNI；<code>port=443 + TLS allocator</code> 不能直接等价为“完整 Web PKI 身份验证已建立”。Stage 33 负责 TLS transport 机制，本节只保留 httpc 集成边界。</p>
+<h2 id="18-Stage-36-的系统时间怎样影响-HTTPS"><a href="#18-Stage-36-的系统时间怎样影响-HTTPS" class="headerlink" title="18. Stage 36 的系统时间怎样影响 HTTPS"></a>18. Stage 36 的系统时间怎样影响 HTTPS</h2><p>启用基于系统时间的 X.509 validity checking 时，Mbed TLS 使用当前 wall clock 判断 certificate 是否 expired &#x2F; not-yet-valid。<a href="#source-s10">S10</a> 因而产品常把 Stage 36 的时间同步放在 certificate-authenticated HTTPS&#x2F;MQTT-TLS 之前；但若系统已有 RTC、可信启动时间或关闭了 date-based checking，则不能把“必须先 SNTP”写成协议硬要求。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;SNTP / trusted clock&quot;] --&gt; B[&quot;X.509 validity check&quot;]</span><br><span class="line">    B --&gt; C[&quot;TLS ready&quot;]</span><br><span class="line">    C --&gt; D[&quot;HTTP GET&quot;]</span><br></pre></td></tr></table></figure>
+
+<h2 id="19-OTA-下载里-httpc-的职责边界"><a href="#19-OTA-下载里-httpc-的职责边界" class="headerlink" title="19. OTA 下载里 httpc 的职责边界"></a>19. OTA 下载里 httpc 的职责边界</h2><p>httpc 适合承担 <code>DNS -&gt; TCP/TLS -&gt; GET -&gt; Body pbuf stream</code> 这条网络传输链；Flash erase&#x2F;program、slot 选择、hash&#x2F;签名验证、版本策略、rollback、bootloader 状态和掉电恢复仍属于 OTA manager。也就是说，httpc 交付的是 byte stream，不是完整 OTA 状态机。</p>
+<h2 id="20-LWIP-HTTPC-HAVE-FILE-IO-只是-Host-example-helper"><a href="#20-LWIP-HTTPC-HAVE-FILE-IO-只是-Host-example-helper" class="headerlink" title="20. LWIP_HTTPC_HAVE_FILE_IO 只是 Host&#x2F;example helper"></a>20. <code>LWIP_HTTPC_HAVE_FILE_IO</code> 只是 Host&#x2F;example helper</h2><p>打开 <code>LWIP_HTTPC_HAVE_FILE_IO</code> 后，源码会编译 <code>httpc_get_file_to_disk()</code> &#x2F; <code>httpc_get_file_dns_to_disk()</code>，内部用 <code>fopen/fwrite/fclose</code> 消费 Body；public header 明确把它定位为 interface example implementation。<a href="#source-s1">S1</a><a href="#source-s2">S2</a> MCU OTA 完全可以把 <code>recv_fn</code> 直接接到 Flash writer，不需要先引入 POSIX filesystem。</p>
+<h2 id="21-HTTP-client-的运行上下文仍然属于-callback-style-lwIP-core-API"><a href="#21-HTTP-client-的运行上下文仍然属于-callback-style-lwIP-core-API" class="headerlink" title="21. HTTP client 的运行上下文仍然属于 callback-style lwIP core API"></a>21. HTTP client 的运行上下文仍然属于 callback-style lwIP core API</h2><p><code>httpc</code> 最终直接创建 altcp PCB、注册 callback 并调用 <code>altcp_connect()</code>。因此和 MQTT&#x2F;SNTP 一样，在 <code>NO_SYS=0</code> 的 RTOS 模式下要遵守 lwIP core execution-context contract。<a href="#source-s8">S8</a></p>
+<p>也就是说，未来 RT-Thread application thread 想发起：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">httpc_get_file_dns(...)</span><br></pre></td></tr></table></figure>
+
+<p>不能因为它“看起来是应用层 API”就忽略线程约束。应通过 TCPIP thread 调度或已配置的 core locking 进入，具体 RT-Thread 集成会留到 Stage 39，而不是在本篇展开 RT-Thread 内部实现。</p>
+<h2 id="22-Stage-37-的完整主调用链"><a href="#22-Stage-37-的完整主调用链" class="headerlink" title="22. Stage 37 的完整主调用链"></a>22. Stage 37 的完整主调用链</h2><p>把本篇已经出现的对象和 callback 按实际顺序串起来：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;httpc_get_file_dns()&quot;] --&gt; B[&quot;httpc_init_connection()&quot;]</span><br><span class="line">    B --&gt; C[&quot;httpc_init_connection_common()&quot;]</span><br><span class="line">    C --&gt; D[&quot;build GET request + altcp_new() + register callbacks&quot;]</span><br><span class="line">    D --&gt; E[&quot;httpc_get_internal_dns()&quot;]</span><br><span class="line">    E --&gt; F[&quot;dns_gethostbyname()&quot;]</span><br><span class="line">    F --&gt; G[&quot;httpc_dns_found()&quot;]</span><br><span class="line">    G --&gt; H[&quot;httpc_get_internal_addr()&quot;]</span><br><span class="line">    H --&gt; I[&quot;altcp_connect()&quot;]</span><br><span class="line">    I --&gt; J[&quot;TCP connect / optional TLS handshake&quot;]</span><br><span class="line">    J --&gt; K[&quot;httpc_tcp_connected()&quot;]</span><br><span class="line">    K --&gt; L[&quot;altcp_write(GET) + altcp_output()&quot;]</span><br><span class="line">    L --&gt; M[&quot;httpc_tcp_recv()&quot;]</span><br><span class="line">    M --&gt; N[&quot;parse status + accumulate headers&quot;]</span><br><span class="line">    N --&gt; O[&quot;headers_done_fn&quot;]</span><br><span class="line">    O --&gt; P[&quot;Body recv_fn&quot;]</span><br><span class="line">    P --&gt; Q[&quot;remote close / length check&quot;]</span><br><span class="line">    Q --&gt; R[&quot;result_fn + httpc_free_state()&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>Stage 37 到这里建立的是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">HTTP Client</span><br><span class="line">  = DNS/address resolution</span><br><span class="line">  + altcp transport</span><br><span class="line">  + minimal HTTP/1.1 GET formatting/parsing</span><br><span class="line">  + Header callback</span><br><span class="line">  + streamed Body callback</span><br><span class="line">  + completion/error callback</span><br></pre></td></tr></table></figure>
+
+<p>把 <code>altcp_allocator</code> 换成 TLS allocator 后，这条链就成为 HTTPS；httpc 本身不需要第二套 parser。</p>
+<p>Stage 38 将转向 <code>lwipopts.h</code>、源码选择、OS Port 与 Network Port 的裁剪和移植。</p>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-lwIP-HTTP-client-public-API"><a href="#S1-lwIP-HTTP-client-public-API" class="headerlink" title="[S1] lwIP HTTP client public API"></a>[S1] lwIP HTTP client public API</h3><ul>
+<li>类型：用户提供源码快照 + upstream 对照</li>
+<li>版本：用户提供 <code>lwip.zip</code>；相关文件 blob 与 upstream commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code> 一致</li>
+<li>定位：<code>src/include/lwip/apps/http_client.h</code>：<code>httpc_connection_t</code>、<code>httpc_result_t</code>、<code>httpc_get_file()</code>、<code>httpc_get_file_dns()</code>、Header&#x2F;Body callback contract</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/apps/http_client.h">lwIP http_client.h</a></li>
+<li>使用位置：“公共入口”“settings&#x2F;allocator&#x2F;callback contract”“File I&#x2F;O helper 边界”</li>
+<li>支撑内容：限定应用可配置的 HTTP client interface</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-lwIP-HTTP-client-implementation"><a href="#S2-lwIP-HTTP-client-implementation" class="headerlink" title="[S2] lwIP HTTP client implementation"></a>[S2] lwIP HTTP client implementation</h3><ul>
+<li>类型：用户提供源码快照 + upstream 对照</li>
+<li>版本：同上</li>
+<li>定位：<code>src/apps/http/http_client.c</code>：<code>httpc_get_file_dns()</code>、<code>httpc_init_connection_common()</code>、<code>httpc_get_internal_dns()</code>、<code>httpc_dns_found()</code>、<code>httpc_get_internal_addr()</code>、<code>httpc_tcp_connected()</code>、<code>httpc_tcp_recv()</code>、<code>httpc_tcp_poll()</code>、<code>httpc_close()</code>、<code>httpc_fs_tcp_recv()</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/apps/http/http_client.c">lwIP http_client.c</a></li>
+<li>使用位置：Stage 37 Source-driven 主调用链</li>
+<li>支撑内容：GET request 构造、DNS bridge、Header&#x2F;Body parsing、pbuf ownership、timeout、completion 与当前实现能力边界</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-lwIP-altcp-allocator-abstraction"><a href="#S3-lwIP-altcp-allocator-abstraction" class="headerlink" title="[S3] lwIP altcp allocator abstraction"></a>[S3] lwIP altcp allocator abstraction</h3><ul>
+<li>类型：目标版本上游源码</li>
+<li>版本：同上</li>
+<li>定位：<code>src/core/altcp.c</code>：allocator 说明、<code>altcp_new_ip_type()</code>；<code>src/include/lwip/altcp.h</code>：<code>altcp_allocator_t</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/altcp.c">lwIP altcp.c</a></li>
+<li>使用位置：“HTTP 与 HTTPS 如何共享 httpc”“NULL allocator 与 TLS allocator 的分界”</li>
+<li>支撑内容：证明 transport layer 由 runtime allocator 决定</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-lwIP-altcp-TLS-allocator-API"><a href="#S4-lwIP-altcp-TLS-allocator-API" class="headerlink" title="[S4] lwIP altcp TLS allocator API"></a>[S4] lwIP altcp TLS allocator API</h3><ul>
+<li>类型：目标版本上游源码</li>
+<li>版本：同上</li>
+<li>定位：<code>src/include/lwip/altcp_tls.h</code>：client config、<code>altcp_tls_alloc()</code>；<code>src/core/altcp_alloc.c</code>：<code>altcp_tls_new()</code>、<code>altcp_tls_alloc()</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/altcp_tls.h">lwIP altcp_tls.h</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/altcp_alloc.c">lwIP altcp_alloc.c</a></li>
+<li>使用位置：“HTTPS allocator 集成”“TLS outer + TCP inner”</li>
+<li>支撑内容：说明 HTTP client 如何在不改变 parser 的情况下创建 TLS-over-TCP connection</li>
+</ul>
+<p><a id="source-s5"></a></p>
+<h3 id="S5-lwIP-altcp-mbedTLS-client-implementation"><a href="#S5-lwIP-altcp-mbedTLS-client-implementation" class="headerlink" title="[S5] lwIP altcp mbedTLS client implementation"></a>[S5] lwIP altcp mbedTLS client implementation</h3><ul>
+<li>类型：目标版本上游源码</li>
+<li>版本：同上</li>
+<li>定位：<code>src/apps/altcp_tls/altcp_tls_mbedtls.c</code>：<code>altcp_tls_create_config_client_common()</code>、<code>altcp_tls_create_config_client()</code>、TLS handshake&#x2F;BIO；<code>src/include/lwip/apps/altcp_tls_mbedtls_opts.h</code>：<code>ALTCP_MBEDTLS_AUTHMODE</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/apps/altcp_tls/altcp_tls_mbedtls.c">lwIP altcp_tls_mbedtls.c</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/apps/altcp_tls_mbedtls_opts.h">lwIP altcp TLS options</a></li>
+<li>使用位置：“HTTPS handshake”“CA&#x2F;authmode&#x2F;hostname verification 安全边界”“系统时间与证书有效期”</li>
+<li>支撑内容：证明当前 mbedTLS port 的 client verification 默认与 config 行为，避免把“用了 TLS”误写成“完整 Web PKI 验证已自动建立”</li>
+</ul>
+<p><a id="source-s6"></a></p>
+<h3 id="S6-RFC-9110-—-HTTP-Semantics"><a href="#S6-RFC-9110-—-HTTP-Semantics" class="headerlink" title="[S6] RFC 9110 — HTTP Semantics"></a>[S6] RFC 9110 — HTTP Semantics</h3><ul>
+<li>类型：IETF Internet Standard</li>
+<li>版本：RFC 9110 &#x2F; STD 97，2022</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9110.html">RFC 9110</a></li>
+<li>使用位置：“HTTP request&#x2F;response 与 GET 语义”“status code 与 transfer result 的区别”</li>
+<li>支撑内容：提供 HTTP 通用语义；当前 lwIP parser 能力仍以目标源码为准</li>
+</ul>
+<p><a id="source-s7"></a></p>
+<h3 id="S7-RFC-9112-—-HTTP-1-1"><a href="#S7-RFC-9112-—-HTTP-1-1" class="headerlink" title="[S7] RFC 9112 — HTTP&#x2F;1.1"></a>[S7] RFC 9112 — HTTP&#x2F;1.1</h3><ul>
+<li>类型：IETF Internet Standard</li>
+<li>版本：RFC 9112 &#x2F; STD 99，2022</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9112.html">RFC 9112</a></li>
+<li>使用位置：“HTTP&#x2F;1.1 message syntax”“Connection: Close”“Header&#x2F;body framing 背景”</li>
+<li>支撑内容：提供 HTTP&#x2F;1.1 wire-format 与 connection-management 规范背景</li>
+</ul>
+<p><a id="source-s8"></a></p>
+<h3 id="S8-lwIP-Multithreading-Common-pitfalls"><a href="#S8-lwIP-Multithreading-Common-pitfalls" class="headerlink" title="[S8] lwIP Multithreading &#x2F; Common pitfalls"></a>[S8] lwIP Multithreading &#x2F; Common pitfalls</h3><ul>
+<li>类型：目标版本上游 Doxygen 文档</li>
+<li>版本：commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>doc/doxygen/main_page.h</code>：<code>Multithreading</code>、<code>Common pitfalls</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/doc/doxygen/main_page.h">lwIP multithreading guidance</a></li>
+<li>使用位置：“HTTP client callback-style API 的 RTOS execution context”</li>
+<li>支撑内容：说明未来 RT-Thread task 调用 httpc 时仍必须满足 TCPIP thread&#x2F;core locking contract</li>
+</ul>
+<p><a id="source-s9"></a></p>
+<h3 id="S9-MDN-—-HTTP-messages"><a href="#S9-MDN-—-HTTP-messages" class="headerlink" title="[S9] MDN — HTTP messages"></a>[S9] MDN — HTTP messages</h3><ul>
+<li>类型：高质量协议学习资料</li>
+<li>版本：MDN Web Docs，访问于 2026-10-03</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Messages">MDN HTTP messages</a></li>
+<li>使用位置：HTTP Client 最小协议模型、request&#x2F;response message 结构</li>
+<li>支撑内容：提供 HTTP&#x2F;1.1 request&#x2F;response、start-line&#x2F;Header&#x2F;Body 的直观学习入口；正文仍自行恢复当前 httpc 主线需要的最小模型，规范结论以 RFC 9110&#x2F;9112 为准</li>
+</ul>
+<p><a id="source-s10"></a></p>
+<h3 id="S10-Mbed-TLS-—-TLS-client-hostname-与-X-509-time-verification"><a href="#S10-Mbed-TLS-—-TLS-client-hostname-与-X-509-time-verification" class="headerlink" title="[S10] Mbed TLS — TLS client hostname 与 X.509 time verification"></a>[S10] Mbed TLS — TLS client hostname 与 X.509 time verification</h3><ul>
+<li>类型：TLS library 官方文档</li>
+<li>版本：Mbed TLS 2.28.x &#x2F; 官方安全 guidance</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://mbed-tls.readthedocs.io/en/latest/kb/attacks/ssl_set_hostname/">Mbed TLS hostname verification guidance</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://mbed-tls.readthedocs.io/projects/api/en/v2.28.9/api/file/x509_8h/">Mbed TLS 2.28 X.509 time API</a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://mbed-tls.readthedocs.io/en/latest/kb/development/what-external-dependencies-does-mbedtls-rely-on/">Mbed TLS external time dependencies</a></li>
+<li>使用位置：HTTPS Client 身份验证边界、hostname verification 与 Stage 36 系统时间接入</li>
+<li>支撑内容：说明 TLS client 需要显式设置预期 hostname 才能完成 certificate hostname authentication，并说明 X.509 validity 检查如何依赖系统 time&#x2F;date</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/127bea81/">https://wdfk-prog.space/posts/127bea81/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LWIP/">LWIP</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/06.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/54de69ca/" title="38-lwip-porting-and-configuration"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">38-lwip-porting-and-configuration</div></div><div class="info-2"><div class="info-item-1">  教程 38：从 lwipopts.h 到 Port Contract——lwIP 裁剪、构建选择、OS Port 与 Network Port 摘要：把前 37 篇已经会用的 lwIP 反过来拆成工程移植契约，理解功能裁剪、资源预算、构建选择、OS Port 与网卡 Port 怎样组合成一个可运行系统。  [TOC] Stage 01～37 一直使用“已经能运行”的 lwIP：Unix Port 已经提供线程、时间、TAP netif 与构建环境，文章主要沿协议栈和应用协议向下追。进入真实 MCU 项目后，问题会反过来：拿到 upstream lwIP 源码后，项目究竟需要配置哪些功能、实现哪些平台接口、选择哪些源码，并怎样把网卡驱动接到 netif。 Stage 38 不重新讲 Stage 11 的 tcpip_thread/sys_arch 原理，也不重新讲 Stage 20～22 的 DMA&#x2F;PHY 细节，而是建立一套可以迁移到 RT-Thread、FreeRTOS、ThreadX 或其他平台的 Port 心智模型。本文源码基线为用户提供的更新 lwip.zi...</div></div></div></a><a class="pagination-related" href="/posts/d9b22dc/" title="36-sntp-system-time"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">36-sntp-system-time</div></div><div class="info-2"><div class="info-item-1">  教程 36：从 sntp_example_init() 到 sntp_process()——SNTP、DHCP&#x2F;DNS、Timer 与系统时间同步 摘要：从 upstream SNTP example 追踪 Server 来源、DNS&#x2F;UDP 请求、响应校验、Timer 与系统时间更新，并说明可靠时间为何会影响 TLS 证书验证和云连接。  [TOC] SNTP（Simple Network Time Protocol，简单网络时间协议）是 NTP（Network Time Protocol，网络时间协议）的简化客户端使用方式。设备通常作为 Client，经 UDP 向时间 Server 发送请求，从响应里的 NTP timestamp 得到 wall clock 时间，再通过平台 hook 更新系统时钟。MCU&#x2F;IoT 产品常在 TLS&#x2F;Cloud 建连前先完成这一步，因为证书有效期判断、日志时间和业务时间戳都依赖一个足够可信的系统时间。S6S9 Stage 13 已经追过 DHCP（Dynamic Host Configuratio...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/b313493/" title="39-rtthread-lwip-port"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">39-rtthread-lwip-port</div></div><div class="info-2"><div class="info-item-1">  教程 39：从 lwip_system_init() 到 tcpip_input()——RT-Thread 如何把 lwIP 接进 RTOS 与 Ethernet Device 摘要：从 RT-Thread 的 lwIP 初始化入口追踪 Kconfig、sys_arch、eth_device、RX&#x2F;TX 线程与 tcpip_input，建立真实 RTOS Port 的完整桥接流程。  [TOC] Stage 38 已经把 lwIP Port Contract 拆成四块：lwipopts.h 配置、源码构建选择、OS&#x2F;Arch Port、Network Port。Stage 39 不再重复这些抽象的原理，而是直接拿 RT-Thread 当前源码回答一个问题：RT-Thread 怎样把这些 contract 一项项落成可运行代码，并把一个 Ethernet Driver 最终接到 tcpip_thread。 RT-Thread 的完整 Device Framework、NetDev、SAL、DFS 并不是本篇目标。它们只在当前调用链真正出现时说明接口位置；So...</div></div></div></a><a class="pagination-related" href="/posts/4b242a34/" title="18-multi-netif-routing"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">18-multi-netif-routing</div></div><div class="info-2"><div class="info-item-1">  教程 18：从 udp_sendto() 到 etharp_output()——Multi-netif IPv4 路由、Default Netif、Gateway 与下一跳 摘要：从 UDP&#x2F;TCP 发送入口追踪 IPv4 multi-netif 出口选择、默认接口、源地址与 Gateway 下一跳，厘清 route 与 ARP 的职责边界。  [TOC] Multi-netif 表示同一个 lwIP 实例同时存在多个 struct netif 网络接口。本文标题中的 Default Netif（默认接口） 是没有更具体匹配时的 fallback outgoing interface；Gateway（网关） 是已经选定某张接口以后，在当前二层链路上需要直接发送给的下一跳 IP。两者不是同一个对象，也不等价于“默认路由 &#x3D; 网关地址”。 Stage 18 只回答 IPv4 发送方向上的一个问题：应用没有显式固定接口时，lwIP 怎样先选择 outgoing netif，然后怎样决定 Ethernet 下一跳是 destination 本身还是该接口的 gat...</div></div></div></a><a class="pagination-related" href="/posts/f66d8c4d/" title="16-ipv4-fragmentation-reassembly"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">16-ipv4-fragmentation-reassembly</div></div><div class="info-2"><div class="info-item-1">  教程 16：从 MTU 到 ip4_frag() &#x2F; ip4_reass()——IPv4 分片、重组、超时与内存压力 摘要：沿 IPv4 发送与接收源码链，理解 MTU 如何触发分片、Offset&#x2F;MF&#x2F;ID 如何组织片段，以及 lwIP 怎样排序、重组、超时清理并限制资源占用。  [TOC] IPv4 fragmentation（IPv4 分片）解决的是“一个 IPv4 datagram 比当前可发送路径允许的 packet 更大时，怎样把它拆成多个 fragment”；reassembly（重组）则在最终目的主机把这些 fragment 恢复成原始 datagram。Fragment 不是新的传输层或 ICMP message，每一片仍然携带自己的 IPv4 Header，并通过 Identification、MF（More Fragments）和 Fragment Offset 表明自己属于哪个原始 datagram、位于什么位置、后面是否还有片段。S4S12 MTU（Maximum Transmission Unit，最大传输单元）表示某...</div></div></div></a><a class="pagination-related" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">02-netif-tap-first-ping</div></div><div class="info-2"><div class="info-item-1">  教程 02：从 main() 到第一次 Ping——netif、TAP、ARP 与 ICMP 的完整源码链 摘要：先建立 IPv4 Ping 的 Ethernet、ARP、IPv4 与 ICMP 交互模型，再从 Unix example_app 入口追到 TAP 接收、协议栈线程、Echo Reply 与二层发送。   [TOC] 这一阶段要回答的不是“Ping 命令怎么用”，而是一个完整的数据路径问题：  Linux Host 执行 ping 198.18.0.200 后，为什么会先出现 ARP，再出现 ICMP；这些 Ethernet frame 又怎样从 Linux TAP 进入 lwIP，经过 netif、tcpip_thread、ARP、IPv4、ICMP 后返回 Host？  先把标题里的四个对象说清楚。netif 是 lwIP 的 network interface（网络接口）抽象对象，把协议栈 **Core（核心协议处理代码与执行上下文）**和具体 **Port（面向操作系统&#x2F;设备的适配层）**连接起来；TAP 是 Linux 提供给 userspa...</div></div></div></a><a class="pagination-related" href="/posts/8c3324b0/" title="00-series-index"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-series-index</div></div><div class="info-2"><div class="info-item-1">lwIP Source Lab 教程索引本系列持续跟踪官方 lwip-tcpip/lwip 的 master。绝大多数源码篇采用 Source-driven 主线：从当前行为的真实入口函数、注册入口或外部 API 开始，沿实际调用、数据与状态变化向下追踪。 Stage 00、15、31、38 与 45 属于 Theory of Operation &#x2F; Application Note 型总览：先建立系统位置和完整数据流，再解释关键机制；它们不会覆盖后续源码篇“从真实入口开始”的硬约束。 Stage 00～45 Stage 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界从 Ethernet Frame、PHY&#x2F;MAC 分层出发，沿 DMA&#x2F;Driver、pbuf、netif 建立完整软硬件边界，并区分链路、接口、IP 与上层就绪状态。 Stage 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图沿 submodule、Host 依赖、Debug build ...</div></div></div></a><a class="pagination-related" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-ethernet-physical-layer-and-network-stack</div></div><div class="info-2"><div class="info-item-1">  教程 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界 摘要：从初学者视角建立 Ethernet 的 PHY、MAC 与 Frame 心智模型，再沿 PHY→MAC→DMA&#x2F;Driver→pbuf→netif 解释 MCU 与 lwIP 的真实边界。   [TOC] Ethernet（以太网）是局域网里最常见的链路技术之一。Ethernet Frame（以太网帧）是 MAC 在链路上传输和接收的基本二层数据单元。对 MCU 网络开发而言，真正需要同时看懂的是两条边界：一条是 网线上的信号怎样经过 PHY、MAC 和 DMA 变成内存里的 Ethernet Frame，另一条是 这些 Frame 怎样通过 Driver、pbuf 和 netif 进入 lwIP。 本文第一次使用几个后面会反复出现的对象：**PHY（Physical Layer transceiver，物理层收发器）**负责把网线侧的模拟&#x2F;符号信号与 MAC 侧的数字接口互相转换；**MAC（Media Access Control，介质访问控制器）**...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E6%95%99%E7%A8%8B-37%EF%BC%9A%E4%BB%8E-httpc-get-file-dns-%E5%88%B0-Body-Callback%E2%80%94%E2%80%94HTTP-HTTPS-Client%E3%80%81DNS%E3%80%81altcp-%E4%B8%8E%E4%B8%8B%E8%BD%BD%E6%95%B0%E6%8D%AE%E9%80%9A%E8%B7%AF"><span class="toc-number">1.</span> <span class="toc-text">教程 37：从 httpc_get_file_dns() 到 Body Callback——HTTP&#x2F;HTTPS Client、DNS、altcp 与下载数据通路</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#0-%E6%9C%AC%E7%AF%87%E6%89%80%E9%9C%80%E7%9A%84%E6%9C%80%E5%B0%8F-HTTP-HTTPS-Client-%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.1.</span> <span class="toc-text">0. 本篇所需的最小 HTTP&#x2F;HTTPS Client 模型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BB%8E-httpc-get-file-dns-%E5%BC%80%E5%A7%8B%EF%BC%8C%E8%80%8C%E4%B8%8D%E6%98%AF%E4%BB%8E%E6%9F%90%E4%B8%AA-example-%E5%BC%80%E5%A7%8B"><span class="toc-number">1.2.</span> <span class="toc-text">1. 为什么从 httpc_get_file_dns() 开始，而不是从某个 example 开始</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E5%BA%94%E7%94%A8%E7%BB%99-httpc-%E7%9A%84%E5%9B%9B%E7%B1%BB%E4%BF%A1%E6%81%AF%E5%88%86%E5%88%AB%E6%8E%A7%E5%88%B6%E4%BB%80%E4%B9%88"><span class="toc-number">1.3.</span> <span class="toc-text">2. 应用给 httpc 的四类信息分别控制什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E8%BF%9B%E5%85%A5-httpc-get-file-dns-%EF%BC%9A%E5%85%88%E5%88%9B%E5%BB%BA-request-state%EF%BC%8C%E5%86%8D%E5%90%AF%E5%8A%A8-DNS-Connect"><span class="toc-number">1.4.</span> <span class="toc-text">3. 进入 httpc_get_file_dns()：先创建 request state，再启动 DNS&#x2F;Connect</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E8%BF%9B%E5%85%A5-httpc-init-connection-common-%EF%BC%9AHTTP-request-%E5%9C%A8-connect-%E5%89%8D%E5%B0%B1%E5%B7%B2%E7%BB%8F%E7%94%9F%E6%88%90"><span class="toc-number">1.5.</span> <span class="toc-text">4. 进入 httpc_init_connection_common()：HTTP request 在 connect 前就已经生成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-httpc-create-request-string-%EF%BC%9A%E5%BD%93%E5%89%8D-client-%E6%98%AF%E4%B8%80%E4%B8%AA%E5%88%BB%E6%84%8F%E6%9C%80%E5%B0%8F%E5%8C%96%E7%9A%84-HTTP-1-1-GET-client"><span class="toc-number">1.6.</span> <span class="toc-text">5. httpc_create_request_string()：当前 client 是一个刻意最小化的 HTTP&#x2F;1.1 GET client</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E5%90%8C%E4%B8%80%E4%B8%AA%E5%88%9D%E5%A7%8B%E5%8C%96%E7%82%B9%E5%86%B3%E5%AE%9A-HTTP-%E8%BF%98%E6%98%AF-HTTPS%EF%BC%9Aaltcp-new-%E7%9C%8B-allocator"><span class="toc-number">1.7.</span> <span class="toc-text">6. 同一个初始化点决定 HTTP 还是 HTTPS：altcp_new() 看 allocator</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-callback-%E5%9C%A8%E7%9C%9F%E6%AD%A3-connect-%E4%B9%8B%E5%89%8D%E5%B0%B1%E5%85%A8%E9%83%A8%E6%B3%A8%E5%86%8C%E5%AE%8C%E6%88%90"><span class="toc-number">1.8.</span> <span class="toc-text">7. callback 在真正 connect 之前就全部注册完成</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E5%9B%9E%E5%88%B0-httpc-get-file-dns-%EF%BC%9A%E8%BF%9B%E5%85%A5-httpc-get-internal-dns"><span class="toc-number">1.9.</span> <span class="toc-text">8. 回到 httpc_get_file_dns()：进入 httpc_get_internal_dns()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-DNS-%E8%BF%94%E5%9B%9E%E4%BB%A5%E5%90%8E%E8%BF%9B%E5%85%A5-httpc-get-internal-addr-%EF%BC%9A%E5%BC%80%E5%A7%8B%E7%9C%9F%E6%AD%A3%E7%9A%84-transport-connect"><span class="toc-number">1.10.</span> <span class="toc-text">9. DNS 返回以后进入 httpc_get_internal_addr()：开始真正的 transport connect</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E8%BF%9B%E5%85%A5-httpc-tcp-connected-%EF%BC%9AGET-request-%E5%8F%AA%E5%8F%91%E9%80%81%E4%B8%80%E6%AC%A1"><span class="toc-number">1.11.</span> <span class="toc-text">10. 进入 httpc_tcp_connected()：GET request 只发送一次</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-Server-response-%E5%88%B0%E8%BE%BE%EF%BC%9Ahttpc-tcp-recv-%E5%85%88%E7%A7%AF%E7%B4%AF-Header%EF%BC%8C%E5%86%8D%E6%8A%8A-Body-%E4%BA%A4%E7%BB%99%E5%BA%94%E7%94%A8"><span class="toc-number">1.12.</span> <span class="toc-text">11. Server response 到达：httpc_tcp_recv() 先积累 Header，再把 Body 交给应用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-status-line-%E4%B8%8E-Header%EF%BC%9A%E5%BD%93%E5%89%8D-parser-%E5%8F%AA%E6%8F%90%E5%8F%96%E5%AE%83%E7%9C%9F%E6%AD%A3%E9%9C%80%E8%A6%81%E7%9A%84%E6%9C%80%E5%B0%8F%E4%BF%A1%E6%81%AF"><span class="toc-number">1.13.</span> <span class="toc-text">12. status line 与 Header：当前 parser 只提取它真正需要的最小信息</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-headers-done-fn-%E4%B8%8E-recv-fn-%E6%98%AF%E4%B8%A4%E7%A7%8D%E4%B8%8D%E5%90%8C-callback"><span class="toc-number">1.14.</span> <span class="toc-text">13. headers_done_fn 与 recv_fn 是两种不同 callback</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-p-NULL-%E6%89%8D%E8%BF%9B%E5%85%A5-transfer-completion-%E5%88%A4%E6%96%AD"><span class="toc-number">1.15.</span> <span class="toc-text">14. p &#x3D;&#x3D; NULL 才进入 transfer completion 判断</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-Poll-timeout%EF%BC%9A%E6%B2%A1%E6%9C%89%E8%BF%9B%E5%B1%95%E7%9A%84%E8%BF%9E%E6%8E%A5%E6%9C%80%E7%BB%88%E4%BC%9A%E8%A2%AB-httpc-tcp-poll-%E5%85%B3%E9%97%AD"><span class="toc-number">1.16.</span> <span class="toc-text">15. Poll timeout：没有进展的连接最终会被 httpc_tcp_poll() 关闭</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-HTTPS-%E5%8F%AA%E6%9B%BF%E6%8D%A2-transport%EF%BC%9AHTTP-parser-%E4%B8%8D%E5%8F%98"><span class="toc-number">1.17.</span> <span class="toc-text">16. HTTPS 只替换 transport：HTTP parser 不变</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-TLS-allocator-%E4%B8%8D%E7%AD%89%E4%BA%8E%E5%AE%8C%E6%95%B4-HTTPS-%E8%BA%AB%E4%BB%BD%E8%AE%A4%E8%AF%81"><span class="toc-number">1.18.</span> <span class="toc-text">17. TLS allocator 不等于完整 HTTPS 身份认证</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-Stage-36-%E7%9A%84%E7%B3%BB%E7%BB%9F%E6%97%B6%E9%97%B4%E6%80%8E%E6%A0%B7%E5%BD%B1%E5%93%8D-HTTPS"><span class="toc-number">1.19.</span> <span class="toc-text">18. Stage 36 的系统时间怎样影响 HTTPS</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#19-OTA-%E4%B8%8B%E8%BD%BD%E9%87%8C-httpc-%E7%9A%84%E8%81%8C%E8%B4%A3%E8%BE%B9%E7%95%8C"><span class="toc-number">1.20.</span> <span class="toc-text">19. OTA 下载里 httpc 的职责边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#20-LWIP-HTTPC-HAVE-FILE-IO-%E5%8F%AA%E6%98%AF-Host-example-helper"><span class="toc-number">1.21.</span> <span class="toc-text">20. LWIP_HTTPC_HAVE_FILE_IO 只是 Host&#x2F;example helper</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#21-HTTP-client-%E7%9A%84%E8%BF%90%E8%A1%8C%E4%B8%8A%E4%B8%8B%E6%96%87%E4%BB%8D%E7%84%B6%E5%B1%9E%E4%BA%8E-callback-style-lwIP-core-API"><span class="toc-number">1.22.</span> <span class="toc-text">21. HTTP client 的运行上下文仍然属于 callback-style lwIP core API</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-Stage-37-%E7%9A%84%E5%AE%8C%E6%95%B4%E4%B8%BB%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-number">1.23.</span> <span class="toc-text">22. Stage 37 的完整主调用链</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.24.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-lwIP-HTTP-client-public-API"><span class="toc-number">1.24.1.</span> <span class="toc-text">[S1] lwIP HTTP client public API</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-lwIP-HTTP-client-implementation"><span class="toc-number">1.24.2.</span> <span class="toc-text">[S2] lwIP HTTP client implementation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-lwIP-altcp-allocator-abstraction"><span class="toc-number">1.24.3.</span> <span class="toc-text">[S3] lwIP altcp allocator abstraction</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-lwIP-altcp-TLS-allocator-API"><span class="toc-number">1.24.4.</span> <span class="toc-text">[S4] lwIP altcp TLS allocator API</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S5-lwIP-altcp-mbedTLS-client-implementation"><span class="toc-number">1.24.5.</span> <span class="toc-text">[S5] lwIP altcp mbedTLS client implementation</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S6-RFC-9110-%E2%80%94-HTTP-Semantics"><span class="toc-number">1.24.6.</span> <span class="toc-text">[S6] RFC 9110 — HTTP Semantics</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S7-RFC-9112-%E2%80%94-HTTP-1-1"><span class="toc-number">1.24.7.</span> <span class="toc-text">[S7] RFC 9112 — HTTP&#x2F;1.1</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S8-lwIP-Multithreading-Common-pitfalls"><span class="toc-number">1.24.8.</span> <span class="toc-text">[S8] lwIP Multithreading &#x2F; Common pitfalls</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S9-MDN-%E2%80%94-HTTP-messages"><span class="toc-number">1.24.9.</span> <span class="toc-text">[S9] MDN — HTTP messages</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S10-Mbed-TLS-%E2%80%94-TLS-client-hostname-%E4%B8%8E-X-509-time-verification"><span class="toc-number">1.24.10.</span> <span class="toc-text">[S10] Mbed TLS — TLS client hostname 与 X.509 time verification</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/d0bd006c/" title="05-udp-raw-api"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="05-udp-raw-api"/></a><div class="content"><a class="title" href="/posts/d0bd006c/" title="05-udp-raw-api">05-udp-raw-api</a><time datetime="2026-10-03T09:16:32.509Z" title="更新于 2026-10-03 17:16:32">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="04-ethernet-arp-ipv4-icmp"/></a><div class="content"><a class="title" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp">04-ethernet-arp-ipv4-icmp</a><time datetime="2026-10-03T09:12:42.697Z" title="更新于 2026-10-03 17:12:42">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/58451296/" title="03-pbuf"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="03-pbuf"/></a><div class="content"><a class="title" href="/posts/58451296/" title="03-pbuf">03-pbuf</a><time datetime="2026-10-03T09:10:58.106Z" title="更新于 2026-10-03 17:10:58">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="02-netif-tap-first-ping"/></a><div class="content"><a class="title" href="/posts/173fa538/" title="02-netif-tap-first-ping">02-netif-tap-first-ping</a><time datetime="2026-10-03T09:05:15.928Z" title="更新于 2026-10-03 17:05:15">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="00-ethernet-physical-layer-and-network-stack"/></a><div class="content"><a class="title" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack">00-ethernet-physical-layer-and-network-stack</a><time datetime="2026-10-03T08:47:35.913Z" title="更新于 2026-10-03 16:47:35">2026-10-03</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/06.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || 'a62c681fd13e62063c32cbca674dd467'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18],["2026-10-03",49]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"LWIP","children":[],"count":49,"path":"LWIP"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>

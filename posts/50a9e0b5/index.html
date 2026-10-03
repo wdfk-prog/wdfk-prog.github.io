@@ -1,0 +1,1492 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>07-tcp-handshake | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="教程 07：从 tcpecho_raw_init() 到 ESTABLISHED——TCP 三次握手与 PCB 状态机 摘要：从 TCP passive open 的三次握手模型出发，沿 Raw TCP Echo 监听入口追踪 LISTEN PCB、SYN_RCVD 连接 PCB、Sequence&#x2F;ACK 与 accept callback。  [TOC] TCP（Transmiss">
+<meta property="og:type" content="article">
+<meta property="og:title" content="07-tcp-handshake">
+<meta property="og:url" content="https://wdfk-prog.space/posts/50a9e0b5/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="教程 07：从 tcpecho_raw_init() 到 ESTABLISHED——TCP 三次握手与 PCB 状态机 摘要：从 TCP passive open 的三次握手模型出发，沿 Raw TCP Echo 监听入口追踪 LISTEN PCB、SYN_RCVD 连接 PCB、Sequence&#x2F;ACK 与 accept callback。  [TOC] TCP（Transmiss">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/04.jpg">
+<meta property="article:published_time" content="2026-10-03T08:27:36.000Z">
+<meta property="article:modified_time" content="2026-10-03T08:27:40.095Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="LWIP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/04.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "07-tcp-handshake",
+  "url": "https://wdfk-prog.space/posts/50a9e0b5/",
+  "image": "https://wdfk-prog.space/images/covers/04.jpg",
+  "datePublished": "2026-10-03T08:27:36.000Z",
+  "dateModified": "2026-10-03T08:27:40.095Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/50a9e0b5/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '07-tcp-handshake',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/04.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">07-tcp-handshake</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">07-tcp-handshake<a class="post-edit-link" href="null_posts/LWIP/07-tcp-handshake.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-03T08:27:36.000Z" title="发表于 2026-10-03 16:27:36">2026-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-03T08:27:40.095Z" title="更新于 2026-10-03 16:27:40">2026-10-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/LWIP/">LWIP</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">7k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>30分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/50a9e0b5/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-10-03 16:27:40&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="教程-07：从-tcpecho-raw-init-到-ESTABLISHED——TCP-三次握手与-PCB-状态机"><a href="#教程-07：从-tcpecho-raw-init-到-ESTABLISHED——TCP-三次握手与-PCB-状态机" class="headerlink" title="教程 07：从 tcpecho_raw_init() 到 ESTABLISHED——TCP 三次握手与 PCB 状态机"></a>教程 07：从 <code>tcpecho_raw_init()</code> 到 <code>ESTABLISHED</code>——TCP 三次握手与 PCB 状态机</h1><blockquote>
+<p>摘要：从 TCP passive open 的三次握手模型出发，沿 Raw TCP Echo 监听入口追踪 LISTEN PCB、SYN_RCVD 连接 PCB、Sequence&#x2F;ACK 与 accept callback。</p>
+</blockquote>
+<p>[TOC]</p>
+<p>TCP（Transmission Control Protocol，传输控制协议）是在 IP 之上提供可靠、有序 **byte stream（字节流）**的面向连接传输协议。与 Stage 5 的 UDP 不同，TCP 在发送普通应用数据前先建立连接，并用 Sequence Number（序列号）、Acknowledgment Number（确认号）以及重传等机制维护双方对同一字节流的状态。<a href="#source-s6">S6</a></p>
+<p>建立连接时，**SYN（Synchronize）**用于同步初始序列号；**ACK（Acknowledgment）**表示确认号字段有效，并告诉对端“下一次期望哪个 sequence number”。本篇只研究服务端 <strong>passive open（被动打开）</strong>：lwIP 的 listener 处于 <code>LISTEN</code>（等待连接）状态；远端客户端执行 **active open（主动打开）**并发出 SYN 后，lwIP 为该远端创建 <code>SYN_RCVD</code>（已收到 SYN、已发 SYN&#x2F;ACK、等待最终 ACK）的 connection PCB；final ACK 有效后进入 <code>ESTABLISHED</code>（连接已建立）。连接关闭相关状态不在本篇展开。</p>
+<h2 id="阅读源码前：建议提前阅读"><a href="#阅读源码前：建议提前阅读" class="headerlink" title="阅读源码前：建议提前阅读"></a>阅读源码前：建议提前阅读</h2><ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9293.html">RFC 9293 — Transmission Control Protocol</a>：重点看 TCP Header、Sequence Number&#x2F;ACK 的定义，以及 3.5 节 Figure 6 的 Basic Three-Way Handshake。<a href="#source-s6">S6</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://wiki.wireshark.org/TCP_3_way_handshaking">Wireshark Wiki — TCP 3-way handshaking</a>：用于把三次握手的三个 segment 对应到抓包；relative sequence number（相对序列号）只是分析工具为便于阅读而换算的显示值，不改变线上真实序列号。<a href="#source-s12">S12</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/group__tcp__raw.html">lwIP 2.1.x — TCP Raw API</a>：用于先认识 <code>tcp_bind()</code>、<code>tcp_listen()</code>、<code>tcp_accept()</code> 等公开 Raw API；本文实现细节仍以固定 commit 为准。<a href="#source-s13">S13</a></li>
+</ol>
+<h2 id="进入源码前先把三次握手讲清楚"><a href="#进入源码前先把三次握手讲清楚" class="headerlink" title="进入源码前先把三次握手讲清楚"></a>进入源码前先把三次握手讲清楚</h2><h3 id="Endpoint、connection、segment-与四元组"><a href="#Endpoint、connection、segment-与四元组" class="headerlink" title="Endpoint、connection、segment 与四元组"></a>Endpoint、connection、segment 与四元组</h3><p>TCP endpoint 由本地 IP&#x2F;port 描述；一条已经建立的 TCP connection 则由 <strong>四元组</strong>唯一标识：local IP、local port、remote IP、remote port。TCP 在线上发送的协议数据单元称为 <strong>segment（报文段）</strong>，每个 segment 都有 TCP Header；Header 中的 flags（标志位）说明当前 segment 是否携带 SYN、ACK 等控制语义。<a href="#source-s6">S6</a></p>
+<p>本篇只需要先理解两个 flag：</p>
+<ul>
+<li><strong>SYN（Synchronize）</strong>：用于同步双方的初始序列号并建立连接；SYN 自身会占用一个 sequence number。</li>
+<li><strong>ACK（Acknowledgment）</strong>：表示 TCP Header 中的 Acknowledgment Number 有效；这个数值表示“下一次期望收到的 sequence number”。</li>
+</ul>
+<p>每一端建立连接时选择一个 <strong>ISN（Initial Sequence Number，初始序列号）</strong>。如果客户端 ISN 为 <code>C_ISN</code>，服务端收到 SYN 后确认 <code>C_ISN + 1</code>；如果服务端 ISN 为 <code>S_ISN</code>，客户端 final ACK 确认 <code>S_ISN + 1</code>。<a href="#source-s6">S6</a></p>
+<h3 id="三次握手为什么是三步"><a href="#三次握手为什么是三步" class="headerlink" title="三次握手为什么是三步"></a>三次握手为什么是三步</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant C as Client active open</span><br><span class="line">    participant L as Server listener (port 7)</span><br><span class="line">    participant P as Server connection PCB</span><br><span class="line"></span><br><span class="line">    C-&gt;&gt;L: SYN, SEQ=C_ISN</span><br><span class="line">    L-&gt;&gt;P: create connection, LISTEN -&gt; SYN_RCVD</span><br><span class="line">    P--&gt;&gt;C: SYN + ACK, SEQ=S_ISN, ACK=C_ISN+1</span><br><span class="line">    C-&gt;&gt;P: ACK, ACK=S_ISN+1</span><br><span class="line">    Note over P: SYN_RCVD -&gt; ESTABLISHED, then accept callback</span><br></pre></td></tr></table></figure>
+
+<p>第一步只是客户端声明自己的初始 sequence space；第二步服务端同时确认客户端 SYN 并发送自己的 SYN；第三步客户端确认服务端 SYN。到 final ACK 被服务端接受时，双方才都知道“对端已经收到自己的 SYN”。<a href="#source-s6">S6</a></p>
+<h3 id="本篇只跟服务端-passive-open-状态"><a href="#本篇只跟服务端-passive-open-状态" class="headerlink" title="本篇只跟服务端 passive-open 状态"></a>本篇只跟服务端 passive-open 状态</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">stateDiagram-v2</span><br><span class="line">    [*] --&gt; LISTEN: tcp_listen()</span><br><span class="line">    LISTEN --&gt; SYN_RCVD: RX SYN / 创建 connection PCB / 排队 SYN-ACK</span><br><span class="line">    SYN_RCVD --&gt; ESTABLISHED: RX valid ACK / accept callback</span><br></pre></td></tr></table></figure>
+
+<p>这里有一个 lwIP 实现细节要提前记住：<strong>LISTEN 状态属于 <code>struct tcp_pcb_listen</code>；收到 SYN 后创建的 <code>SYN_RCVD</code>&#x2F;<code>ESTABLISHED</code> connection 使用另一个 <code>struct tcp_pcb</code>。</strong> 因此状态变化不能简单理解成“同一个对象从 LISTEN 原地改成 ESTABLISHED”。<a href="#source-s3">S3</a><a href="#source-s5">S5</a></p>
+<h3 id="协议动作怎样映射到-lwIP-源码"><a href="#协议动作怎样映射到-lwIP-源码" class="headerlink" title="协议动作怎样映射到 lwIP 源码"></a>协议动作怎样映射到 lwIP 源码</h3><table>
+<thead>
+<tr>
+<th>协议阶段</th>
+<th>线上动作</th>
+<th>lwIP 入口&#x2F;处理函数</th>
+<th>关键 PCB&#x2F;状态</th>
+<th>下一步</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>准备被动打开</td>
+<td>本地 port 7 进入监听</td>
+<td><code>tcp_new_ip_type()</code> → <code>tcp_bind()</code> → <code>tcp_listen()</code> → <code>tcp_accept()</code></td>
+<td>LISTEN PCB</td>
+<td>等待 SYN</td>
+</tr>
+<tr>
+<td>收到第一次握手</td>
+<td>RX SYN</td>
+<td><code>tcp_input()</code> → <code>tcp_listen_input()</code></td>
+<td>新 connection PCB，<code>SYN_RCVD</code></td>
+<td>&#96;tcp_enqueue_flags(TCP_SYN</td>
+</tr>
+<tr>
+<td>发送第二次握手</td>
+<td>TX SYN&#x2F;ACK</td>
+<td><code>tcp_output()</code> &#x2F; <code>tcp_output_segment()</code></td>
+<td>connection PCB 的发送&#x2F;接收 sequence state</td>
+<td>等待 final ACK</td>
+</tr>
+<tr>
+<td>收到第三次握手</td>
+<td>RX ACK</td>
+<td><code>tcp_input()</code> → <code>tcp_process()</code> 的 <code>SYN_RCVD</code> 分支</td>
+<td><code>ESTABLISHED</code></td>
+<td><code>TCP_EVENT_ACCEPT()</code></td>
+</tr>
+<tr>
+<td>应用接管连接</td>
+<td>accept event</td>
+<td><code>tcpecho_raw_accept()</code></td>
+<td>connection PCB 注册 recv&#x2F;sent&#x2F;poll callbacks</td>
+<td>Stage 8 进入数据面</td>
+</tr>
+</tbody></table>
+<p>下面从真实入口 <code>tcpecho_raw_init()</code> 开始，逐步验证这张映射表。</p>
+<h2 id="1-真正入口：tcpecho-raw-init-先建立监听端点"><a href="#1-真正入口：tcpecho-raw-init-先建立监听端点" class="headerlink" title="1. 真正入口：tcpecho_raw_init() 先建立监听端点"></a>1. 真正入口：<code>tcpecho_raw_init()</code> 先建立监听端点</h2><p><code>contrib/apps/tcpecho_raw/tcpecho_raw.c</code> 的初始化入口很短：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span></span><br><span class="line"><span class="title function_">tcpecho_raw_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  tcpecho_raw_pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);</span><br><span class="line">  <span class="keyword">if</span> (tcpecho_raw_pcb != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    <span class="type">err_t</span> err;</span><br><span class="line"></span><br><span class="line">    err = tcp_bind(tcpecho_raw_pcb, IP_ANY_TYPE, <span class="number">7</span>);</span><br><span class="line">    <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">      tcpecho_raw_pcb = tcp_listen(tcpecho_raw_pcb);</span><br><span class="line">      tcp_accept(tcpecho_raw_pcb, tcpecho_raw_accept);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这四步分别建立四种关系：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;tcp_new_ip_type()\n创建普通 TCP PCB&quot;] --&gt; B[&quot;tcp_bind()\n绑定 local port 7&quot;]</span><br><span class="line">    B --&gt; C[&quot;tcp_listen()\n转换为 LISTEN PCB&quot;]</span><br><span class="line">    C --&gt; D[&quot;tcp_accept()\n注册 accept callback&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>前面的协议模型已经使用 connection PCB。这里把它落到实现对象：PCB（Protocol Control Block，协议控制块）不是 packet 或 Linux file descriptor，而是 lwIP 保存 endpoint&#x2F;connection 运行状态的对象。TCP 的 sequence state、窗口、重传队列和连接状态最终都落在 <code>tcp_pcb</code>&#x2F;<code>tcp_pcb_listen</code> 中。<a href="#source-s2">S2</a></p>
+<p><code>tcp_bind()</code> 只说明“本地端口 7 属于这个 endpoint”；真正把它变成 listener 的是 <code>tcp_listen()</code>。</p>
+<h2 id="2-tcp-listen-为什么会把原来的-PCB-换掉"><a href="#2-tcp-listen-为什么会把原来的-PCB-换掉" class="headerlink" title="2. tcp_listen() 为什么会把原来的 PCB 换掉"></a>2. <code>tcp_listen()</code> 为什么会把原来的 PCB 换掉</h2><p><code>tcp_listen()</code> 有一个很容易忽略的 ownership 变化：<strong>传进去的普通 <code>struct tcp_pcb</code> 在成功后会被释放，返回的是另一个更小的 <code>struct tcp_pcb_listen</code>。</strong> upstream 注释直接把这一点作为 API contract 说明。<a href="#source-s3">S3</a></p>
+<p>核心逻辑可以概括为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">普通 struct tcp_pcb</span><br><span class="line">  state = CLOSED</span><br><span class="line">  local_port = 7</span><br><span class="line">        │</span><br><span class="line">        │ tcp_listen_with_backlog_and_err()</span><br><span class="line">        ▼</span><br><span class="line">分配 MEMP_TCP_PCB_LISTEN</span><br><span class="line">复制 listener 需要保留的字段</span><br><span class="line">state = LISTEN</span><br><span class="line">释放原 tcp_pcb</span><br><span class="line">加入 tcp_listen_pcbs</span><br><span class="line">        ▼</span><br><span class="line">struct tcp_pcb_listen</span><br></pre></td></tr></table></figure>
+
+<p>这里仍在 <code>tcpecho_raw_init()</code>：<code>tcp_bind()</code> 成功后，示例必须保存 <code>tcp_listen()</code> 返回的新 listener PCB：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">tcpecho_raw_pcb = tcp_listen(tcpecho_raw_pcb);</span><br></pre></td></tr></table></figure>
+
+<p>同样位于 <code>tcpecho_raw_init()</code> 的下面这种写法是错误理解，因为忽略了返回的新对象：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">tcp_listen(tcpecho_raw_pcb); <span class="comment">/* 错误理解：忽略返回的新对象 */</span></span><br></pre></td></tr></table></figure>
+
+<p>为什么 listener 可以更小？因为它还不是一条具体 connection，不需要保存每个远端连接独有的发送队列、接收序号、拥塞窗口等状态。真正收到 SYN 后，lwIP 才为那个远端重新分配普通 <code>struct tcp_pcb</code>。<a href="#source-s2">S2</a><a href="#source-s3">S3</a></p>
+<p>这里也要区分两个容易混淆的对象：</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>表示什么</th>
+<th>关键状态</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>struct tcp_pcb_listen</code></td>
+<td>本地监听端点</td>
+<td><code>LISTEN</code></td>
+</tr>
+<tr>
+<td><code>struct tcp_pcb</code></td>
+<td>一条具体 TCP connection</td>
+<td><code>SYN_RCVD</code>、<code>ESTABLISHED</code> 等</td>
+</tr>
+</tbody></table>
+<p>一个 listener 可以先后产生很多 connection PCB；不能把它们理解成“同一个 PCB 状态不断变”。</p>
+<h2 id="3-TCP-state-在-lwIP-里怎样落到-PCB-对象"><a href="#3-TCP-state-在-lwIP-里怎样落到-PCB-对象" class="headerlink" title="3. TCP state 在 lwIP 里怎样落到 PCB 对象"></a>3. TCP state 在 lwIP 里怎样落到 PCB 对象</h2><p>TCP 状态本身已经由 RFC 9293 和前置资料定义，本节不再重讲状态机原理，只确认 <strong>lwIP 用什么对象保存这些状态，以及本篇 passive open 会经过哪些值</strong>。<a href="#source-s4">S4</a><a href="#source-s6">S6</a></p>
+<p><code>tcpbase.h</code> 中的 <code>enum tcp_state</code> 包含完整 TCP 生命周期；当前主线只用到下面四个位置：</p>
+<table>
+<thead>
+<tr>
+<th>lwIP 状态&#x2F;对象</th>
+<th>当前源码里的含义</th>
+<th>本篇在哪一步看到</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CLOSED</code> &#x2F; 普通 <code>tcp_pcb</code></td>
+<td>listener 转换前的普通 PCB</td>
+<td><code>tcp_new_ip_type()</code> 之后</td>
+</tr>
+<tr>
+<td><code>LISTEN</code> &#x2F; <code>tcp_pcb_listen</code></td>
+<td>等待远端 SYN 的监听对象</td>
+<td><code>tcp_listen()</code> 之后</td>
+</tr>
+<tr>
+<td><code>SYN_RCVD</code> &#x2F; 新 <code>tcp_pcb</code></td>
+<td><code>tcp_listen_input()</code> 收到 SYN 后为该远端创建的 connection PCB</td>
+<td>第 5～7 节</td>
+</tr>
+<tr>
+<td><code>ESTABLISHED</code> &#x2F; connection <code>tcp_pcb</code></td>
+<td>final ACK 通过 <code>tcp_process()</code> 后的已建立连接</td>
+<td>第 8～9 节</td>
+</tr>
+</tbody></table>
+<p><code>SYN_SENT</code> 属于 active open，即本地主动调用 <code>tcp_connect()</code> 后的路径。本篇主线是服务端 passive open，因此只在第 11 节做最小源码对照。</p>
+<p>这里的重点不是重新记一张 TCP 状态图，而是先确认一个 lwIP 特有事实：<strong>listener PCB 与后来创建的 connection PCB 不是同一个对象。</strong> 后面的状态迁移必须跟着正确的 PCB 看。</p>
+<h2 id="4-第一个-SYN-到达前：先把-TAP-RX-tcpip-thread-IPv4-TCP-补完整"><a href="#4-第一个-SYN-到达前：先把-TAP-RX-tcpip-thread-IPv4-TCP-补完整" class="headerlink" title="4. 第一个 SYN 到达前：先把 TAP RX -&gt; tcpip_thread -&gt; IPv4 -&gt; TCP 补完整"></a>4. 第一个 SYN 到达前：先把 <code>TAP RX -&gt; tcpip_thread -&gt; IPv4 -&gt; TCP</code> 补完整</h2><p>“TCP packet 从 IPv4 层进入 <code>tcp_input()</code>”只描述了 <strong>TCP Core 的直接调用者</strong>，如果不把前面的线程桥接补回来，很容易形成“网卡收到数据后直接调用 <code>tcp_input()</code>”的错误印象。</p>
+<p>当前 Unix <code>example_app</code> 的真实路径是：<a href="#source-s8">S8</a><a href="#source-s9">S9</a><a href="#source-s10">S10</a><a href="#source-s11">S11</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">Host 写入 TAP</span><br><span class="line">  -&gt; tapif_thread() 被 select() 唤醒</span><br><span class="line">  -&gt; tapif_input()</span><br><span class="line">  -&gt; low_level_input(): read(TAP fd) + pbuf_alloc/pbuf_take</span><br><span class="line">  -&gt; netif-&gt;input(p, netif)</span><br><span class="line">       当前 netif-&gt;input = tcpip_input</span><br><span class="line">  -&gt; tcpip_input()</span><br><span class="line">  -&gt; tcpip_inpkt(..., ethernet_input)</span><br><span class="line">  -&gt; TCPIP_MSG_INPKT 投递到 tcpip_mbox</span><br><span class="line">  -&gt; tcpip_thread() 取出消息</span><br><span class="line">  -&gt; ethernet_input()</span><br><span class="line">  -&gt; EtherType == IPv4</span><br><span class="line">  -&gt; pbuf_remove_header(Ethernet header)</span><br><span class="line">  -&gt; ip4_input()</span><br><span class="line">  -&gt; Protocol == TCP</span><br><span class="line">  -&gt; pbuf_remove_header(IPv4 header)</span><br><span class="line">  -&gt; tcp_input()</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-1-netif-input-为什么在当前实验里就是-tcpip-input"><a href="#4-1-netif-input-为什么在当前实验里就是-tcpip-input" class="headerlink" title="4.1 netif-&gt;input 为什么在当前实验里就是 tcpip_input()"></a>4.1 <code>netif-&gt;input</code> 为什么在当前实验里就是 <code>tcpip_input()</code></h3><p>Unix example 创建默认网卡时，在 <code>NO_SYS == 0</code> 路径把 <code>tcpip_input</code> 直接传给 <code>netif_add()</code>：<a href="#source-s8">S8</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> NO_SYS</span></span><br><span class="line">netif_add(&amp;netif, NETIF_ADDRS <span class="literal">NULL</span>, tapif_init, netif_input);</span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line">  netif_add(&amp;netif, NETIF_ADDRS <span class="literal">NULL</span>, tapif_init, tcpip_input);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>tapif_input()</code> 中这句不是抽象描述，而是真正的线程切换入口：<a href="#source-s8">S8</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">tapif_input</span><span class="params">(<span class="keyword">struct</span> netif *netif)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">pbuf</span> *<span class="title">p</span> =</span> low_level_input(netif);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (p == <span class="literal">NULL</span>) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LINK_STATS</span></span><br><span class="line">    LINK_STATS_INC(link.recv);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LINK_STATS */</span></span></span><br><span class="line">    LWIP_DEBUGF(TAPIF_DEBUG, (<span class="string">&quot;tapif_input: low_level_input returned NULL\n&quot;</span>));</span><br><span class="line">    <span class="keyword">return</span>;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (netif-&gt;input(p, netif) != ERR_OK) &#123;</span><br><span class="line">    LWIP_DEBUGF(NETIF_DEBUG, (<span class="string">&quot;tapif_input: netif input error\n&quot;</span>));</span><br><span class="line">    pbuf_free(p);</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>而 <code>tapif_input()</code> 又不是 <code>tcpip_thread</code> 主动轮询调用的。当前 <code>NO_SYS=0</code> Port 在初始化时创建独立的 <code>tapif_thread</code>，线程阻塞在 <code>select()</code>；TAP fd 可读后才进入 <code>tapif_input()</code>：<a href="#source-s8">S8</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">tapif_thread</span><span class="params">(<span class="type">void</span> *arg)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">netif</span> *<span class="title">netif</span>;</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">tapif</span> *<span class="title">tapif</span>;</span></span><br><span class="line">  fd_set fdset;</span><br><span class="line">  <span class="type">int</span> ret;</span><br><span class="line"></span><br><span class="line">  netif = (<span class="keyword">struct</span> netif *)arg;</span><br><span class="line">  tapif = (<span class="keyword">struct</span> tapif *)netif-&gt;state;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">while</span>(<span class="number">1</span>) &#123;</span><br><span class="line">    FD_ZERO(&amp;fdset);</span><br><span class="line">    FD_SET(tapif-&gt;fd, &amp;fdset);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* Wait for a packet to arrive. */</span></span><br><span class="line">    ret = select(tapif-&gt;fd + <span class="number">1</span>, &amp;fdset, <span class="literal">NULL</span>, <span class="literal">NULL</span>, <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span>(ret == <span class="number">1</span>) &#123;</span><br><span class="line">      <span class="comment">/* Handle incoming packet. */</span></span><br><span class="line">      tapif_input(netif);</span><br><span class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span>(ret == <span class="number">-1</span>) &#123;</span><br><span class="line">      perror(<span class="string">&quot;tapif_thread: select&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以这里至少有两个执行上下文：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">tapif_thread</span><br><span class="line">    负责等待 Host TAP fd、把 frame 搬进 pbuf</span><br><span class="line"></span><br><span class="line">tcpip_thread</span><br><span class="line">    负责串行执行 Ethernet/IP/TCP/UDP 等 lwIP Core 输入处理</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-2-tcpip-input-如何把-RX-pbuf-交给-tcpip-thread"><a href="#4-2-tcpip-input-如何把-RX-pbuf-交给-tcpip-thread" class="headerlink" title="4.2 tcpip_input() 如何把 RX pbuf 交给 tcpip_thread"></a>4.2 <code>tcpip_input()</code> 如何把 RX pbuf 交给 <code>tcpip_thread</code></h3><p><code>tcpip_input()</code> 先根据 <code>netif</code> flags 决定收到的是 Ethernet frame 还是裸 IP packet。当前 TAP netif 具备 Ethernet&#x2F;ARP 能力，因此选择 <code>ethernet_input</code>：<a href="#source-s9">S9</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">tcpip_input</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="keyword">struct</span> netif *inp)</span></span><br><span class="line">&#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_ETHERNET</span></span><br><span class="line">  <span class="keyword">if</span> (inp-&gt;flags &amp; (NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET)) &#123;</span><br><span class="line">    <span class="keyword">return</span> tcpip_inpkt(p, inp, ethernet_input);</span><br><span class="line">  &#125; <span class="keyword">else</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_ETHERNET */</span></span></span><br><span class="line">    <span class="keyword">return</span> tcpip_inpkt(p, inp, ip_input);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>当前 <code>LWIP_TCPIP_CORE_LOCKING_INPUT</code> 默认是 <code>0</code>，所以 <code>tcpip_inpkt()</code> 不会在 <code>tapif_thread</code> 里直接执行 <code>ethernet_input()</code>；它分配一个 <code>TCPIP_MSG_INPKT</code>，保存 <code>p/netif/input_fn</code>，再投递到 <code>tcpip_mbox</code>：<a href="#source-s9">S9</a><a href="#source-s11">S11</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">msg = (<span class="keyword">struct</span> tcpip_msg *)memp_malloc(MEMP_TCPIP_MSG_INPKT);</span><br><span class="line"><span class="keyword">if</span> (msg == <span class="literal">NULL</span>) &#123;</span><br><span class="line">  <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">msg-&gt;type = TCPIP_MSG_INPKT;</span><br><span class="line">msg-&gt;msg.inp.p = p;</span><br><span class="line">msg-&gt;msg.inp.netif = inp;</span><br><span class="line">msg-&gt;msg.inp.input_fn = input_fn;</span><br><span class="line"><span class="keyword">if</span> (sys_mbox_trypost(&amp;tcpip_mbox, msg) != ERR_OK) &#123;</span><br><span class="line">  memp_free(MEMP_TCPIP_MSG_INPKT, msg);</span><br><span class="line">  <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">return</span> ERR_OK;</span><br></pre></td></tr></table></figure>
+
+<p><code>tcpip_thread()</code> 一直从这个 mailbox 取消息，然后把消息交给 <code>tcpip_thread_handle_msg()</code>；其中 <code>TCPIP_MSG_INPKT</code> case 才调用前面保存的 <code>input_fn</code>：<a href="#source-s9">S9</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">case</span> TCPIP_MSG_INPKT:</span><br><span class="line">  LWIP_DEBUGF(TCPIP_DEBUG, (<span class="string">&quot;tcpip_thread: PACKET %p\n&quot;</span>, (<span class="type">void</span> *)msg));</span><br><span class="line">  <span class="keyword">if</span> (msg-&gt;msg.inp.input_fn(msg-&gt;msg.inp.p, msg-&gt;msg.inp.netif) != ERR_OK) &#123;</span><br><span class="line">    pbuf_free(msg-&gt;msg.inp.p);</span><br><span class="line">  &#125;</span><br><span class="line">  memp_free(MEMP_TCPIP_MSG_INPKT, msg);</span><br><span class="line">  <span class="keyword">break</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这一步才是真正的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">tapif_thread                     tcpip_thread</span><br><span class="line">     |                                |</span><br><span class="line">     | TCPIP_MSG_INPKT                |</span><br><span class="line">     +------ tcpip_mbox -------------&gt;|</span><br><span class="line">                                      | ethernet_input(p, netif)</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-3-ethernet-input-为什么接着进入-ip4-input"><a href="#4-3-ethernet-input-为什么接着进入-ip4-input" class="headerlink" title="4.3 ethernet_input() 为什么接着进入 ip4_input()"></a>4.3 <code>ethernet_input()</code> 为什么接着进入 <code>ip4_input()</code></h3><p>进入 <code>ethernet_input()</code> 时，<code>p-&gt;payload</code> 仍指向 Ethernet Header。代码先把 <code>payload</code> 解释成 <code>struct eth_hdr</code>，读取 <code>type</code>；遇到 IPv4 EtherType 后移除 Ethernet Header，再调用 <code>ip4_input()</code>：<a href="#source-s10">S10</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* points to packet payload, which starts with an Ethernet header */</span></span><br><span class="line">ethhdr = (<span class="keyword">struct</span> eth_hdr *)p-&gt;payload;</span><br><span class="line">type = ethhdr-&gt;type;</span><br></pre></td></tr></table></figure>
+
+<p>IPv4 分支的连续片段是：<a href="#source-s10">S10</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">case</span> <span class="title function_">PP_HTONS</span><span class="params">(ETHTYPE_IP)</span>:</span><br><span class="line">  <span class="title function_">if</span> <span class="params">(!(netif-&gt;flags &amp; NETIF_FLAG_ETHARP))</span> &#123;</span><br><span class="line">    <span class="keyword">goto</span> free_and_return;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="comment">/* skip Ethernet header (min. size checked above) */</span></span><br><span class="line">  <span class="keyword">if</span> (pbuf_remove_header(p, next_hdr_offset)) &#123;</span><br><span class="line">    LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_LEVEL_WARNING,</span><br><span class="line">                (<span class="string">&quot;ethernet_input: IPv4 packet dropped, too short (%&quot;</span>U16_F<span class="string">&quot;/%&quot;</span>U16_F<span class="string">&quot;)\n&quot;</span>,</span><br><span class="line">                 p-&gt;tot_len, next_hdr_offset));</span><br><span class="line">    LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE, (<span class="string">&quot;Can&#x27;t move over header in packet\n&quot;</span>));</span><br><span class="line">    <span class="keyword">goto</span> free_and_return;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    <span class="comment">/* pass to IP layer */</span></span><br><span class="line">    ip4_input(p, netif);</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">break</span>;</span><br></pre></td></tr></table></figure>
+
+<p>于是数据视图发生第一次推进：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">进入 ethernet_input(): p-&gt;payload -&gt; Ethernet Header</span><br><span class="line">移除 L2 header 后:       p-&gt;payload -&gt; IPv4 Header</span><br></pre></td></tr></table></figure>
+
+<p><code>ip4_input()</code> 完成 IPv4 Header 检查和本机目的地址判断后，把 <code>ip_data.current_ip4_header</code> 留作当前包的 L3 上下文；随后移除 IPv4 Header，根据 <code>Protocol</code> 字段分发。TCP 对应 <code>IP_PROTO_TCP</code>：<a href="#source-s10">S10</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">    pbuf_remove_header(p, iphdr_hlen); <span class="comment">/* Move to payload, no check necessary. */</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">switch</span> (IPH_PROTO(iphdr)) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_UDP</span></span><br><span class="line">      <span class="keyword">case</span> IP_PROTO_UDP:</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_UDPLITE</span></span><br><span class="line">      <span class="keyword">case</span> IP_PROTO_UDPLITE:</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_UDPLITE */</span></span></span><br><span class="line">        MIB2_STATS_INC(mib2.ipindelivers);</span><br><span class="line">        udp_input(p, inp);</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_UDP */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_TCP</span></span><br><span class="line">      <span class="keyword">case</span> IP_PROTO_TCP:</span><br><span class="line">        MIB2_STATS_INC(mib2.ipindelivers);</span><br><span class="line">        tcp_input(p, inp);</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_TCP */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_ICMP</span></span><br><span class="line">      <span class="keyword">case</span> IP_PROTO_ICMP:</span><br><span class="line">        MIB2_STATS_INC(mib2.ipindelivers);</span><br><span class="line">        icmp_input(p, inp);</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_ICMP */</span></span></span><br></pre></td></tr></table></figure>
+
+<p>因此，“TCP packet 从 IPv4 层进入 <code>tcp_input()</code>”的完整含义是：<strong>同一个 RX pbuf 已经由 Ethernet 层消费 L2 Header，再由 IPv4 层验证并消费 L3 Header；只有 IPv4 <code>Protocol == TCP</code> 时，才把当前数据视图交给 TCP。</strong></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">TAP read 完成后</span><br><span class="line">p-&gt;payload -&gt; Ethernet Header</span><br><span class="line">        |</span><br><span class="line">        | ethernet_input(): remove 14-byte Ethernet header</span><br><span class="line">        v</span><br><span class="line">p-&gt;payload -&gt; IPv4 Header</span><br><span class="line">        |</span><br><span class="line">        | ip4_input(): remove IHL 指定的 IPv4 header</span><br><span class="line">        v</span><br><span class="line">p-&gt;payload -&gt; TCP Header</span><br><span class="line">        |</span><br><span class="line">        | tcp_input(): remove TCP header + options</span><br><span class="line">        v</span><br><span class="line">p-&gt;payload -&gt; TCP application payload</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-4-tcp-input-不是一进来就查-PCB：先验证-TCP-Header，再推进数据视图"><a href="#4-4-tcp-input-不是一进来就查-PCB：先验证-TCP-Header，再推进数据视图" class="headerlink" title="4.4 tcp_input() 不是一进来就查 PCB：先验证 TCP Header，再推进数据视图"></a>4.4 <code>tcp_input()</code> 不是一进来就查 PCB：先验证 TCP Header，再推进数据视图</h3><p>这正是原文之前讲得过快的地方。<code>tcp_input()</code> 一开始就把当前 <code>p-&gt;payload</code> 解释成 TCP Header，然后依次做最小长度、广播&#x2F;组播、checksum、TCP Header Length 检查：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">tcphdr = (<span class="keyword">struct</span> tcp_hdr *)p-&gt;payload;</span><br><span class="line"></span><br><span class="line"><span class="comment">/* Check that TCP header fits in payload */</span></span><br><span class="line"><span class="keyword">if</span> (p-&gt;len &lt; TCP_HLEN) &#123;</span><br><span class="line">  LWIP_DEBUGF(TCP_INPUT_DEBUG, (<span class="string">&quot;tcp_input: short packet (%&quot;</span>U16_F<span class="string">&quot; bytes) discarded\n&quot;</span>, p-&gt;tot_len));</span><br><span class="line">  TCP_STATS_INC(tcp.lenerr);</span><br><span class="line">  <span class="keyword">goto</span> dropped;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/* Don&#x27;t even process incoming broadcasts/multicasts. */</span></span><br><span class="line"><span class="keyword">if</span> (ip_addr_isbroadcast(ip_current_dest_addr(), ip_current_netif()) ||</span><br><span class="line">    ip_addr_ismulticast(ip_current_dest_addr())) &#123;</span><br><span class="line">  TCP_STATS_INC(tcp.proterr);</span><br><span class="line">  <span class="keyword">goto</span> dropped;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>checksum 与 TCP Header Length 检查继续发生在 header 还可访问时：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> CHECKSUM_CHECK_TCP</span></span><br><span class="line">  IF__NETIF_CHECKSUM_ENABLED(inp, NETIF_CHECKSUM_CHECK_TCP) &#123;</span><br><span class="line">    <span class="comment">/* Verify TCP checksum. */</span></span><br><span class="line">    <span class="type">u16_t</span> chksum = ip_chksum_pseudo(p, IP_PROTO_TCP, p-&gt;tot_len,</span><br><span class="line">                                    ip_current_src_addr(), ip_current_dest_addr());</span><br><span class="line">    <span class="keyword">if</span> (chksum != <span class="number">0</span>) &#123;</span><br><span class="line">      LWIP_DEBUGF(TCP_INPUT_DEBUG, (<span class="string">&quot;tcp_input: packet discarded due to failing checksum 0x%04&quot;</span>X16_F<span class="string">&quot;\n&quot;</span>,</span><br><span class="line">                                    chksum));</span><br><span class="line">      tcp_debug_print(tcphdr);</span><br><span class="line">      TCP_STATS_INC(tcp.chkerr);</span><br><span class="line">      <span class="keyword">goto</span> dropped;</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* CHECKSUM_CHECK_TCP */</span></span></span><br><span class="line"></span><br><span class="line">  <span class="comment">/* sanity-check header length */</span></span><br><span class="line">  hdrlen_bytes = TCPH_HDRLEN_BYTES(tcphdr);</span><br><span class="line">  <span class="keyword">if</span> ((hdrlen_bytes &lt; TCP_HLEN) || (hdrlen_bytes &gt; p-&gt;tot_len)) &#123;</span><br><span class="line">    LWIP_DEBUGF(TCP_INPUT_DEBUG, (<span class="string">&quot;tcp_input: invalid header length (%&quot;</span>U16_F<span class="string">&quot;)\n&quot;</span>, (<span class="type">u16_t</span>)hdrlen_bytes));</span><br><span class="line">    TCP_STATS_INC(tcp.lenerr);</span><br><span class="line">    <span class="keyword">goto</span> dropped;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>tcp_input()</code>。TCP Header Length 不是永远 20 bytes，因为 TCP options 也包含在 header 内；若整个 header&#x2F;options 都在第一个 pbuf，<code>tcp_input()</code> 直接推进 <code>payload</code>：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">tcphdr_optlen = (<span class="type">u16_t</span>)(hdrlen_bytes - TCP_HLEN);</span><br><span class="line">tcphdr_opt2 = <span class="literal">NULL</span>;</span><br><span class="line"><span class="keyword">if</span> (p-&gt;len &gt;= hdrlen_bytes) &#123;</span><br><span class="line">  <span class="comment">/* all options are in the first pbuf */</span></span><br><span class="line">  tcphdr_opt1len = tcphdr_optlen;</span><br><span class="line">  pbuf_remove_header(p, hdrlen_bytes); <span class="comment">/* cannot fail */</span></span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br></pre></td></tr></table></figure>
+
+<p>因此在后面的状态机里会同时存在两个不同视图：</p>
+<ul>
+<li><code>tcphdr</code> 仍保存 TCP Header 地址，用来读取 <code>src/dest/seqno/ackno/flags/wnd</code>；</li>
+<li><code>p-&gt;payload</code> 已经推进到 <strong>TCP payload</strong>，<code>p-&gt;tot_len</code> 也表示剩余 TCP data 长度。</li>
+</ul>
+<p>这就是后面 <code>tcp_receive()</code> 能把 <code>p</code> 直接交给 application callback 的基础。</p>
+<h3 id="4-5-Header-处理完以后，tcp-input-才做-demultiplex"><a href="#4-5-Header-处理完以后，tcp-input-才做-demultiplex" class="headerlink" title="4.5 Header 处理完以后，tcp_input() 才做 demultiplex"></a>4.5 Header 处理完以后，<code>tcp_input()</code> 才做 demultiplex</h3><p>TCP 不能只看 destination port。对已经建立的 connection，需要同时匹配 remote&#x2F;local IP 和 remote&#x2F;local port。active PCB 查找的实际条件是：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (pcb-&gt;remote_port == tcphdr-&gt;src &amp;&amp;</span><br><span class="line">    pcb-&gt;local_port == tcphdr-&gt;dest &amp;&amp;</span><br><span class="line">    ip_addr_eq(&amp;pcb-&gt;remote_ip, ip_current_src_addr()) &amp;&amp;</span><br><span class="line">    ip_addr_eq(&amp;pcb-&gt;local_ip, ip_current_dest_addr())) &#123;</span><br><span class="line">  <span class="comment">/* Move this PCB to the front of the list so that subsequent</span></span><br><span class="line"><span class="comment">     lookups will be faster (we exploit locality in TCP segment</span></span><br><span class="line"><span class="comment">     arrivals). */</span></span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;tcp_input: pcb-&gt;next != pcb (before cache)&quot;</span>, pcb-&gt;next != pcb);</span><br><span class="line">  <span class="keyword">if</span> (prev != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    prev-&gt;next = pcb-&gt;next;</span><br><span class="line">    pcb-&gt;next = tcp_active_pcbs;</span><br><span class="line">    tcp_active_pcbs = pcb;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    TCP_STATS_INC(tcp.cachehit);</span><br><span class="line">  &#125;</span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;tcp_input: pcb-&gt;next != pcb (after cache)&quot;</span>, pcb-&gt;next != pcb);</span><br><span class="line">  <span class="keyword">break</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>第一个 SYN 还没有 active connection，所以 active&#x2F;time-wait 都匹配不到，最终才扫描 listen PCB。listener 没有固定 remote endpoint，所以先看 local port，再看 local IP 是否 exact&#x2F;ANY match；命中后调用 <code>tcp_listen_input()</code>：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">      <span class="keyword">if</span> (lpcb-&gt;local_port == tcphdr-&gt;dest) &#123;</span><br><span class="line">        <span class="keyword">if</span> (IP_IS_ANY_TYPE_VAL(lpcb-&gt;local_ip)) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> SO_REUSE</span></span><br><span class="line">          lpcb_any = lpcb;</span><br><span class="line">          lpcb_prev = prev;</span><br><span class="line"><span class="meta">#<span class="keyword">else</span> <span class="comment">/* SO_REUSE */</span></span></span><br><span class="line">          <span class="keyword">break</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* SO_REUSE */</span></span></span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (IP_ADDR_PCB_VERSION_MATCH_EXACT(lpcb, ip_current_dest_addr())) &#123;</span><br><span class="line">          <span class="keyword">if</span> (ip_addr_eq(&amp;lpcb-&gt;local_ip, ip_current_dest_addr())) &#123;</span><br><span class="line">            <span class="comment">/* found an exact match */</span></span><br><span class="line">            <span class="keyword">break</span>;</span><br><span class="line">          &#125; <span class="keyword">else</span> <span class="keyword">if</span> (ip_addr_isany(&amp;lpcb-&gt;local_ip)) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> SO_REUSE</span></span><br><span class="line">            lpcb_any = lpcb;</span><br><span class="line">            lpcb_prev = prev;</span><br><span class="line"><span class="meta">#<span class="keyword">else</span> <span class="comment">/* SO_REUSE */</span></span></span><br><span class="line">            <span class="keyword">break</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* SO_REUSE */</span></span></span><br><span class="line">          &#125;</span><br><span class="line">        &#125;</span><br><span class="line">      &#125;</span><br></pre></td></tr></table></figure>
+
+<p>listener 查找完成后仍在 <code>tcp_input()</code>。命中 listener 时，<code>tcp_input()</code> 在这里明确调用 <code>tcp_listen_input(lpcb)</code>：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">      LWIP_DEBUGF(TCP_INPUT_DEBUG, (<span class="string">&quot;tcp_input: packed for LISTENing connection.\n&quot;</span>));</span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> LWIP_HOOK_TCP_INPACKET_PCB</span></span><br><span class="line">      <span class="keyword">if</span> (LWIP_HOOK_TCP_INPACKET_PCB((<span class="keyword">struct</span> tcp_pcb *)lpcb, tcphdr, tcphdr_optlen,</span><br><span class="line">                                     tcphdr_opt1len, tcphdr_opt2, p) == ERR_OK)</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">      &#123;</span><br><span class="line">        tcp_listen_input(lpcb);</span><br><span class="line">      &#125;</span><br><span class="line">      pbuf_free(p);</span><br><span class="line">      <span class="keyword">return</span>;</span><br></pre></td></tr></table></figure>
+
+<p>到这里才能准确说：第一个 SYN 从 <code>tcp_input()</code> 被 demultiplex 到监听端点。</p>
+<h2 id="5-SYN-到来：tcp-listen-input-怎样创建-connection-PCB"><a href="#5-SYN-到来：tcp-listen-input-怎样创建-connection-PCB" class="headerlink" title="5. SYN 到来：tcp_listen_input() 怎样创建 connection PCB"></a>5. SYN 到来：<code>tcp_listen_input()</code> 怎样创建 connection PCB</h2><p>协议总流程现在走到第一次握手：Client SYN 已经穿过 Ethernet&#x2F;IPv4&#x2F;TCP 输入链并命中 listener。接下来要验证的是 <code>LISTEN -&gt; SYN_RCVD</code> 为什么不是 listener 原地变状态，而是创建新的 connection PCB。</p>
+<p>命中 listener 后，<code>tcp_listen_input()</code> 并不会把 listener 本身改成 <code>SYN_RCVD</code>。先看它收到 SYN 时的真实连续代码。<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">  &#125; <span class="keyword">else</span> <span class="keyword">if</span> (flags &amp; TCP_SYN) &#123;</span><br><span class="line">    LWIP_DEBUGF(TCP_DEBUG, (<span class="string">&quot;TCP connection request %&quot;</span>U16_F<span class="string">&quot; -&gt; %&quot;</span>U16_F<span class="string">&quot;.\n&quot;</span>, tcphdr-&gt;src, tcphdr-&gt;dest));</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> TCP_LISTEN_BACKLOG</span></span><br><span class="line">    <span class="keyword">if</span> (pcb-&gt;accepts_pending &gt;= pcb-&gt;backlog) &#123;</span><br><span class="line">      LWIP_DEBUGF(TCP_DEBUG, (<span class="string">&quot;tcp_listen_input: listen backlog exceeded for port %&quot;</span>U16_F<span class="string">&quot;\n&quot;</span>, tcphdr-&gt;dest));</span><br><span class="line">      <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* TCP_LISTEN_BACKLOG */</span></span></span><br><span class="line">    npcb = tcp_alloc(pcb-&gt;prio);</span><br><span class="line">    <span class="comment">/* If a new PCB could not be created (probably due to lack of memory),</span></span><br><span class="line"><span class="comment">       we don&#x27;t do anything, but rely on the sender will retransmit the</span></span><br><span class="line"><span class="comment">       SYN at a time when we have more memory available. */</span></span><br><span class="line">    <span class="keyword">if</span> (npcb == <span class="literal">NULL</span>) &#123;</span><br><span class="line">      <span class="type">err_t</span> err;</span><br><span class="line">      LWIP_DEBUGF(TCP_DEBUG, (<span class="string">&quot;tcp_listen_input: could not allocate PCB\n&quot;</span>));</span><br><span class="line">      TCP_STATS_INC(tcp.memerr);</span><br><span class="line">      TCP_EVENT_ACCEPT(pcb, <span class="literal">NULL</span>, pcb-&gt;callback_arg, ERR_MEM, err);</span><br><span class="line">      LWIP_UNUSED_ARG(err); <span class="comment">/* err not useful here */</span></span><br><span class="line">      <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这段代码先处理 backlog，再通过 <code>tcp_alloc()</code> 创建一个新的普通 <code>struct tcp_pcb</code>。只有分配成功，才开始把当前报文里的 endpoint 与 sequence state 写入新 PCB：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">    <span class="comment">/* Set up the new PCB. */</span></span><br><span class="line">    ip_addr_copy(npcb-&gt;local_ip, *ip_current_dest_addr());</span><br><span class="line">    ip_addr_copy(npcb-&gt;remote_ip, *ip_current_src_addr());</span><br><span class="line">    npcb-&gt;local_port = pcb-&gt;local_port;</span><br><span class="line">    npcb-&gt;remote_port = tcphdr-&gt;src;</span><br><span class="line">    npcb-&gt;state = SYN_RCVD;</span><br><span class="line">    npcb-&gt;rcv_nxt = seqno + <span class="number">1</span>;</span><br><span class="line">    npcb-&gt;rcv_ann_right_edge = npcb-&gt;rcv_nxt;</span><br><span class="line">    iss = tcp_next_iss(npcb);</span><br><span class="line">    npcb-&gt;snd_wl2 = iss;</span><br><span class="line">    npcb-&gt;snd_nxt = iss;</span><br><span class="line">    npcb-&gt;lastack = iss;</span><br><span class="line">    npcb-&gt;snd_lbb = iss;</span><br><span class="line">    npcb-&gt;snd_wl1 = seqno - <span class="number">1</span>;<span class="comment">/* initialise to seqno-1 to force window update */</span></span><br><span class="line">    npcb-&gt;callback_arg = pcb-&gt;callback_arg;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG</span></span><br><span class="line">    npcb-&gt;listener = pcb;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG */</span></span></span><br></pre></td></tr></table></figure>
+
+<p>这里的数据来源可以直接对应回刚才 <code>tcp_input()</code> 解析出的字段：</p>
+<table>
+<thead>
+<tr>
+<th>新 PCB 字段</th>
+<th>来源</th>
+<th>当前意义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>local_ip</code></td>
+<td><code>ip_current_dest_addr()</code></td>
+<td>SYN 的 IPv4 destination，也就是本机地址</td>
+</tr>
+<tr>
+<td><code>remote_ip</code></td>
+<td><code>ip_current_src_addr()</code></td>
+<td>SYN 的 IPv4 source</td>
+</tr>
+<tr>
+<td><code>local_port</code></td>
+<td>listen PCB</td>
+<td>服务端监听端口</td>
+</tr>
+<tr>
+<td><code>remote_port</code></td>
+<td><code>tcphdr-&gt;src</code></td>
+<td>客户端源端口</td>
+</tr>
+<tr>
+<td><code>rcv_nxt</code></td>
+<td><code>seqno + 1</code></td>
+<td>SYN 占一个 sequence number 后，下一个期望序号</td>
+</tr>
+<tr>
+<td><code>iss/snd_nxt/lastack/snd_lbb</code></td>
+<td><code>tcp_next_iss()</code></td>
+<td>本端发送 sequence space 的初始位置</td>
+</tr>
+</tbody></table>
+<p>随后新 PCB 注册进 active list，而 listener 继续留在 <code>tcp_listen_pcbs</code>：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Register the new PCB so that we can begin receiving segments</span></span><br><span class="line"><span class="comment">   for it. */</span></span><br><span class="line">TCP_REG_ACTIVE(npcb);</span><br><span class="line"></span><br><span class="line"><span class="comment">/* Parse any options in the SYN. */</span></span><br><span class="line">tcp_parseopt(npcb);</span><br><span class="line">npcb-&gt;snd_wnd = tcphdr-&gt;wnd;</span><br><span class="line">npcb-&gt;snd_wnd_max = npcb-&gt;snd_wnd;</span><br></pre></td></tr></table></figure>
+
+<p>因此对象关系应该记成：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;LISTEN PCB</span><br><span class="line">local port 7&quot;] --&gt;|&quot;收到 Host SYN&quot;| B[&quot;tcp_alloc()&quot;]</span><br><span class="line">    B --&gt; C[&quot;新的 struct tcp_pcb&quot;]</span><br><span class="line">    C --&gt; D[&quot;填 local/remote IP + port&quot;]</span><br><span class="line">    D --&gt; E[&quot;state = SYN_RCVD&quot;]</span><br><span class="line">    E --&gt; F[&quot;TCP_REG_ACTIVE(npcb)&quot;]</span><br><span class="line">    A --&gt; G[&quot;listener 保留在 LISTEN</span><br><span class="line">继续等待其他连接&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>状态迁移发生在<strong>新 connection PCB</strong> 上，而不是把 listener 直接改造成 connection。</p>
+<h2 id="6-为什么收到-SYN-后-rcv-nxt-seqno-1"><a href="#6-为什么收到-SYN-后-rcv-nxt-seqno-1" class="headerlink" title="6. 为什么收到 SYN 后 rcv_nxt = seqno + 1"></a>6. 为什么收到 SYN 后 <code>rcv_nxt = seqno + 1</code></h2><p>SYN 本身不携带普通 application data，也仍然占用一个 TCP Sequence Number。RFC 9293 的 sequence space 规则要求 SYN 和 FIN 都消耗一个序号。<a href="#source-s6">S6</a></p>
+<p>假设 Host 的 SYN 是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">SEQ = 1000</span><br><span class="line">SYN = 1</span><br></pre></td></tr></table></figure>
+
+<p>lwIP 接收后设置：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">rcv_nxt = 1001</span><br></pre></td></tr></table></figure>
+
+<p>含义是：<strong>下一个期望从 Host 收到的 sequence number 是 1001。</strong></p>
+<p>这里要把几个字段分开：</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>所属方向</th>
+<th>当前含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>seqno</code></td>
+<td>RX TCP Header</td>
+<td>对端这个 segment 的第一个 sequence number</td>
+</tr>
+<tr>
+<td><code>rcv_nxt</code></td>
+<td>本地 PCB</td>
+<td>本地下一步期望收到的 sequence number</td>
+</tr>
+<tr>
+<td><code>iss</code></td>
+<td>本地发送侧</td>
+<td>Initial Send Sequence，本端握手起始 sequence</td>
+</tr>
+<tr>
+<td><code>snd_nxt</code></td>
+<td>本地 PCB</td>
+<td>本端下一步准备发送的 sequence number 位置</td>
+</tr>
+<tr>
+<td><code>lastack</code></td>
+<td>本地 PCB</td>
+<td>已被对端累计确认到的位置</td>
+</tr>
+</tbody></table>
+<p>Stage 8 会继续深入 <code>snd_nxt</code>、<code>lastack</code>、发送队列。本篇只需要理解：接收 SYN 后 <code>rcv_nxt</code> 前进 1，本端也选择自己的 <code>iss</code> 来构造 SYN-ACK。</p>
+<h2 id="7-SYN-ACK-不是-tcp-listen-input-直接拼一块-Ethernet-frame"><a href="#7-SYN-ACK-不是-tcp-listen-input-直接拼一块-Ethernet-frame" class="headerlink" title="7. SYN-ACK 不是 tcp_listen_input() 直接拼一块 Ethernet frame"></a>7. SYN-ACK 不是 <code>tcp_listen_input()</code> 直接拼一块 Ethernet frame</h2><p>协议总流程现在走到第二次握手：<code>SYN_RCVD</code> connection PCB 已建立，服务端需要发送 SYN&#x2F;ACK。下面沿实际调用链看控制 segment 如何排队，再由 TCP output 进入 IP&#x2F;Ethernet TX。</p>
+<p>新 PCB 建好以后，<code>tcp_listen_input()</code> 调用：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">rc = tcp_enqueue_flags(npcb, TCP_SYN | TCP_ACK);</span><br><span class="line"><span class="keyword">if</span> (rc != ERR_OK) &#123;</span><br><span class="line">  tcp_abandon(npcb, <span class="number">0</span>);</span><br><span class="line">  <span class="keyword">return</span>;</span><br><span class="line">&#125;</span><br><span class="line">tcp_output(npcb);</span><br></pre></td></tr></table></figure>
+
+<p>这里第一次遇到两个 TCP flag：</p>
+<ul>
+<li><code>SYN</code>：同步 sequence number，用于建立连接；</li>
+<li><code>ACK</code>：Acknowledgment 字段有效，确认已经接收的 sequence space。</li>
+</ul>
+<p><code>SYN | ACK</code> 因此表示：“这是本端的 SYN，同时确认了刚才收到的对端 SYN”。</p>
+<p><code>tcp_enqueue_flags()</code> 先把控制 segment 放到 TCP 的发送队列；<code>tcp_output()</code> 再根据发送窗口等条件实际输出。最终才会经过 IP 与 netif TX 路径下发到 Ethernet&#x2F;TAP。<a href="#source-s7">S7</a></p>
+<p>这时发送队列第一次出现，但本篇只保留最小模型：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">生成 SYN-ACK segment</span><br><span class="line">        ↓</span><br><span class="line">TCP 发送队列</span><br><span class="line">        ↓</span><br><span class="line">tcp_output()</span><br><span class="line">        ↓</span><br><span class="line">IP / ARP / Ethernet / TAP</span><br></pre></td></tr></table></figure>
+
+<p><code>unsent</code>、<code>unacked</code> 的对象迁移在 Stage 8 再展开。</p>
+<h2 id="8-第三个-ACK：tcp-process-如何真正完成-SYN-RCVD-ESTABLISHED"><a href="#8-第三个-ACK：tcp-process-如何真正完成-SYN-RCVD-ESTABLISHED" class="headerlink" title="8. 第三个 ACK：tcp_process() 如何真正完成 SYN_RCVD -&gt; ESTABLISHED"></a>8. 第三个 ACK：<code>tcp_process()</code> 如何真正完成 <code>SYN_RCVD -&gt; ESTABLISHED</code></h2><p>协议总流程现在走到第三次握手：服务端已经发出 SYN&#x2F;ACK，下面的 final ACK 决定 connection PCB 是否真正进入 <code>ESTABLISHED</code> 并触发 accept event。</p>
+<p>Host 收到 SYN-ACK 后发送最终 ACK。这个 frame 会完整重复前面的 RX 链：<code>tapif_thread -&gt; tcpip_input -&gt; tcpip_thread -&gt; ethernet_input -&gt; ip4_input -&gt; tcp_input</code>。区别在于此时四元组已经能够命中刚才注册到 <code>tcp_active_pcbs</code> 的 <code>npcb</code>，因此不再走 listen PCB 查找。<a href="#source-s5">S5</a></p>
+<p><code>tcp_input()</code> 为命中的 connection 构造临时 <code>inseg</code>，清空本轮输入产生的 <code>recv_data/recv_acked/recv_flags</code>，然后调用 <code>tcp_process()</code>：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Set up a tcp_seg structure. */</span></span><br><span class="line">inseg.next = <span class="literal">NULL</span>;</span><br><span class="line">inseg.len = p-&gt;tot_len;</span><br><span class="line">inseg.p = p;</span><br><span class="line">inseg.tcphdr = tcphdr;</span><br><span class="line"></span><br><span class="line">recv_data = <span class="literal">NULL</span>;</span><br><span class="line">recv_flags = <span class="number">0</span>;</span><br><span class="line">recv_acked = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (flags &amp; TCP_PSH) &#123;</span><br><span class="line">  p-&gt;flags |= PBUF_FLAG_PUSH;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">tcp_input_pcb = pcb;</span><br><span class="line">err = tcp_process(pcb);</span><br></pre></td></tr></table></figure>
+
+<p>这里的 <code>inseg.p</code> 已经不是“完整 Ethernet frame 视图”。前面三层 header 已经依次被消费：Ethernet Header 和 IPv4 Header 在进入 TCP 前移除，TCP Header 又在 <code>tcp_input()</code> 开头移除，因此 <code>inseg.p-&gt;payload</code> 对数据 segment 来说指向 TCP payload；<code>inseg.tcphdr</code> 单独保留 header 指针供状态机读取。</p>
+<p>在 <code>SYN_RCVD</code> 分支，final ACK 必须落在预期的发送 sequence range 内。满足后代码明确执行 <code>pcb-&gt;state = ESTABLISHED</code>，然后触发 listener 的 accept callback：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">    <span class="keyword">case</span> SYN_RCVD:</span><br><span class="line">      <span class="keyword">if</span> (flags &amp; TCP_SYN) &#123;</span><br><span class="line">        <span class="keyword">if</span> (seqno == pcb-&gt;rcv_nxt - <span class="number">1</span>) &#123;</span><br><span class="line">          <span class="comment">/* Looks like another copy of the SYN - retransmit our SYN-ACK */</span></span><br><span class="line">          tcp_rexmit(pcb);</span><br><span class="line">        &#125;</span><br><span class="line">      &#125; <span class="keyword">else</span> <span class="keyword">if</span> (flags &amp; TCP_ACK) &#123;</span><br><span class="line">        <span class="comment">/* expected ACK number? */</span></span><br><span class="line">        <span class="keyword">if</span> (TCP_SEQ_BETWEEN(ackno, pcb-&gt;lastack + <span class="number">1</span>, pcb-&gt;snd_nxt)) &#123;</span><br><span class="line">          pcb-&gt;state = ESTABLISHED;</span><br><span class="line">          LWIP_DEBUGF(TCP_DEBUG, (<span class="string">&quot;TCP connection established %&quot;</span>U16_F<span class="string">&quot; -&gt; %&quot;</span>U16_F<span class="string">&quot;.\n&quot;</span>, inseg.tcphdr-&gt;src, inseg.tcphdr-&gt;dest));</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG</span></span><br><span class="line">          <span class="keyword">if</span> (pcb-&gt;listener == <span class="literal">NULL</span>) &#123;</span><br><span class="line">            <span class="comment">/* listen pcb might be closed by now */</span></span><br><span class="line">            err = ERR_VAL;</span><br><span class="line">          &#125; <span class="keyword">else</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_CALLBACK_API || TCP_LISTEN_BACKLOG */</span></span></span><br><span class="line">          &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_CALLBACK_API</span></span><br><span class="line">            LWIP_ASSERT(<span class="string">&quot;pcb-&gt;listener-&gt;accept != NULL&quot;</span>, pcb-&gt;listener-&gt;accept != <span class="literal">NULL</span>);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">            tcp_backlog_accepted(pcb);</span><br><span class="line">            <span class="comment">/* Call the accept function. */</span></span><br><span class="line">            TCP_EVENT_ACCEPT(pcb-&gt;listener, pcb, pcb-&gt;callback_arg, ERR_OK, err);</span><br><span class="line">          &#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果这个 final ACK 同时携带 application data，状态迁移和 accept callback 之后还会直接调用 <code>tcp_receive(pcb)</code>，因此“握手 ACK”和“第一批 application bytes”并不存在必须分成两个 packet 的要求：<a href="#source-s5">S5</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* If there was any data contained within this ACK,</span></span><br><span class="line"><span class="comment"> * we&#x27;d better pass it on to the application as well. */</span></span><br><span class="line">tcp_receive(pcb);</span><br><span class="line"></span><br><span class="line"><span class="comment">/* Prevent ACK for SYN to generate a sent event */</span></span><br><span class="line"><span class="keyword">if</span> (recv_acked != <span class="number">0</span>) &#123;</span><br><span class="line">  recv_acked--;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">pcb-&gt;cwnd = LWIP_TCP_CALC_INITIAL_CWND(pcb-&gt;mss);</span><br></pre></td></tr></table></figure>
+
+<p>到这里，运行时对象关系才真正变成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">listen PCB</span><br><span class="line">    继续 LISTEN</span><br><span class="line"></span><br><span class="line">connection PCB</span><br><span class="line">    SYN_RCVD</span><br><span class="line">       |</span><br><span class="line">       | final ACK 合法</span><br><span class="line">       v</span><br><span class="line">    ESTABLISHED</span><br><span class="line">       |</span><br><span class="line">       +-&gt; listener accept callback</span><br><span class="line">       +-&gt; 若 ACK 携带 data，则继续 tcp_receive()</span><br></pre></td></tr></table></figure>
+<h2 id="9-tcpecho-raw-accept-给-ESTABLISHED-PCB-挂上-application-callbacks"><a href="#9-tcpecho-raw-accept-给-ESTABLISHED-PCB-挂上-application-callbacks" class="headerlink" title="9. tcpecho_raw_accept() 给 ESTABLISHED PCB 挂上 application callbacks"></a>9. <code>tcpecho_raw_accept()</code> 给 ESTABLISHED PCB 挂上 application callbacks</h2><p>握手完成后，upstream 示例进入：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span></span><br><span class="line"><span class="title function_">tcpecho_raw_accept</span><span class="params">(<span class="type">void</span> *arg, <span class="keyword">struct</span> tcp_pcb *newpcb, <span class="type">err_t</span> err)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">tcpecho_raw_state</span> *<span class="title">es</span>;</span></span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> ((err != ERR_OK) || (newpcb == <span class="literal">NULL</span>)) &#123;</span><br><span class="line">    <span class="keyword">return</span> ERR_VAL;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  es = (<span class="keyword">struct</span> tcpecho_raw_state *)mem_malloc(<span class="keyword">sizeof</span>(<span class="keyword">struct</span> tcpecho_raw_state));</span><br><span class="line">  <span class="keyword">if</span> (es != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    es-&gt;state = ES_ACCEPTED;</span><br><span class="line">    es-&gt;pcb = newpcb;</span><br><span class="line">    es-&gt;p = <span class="literal">NULL</span>;</span><br><span class="line"></span><br><span class="line">    tcp_arg(newpcb, es);</span><br><span class="line">    tcp_recv(newpcb, tcpecho_raw_recv);</span><br><span class="line">    tcp_err(newpcb, tcpecho_raw_error);</span><br><span class="line">    tcp_poll(newpcb, tcpecho_raw_poll, <span class="number">0</span>);</span><br><span class="line">    tcp_sent(newpcb, tcpecho_raw_sent);</span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里同时存在两套 state，不要混淆：</p>
+<table>
+<thead>
+<tr>
+<th>state</th>
+<th>属于谁</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ESTABLISHED</code></td>
+<td>lwIP <code>struct tcp_pcb</code></td>
+<td>TCP 协议状态机</td>
+</tr>
+<tr>
+<td><code>ES_ACCEPTED</code></td>
+<td>example <code>tcpecho_raw_state</code></td>
+<td>Echo application 自己的业务状态</td>
+</tr>
+</tbody></table>
+<p>后者不是 TCP 标准状态，也不是 lwIP Core 的通用状态。它只属于这个 example。这个区分体现了四层边界：TCP Core 负责 connection protocol state；example 负责 Echo application state。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<p><code>tcp_recv()</code>、<code>tcp_sent()</code> 等调用同样只是<strong>注册 callback</strong>，并不是“此刻开始收数据&#x2F;发送完成”。真正触发它们的是后续 TCP input&#x2F;ACK 事件。</p>
+<h2 id="10-三次握手完整运行时流程"><a href="#10-三次握手完整运行时流程" class="headerlink" title="10. 三次握手完整运行时流程"></a>10. 三次握手完整运行时流程</h2><p>到这里才适合把已出现的对象串起来：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant H as Linux Host</span><br><span class="line">    participant I as tcp_input()</span><br><span class="line">    participant L as LISTEN PCB</span><br><span class="line">    participant C as connection PCB</span><br><span class="line">    participant A as tcpecho_raw_accept()</span><br><span class="line"></span><br><span class="line">    H-&gt;&gt;I: SYN, SEQ=x</span><br><span class="line">    I-&gt;&gt;L: local port 匹配 listener</span><br><span class="line">    L-&gt;&gt;C: tcp_alloc() 创建 connection PCB</span><br><span class="line">    Note over C: state=SYN_RCVD&lt;br/&gt;rcv_nxt=x+1</span><br><span class="line">    C--&gt;&gt;H: SYN + ACK</span><br><span class="line">    H-&gt;&gt;I: ACK</span><br><span class="line">    I-&gt;&gt;C: 四元组命中 active PCB</span><br><span class="line">    Note over C: state=ESTABLISHED</span><br><span class="line">    C-&gt;&gt;A: accept callback(newpcb)</span><br><span class="line">    A-&gt;&gt;C: 注册 recv/sent/error/poll callbacks</span><br></pre></td></tr></table></figure>
+
+<p>这里有两个不同“注册”：</p>
+<ol>
+<li>初始化时 <code>tcp_accept(listener, tcpecho_raw_accept)</code> 给 listener 注册 accept callback；</li>
+<li>accept callback 运行以后，再给新 connection PCB 注册 recv&#x2F;sent&#x2F;error&#x2F;poll callbacks。</li>
+</ol>
+<p>如果把这两次注册混成一句“设置 callback”，就很难理解 callback 到底挂在哪个 PCB 上、何时才可能触发。</p>
+<h2 id="11-passive-open-与-active-open-只做最小对照"><a href="#11-passive-open-与-active-open-只做最小对照" class="headerlink" title="11. passive open 与 active open 只做最小对照"></a>11. passive open 与 active open 只做最小对照</h2><p>当前文章主线是服务端 passive open。客户端主动连接走另一个入口：<code>tcp_connect()</code>。<a href="#source-s3">S3</a></p>
+<p>最小差异是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">服务端 passive open:</span><br><span class="line">CLOSED -&gt; LISTEN -&gt; [新 PCB] SYN_RCVD -&gt; ESTABLISHED</span><br><span class="line"></span><br><span class="line">客户端 active open:</span><br><span class="line">CLOSED -&gt; SYN_SENT -&gt; ESTABLISHED</span><br></pre></td></tr></table></figure>
+
+<p>active open 本地先选择 initial sequence，排队 SYN；收到合法 SYN-ACK 后，<code>tcp_process()</code> 的 <code>SYN_SENT</code> 分支将 PCB 改成 <code>ESTABLISHED</code> 并触发 connected callback。<a href="#source-s5">S5</a></p>
+<p>两条路径最终都进入同一个“已建立 connection PCB”模型；区别在于谁先发送 SYN，以及建立阶段由 listener 还是 <code>tcp_connect()</code> 发起。</p>
+<h2 id="12-从握手过渡到数据面"><a href="#12-从握手过渡到数据面" class="headerlink" title="12. 从握手过渡到数据面"></a>12. 从握手过渡到数据面</h2><p>握手完成后，Stage 8 不再关心“connection 是否存在”，而是沿刚注册的 <code>tcpecho_raw_recv()</code> 继续追：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">ESTABLISHED connection</span><br><span class="line">        ↓</span><br><span class="line">RX data</span><br><span class="line">        ↓</span><br><span class="line">tcp_receive()</span><br><span class="line">        ↓</span><br><span class="line">tcpecho_raw_recv()</span><br><span class="line">        ↓</span><br><span class="line">tcp_write()</span><br><span class="line">        ↓</span><br><span class="line">unsent / unacked</span><br><span class="line">        ↓</span><br><span class="line">ACK 回来释放发送资源</span><br></pre></td></tr></table></figure>
+
+<p>这也是为什么 Stage 7 到 <code>ESTABLISHED + callbacks registered</code> 就停止：再往下已经进入发送队列、窗口和 ACK reclaim 的另一套机制。</p>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-upstream-Raw-TCP-Echo-示例"><a href="#S1-upstream-Raw-TCP-Echo-示例" class="headerlink" title="[S1] upstream Raw TCP Echo 示例"></a>[S1] upstream Raw TCP Echo 示例</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/apps/tcpecho_raw/tcpecho_raw.c"><code>contrib/apps/tcpecho_raw/tcpecho_raw.c</code></a></li>
+<li>使用位置：监听初始化、accept callback 和 application callback 注册</li>
+<li>支撑内容：<code>tcp_new_ip_type()</code>、<code>tcp_bind()</code>、<code>tcp_listen()</code>、<code>tcp_accept()</code> 与 <code>tcpecho_raw_accept()</code> 的真实调用顺序</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-TCP-PCB-数据结构"><a href="#S2-TCP-PCB-数据结构" class="headerlink" title="[S2] TCP PCB 数据结构"></a>[S2] TCP PCB 数据结构</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/tcp.h"><code>src/include/lwip/tcp.h</code></a></li>
+<li>使用位置：<code>struct tcp_pcb</code>、<code>struct tcp_pcb_listen</code> 与 connection&#x2F;listener 对象边界</li>
+<li>支撑内容：listener 与 active connection 保存的状态不同</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-TCP-PCB-创建、bind、listen-与-active-open"><a href="#S3-TCP-PCB-创建、bind、listen-与-active-open" class="headerlink" title="[S3] TCP PCB 创建、bind、listen 与 active open"></a>[S3] TCP PCB 创建、bind、listen 与 active open</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/tcp.c"><code>src/core/tcp.c</code></a></li>
+<li>使用位置：<code>tcp_listen()</code> 对象替换、PCB list 和 <code>tcp_connect()</code> 对照</li>
+<li>支撑内容：listen PCB 分配&#x2F;原 PCB 释放，以及 active open 的入口语义</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-lwIP-TCP-state-定义"><a href="#S4-lwIP-TCP-state-定义" class="headerlink" title="[S4] lwIP TCP state 定义"></a>[S4] lwIP TCP state 定义</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/tcpbase.h"><code>src/include/lwip/tcpbase.h</code></a></li>
+<li>使用位置：LISTEN、SYN_SENT、SYN_RCVD、ESTABLISHED 状态含义</li>
+<li>支撑内容：当前 lwIP state enum 及其顺序</li>
+</ul>
+<p><a id="source-s5"></a></p>
+<h3 id="S5-TCP-RX-与握手状态机"><a href="#S5-TCP-RX-与握手状态机" class="headerlink" title="[S5] TCP RX 与握手状态机"></a>[S5] TCP RX 与握手状态机</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/tcp_in.c"><code>src/core/tcp_in.c</code></a></li>
+<li>使用位置：<code>tcp_input()</code> demultiplex、<code>tcp_listen_input()</code>、<code>tcp_process()</code></li>
+<li>支撑内容：SYN 创建 connection PCB、<code>SYN_RCVD</code>、SYN-ACK 排队、final ACK 进入 <code>ESTABLISHED</code> 和 accept event</li>
+</ul>
+<p><a id="source-s6"></a></p>
+<h3 id="S6-RFC-9293-—-TCP"><a href="#S6-RFC-9293-—-TCP" class="headerlink" title="[S6] RFC 9293 — TCP"></a>[S6] RFC 9293 — TCP</h3><ul>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9293.html">RFC 9293 — Transmission Control Protocol</a></li>
+<li>使用位置：三次握手、sequence space、SYN&#x2F;FIN 消耗一个 sequence number</li>
+<li>支撑内容：TCP 标准连接建立与 sequence number 语义</li>
+</ul>
+<p><a id="source-s7"></a></p>
+<h3 id="S7-TCP-输出实现"><a href="#S7-TCP-输出实现" class="headerlink" title="[S7] TCP 输出实现"></a>[S7] TCP 输出实现</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/tcp_out.c"><code>src/core/tcp_out.c</code></a></li>
+<li>使用位置：SYN-ACK 从控制 segment 排队到 <code>tcp_output()</code></li>
+<li>支撑内容：<code>tcp_enqueue_flags()</code>、<code>tcp_output()</code> 与 <code>tcp_output_segment()</code> 的发送关系</li>
+</ul>
+<p><a id="source-s8"></a></p>
+<h3 id="S8-Unix-TAP-RX-与-netif-input-绑定"><a href="#S8-Unix-TAP-RX-与-netif-input-绑定" class="headerlink" title="[S8] Unix TAP RX 与 netif input 绑定"></a>[S8] Unix TAP RX 与 netif input 绑定</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/ports/unix/port/netif/tapif.c"><code>contrib/ports/unix/port/netif/tapif.c</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/ports/unix/example_app/default_netif.c"><code>contrib/ports/unix/example_app/default_netif.c</code></a></li>
+<li>使用位置：SYN 从 TAP fd 到 <code>netif-&gt;input()</code> 的线程入口</li>
+<li>支撑内容：<code>tapif_thread()</code>、<code>tapif_input()</code>、<code>low_level_input()</code> 以及当前 <code>netif-&gt;input = tcpip_input</code> 的真实绑定</li>
+</ul>
+<p><a id="source-s9"></a></p>
+<h3 id="S9-tcpip-input-与-tcpip-thread-packet-handoff"><a href="#S9-tcpip-input-与-tcpip-thread-packet-handoff" class="headerlink" title="[S9] tcpip_input() 与 tcpip_thread packet handoff"></a>[S9] <code>tcpip_input()</code> 与 <code>tcpip_thread</code> packet handoff</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/api/tcpip.c"><code>src/api/tcpip.c</code></a></li>
+<li>使用位置：<code>TCPIP_MSG_INPKT</code>、<code>tcpip_mbox</code> 与 Core thread 执行边界</li>
+<li>支撑内容：RX pbuf 怎样从 TAP thread 投递给 <code>tcpip_thread</code>，以及 <code>input_fn</code> 怎样在 Core context 中执行</li>
+</ul>
+<p><a id="source-s10"></a></p>
+<h3 id="S10-Ethernet-到-IPv4-TCP-的协议分发"><a href="#S10-Ethernet-到-IPv4-TCP-的协议分发" class="headerlink" title="[S10] Ethernet 到 IPv4&#x2F;TCP 的协议分发"></a>[S10] Ethernet 到 IPv4&#x2F;TCP 的协议分发</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/netif/ethernet.c"><code>src/netif/ethernet.c</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/ipv4/ip4.c"><code>src/core/ipv4/ip4.c</code></a></li>
+<li>使用位置：EtherType IPv4 分支、IPv4 <code>Protocol == TCP</code> 分发与 <code>pbuf-&gt;payload</code> 两次推进</li>
+<li>支撑内容：证明 <code>tcp_input()</code> 的直接调用者是 <code>ip4_input()</code>，并建立 Ethernet&#x2F;IPv4&#x2F;TCP 三层数据视图连续关系</li>
+</ul>
+<p><a id="source-s11"></a></p>
+<h3 id="S11-当前输入线程配置"><a href="#S11-当前输入线程配置" class="headerlink" title="[S11] 当前输入线程配置"></a>[S11] 当前输入线程配置</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/examples/example_app/lwipopts.h"><code>contrib/examples/example_app/lwipopts.h</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/opt.h"><code>src/include/lwip/opt.h</code></a></li>
+<li>使用位置：<code>NO_SYS=0</code>、<code>LWIP_TCPIP_CORE_LOCKING_INPUT=0</code> 的当前执行路径</li>
+<li>支撑内容：限定本文的 RX mailbox&#x2F;thread 路径是当前 Unix example 配置，而不是所有 lwIP Port 的唯一输入模型</li>
+</ul>
+<p><a id="source-s12"></a></p>
+<h3 id="S12-Wireshark-Wiki-—-TCP-3-way-handshaking"><a href="#S12-Wireshark-Wiki-—-TCP-3-way-handshaking" class="headerlink" title="[S12] Wireshark Wiki — TCP 3-way handshaking"></a>[S12] Wireshark Wiki — TCP 3-way handshaking</h3><ul>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://wiki.wireshark.org/TCP_3_way_handshaking">TCP 3-way handshaking</a></li>
+<li>使用位置：“阅读源码前”、三次握手观察</li>
+<li>支撑内容：提供 SYN、SYN&#x2F;ACK、ACK 与 relative sequence number 的抓包视角；正文仍独立建立握手和状态模型</li>
+</ul>
+<p><a id="source-s13"></a></p>
+<h3 id="S13-lwIP-官方-TCP-Raw-API-文档"><a href="#S13-lwIP-官方-TCP-Raw-API-文档" class="headerlink" title="[S13] lwIP 官方 TCP Raw API 文档"></a>[S13] lwIP 官方 TCP Raw API 文档</h3><ul>
+<li>类型：lwIP 官方 Doxygen 文档</li>
+<li>版本：2.1.x 文档；正文源码事实以固定 commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code> 为准</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/group__tcp__raw.html">lwIP — TCP Raw API</a></li>
+<li>使用位置：“阅读源码前”、监听 Raw API 导航</li>
+<li>支撑内容：说明 <code>tcp_bind()</code>、<code>tcp_listen()</code>、<code>tcp_accept()</code> 等公开 API 的定位；listener&#x2F;connection PCB 的对象替换与握手状态机由 [S1]～[S7] 的目标源码证明</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/50a9e0b5/">https://wdfk-prog.space/posts/50a9e0b5/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LWIP/">LWIP</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/04.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/1c6cd58/" title="10-tcp-out-of-order"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">10-tcp-out-of-order</div></div><div class="info-2"><div class="info-item-1">  教程 10：从 tcp_receive() 到 ooseq &#x2F; SACK——TCP 乱序、重组与选择确认 摘要：沿 lwIP 的乱序接收与 SACK 实现路径，映射 TCP sequence space、累计 ACK 与选择确认到 ooseq、rcv_nxt、pbuf 重组和 ACK option。  [TOC] Stage 9 从 sender 侧解释了 duplicate ACK 为什么可能触发 Fast Retransmit。Stage 10 转到 receiver 侧：当 TCP segment 没有按 sequence 顺序到达时，lwIP 怎样保存已经收到但暂时不能交付的数据，怎样在 gap 被补齐后恢复连续 byte stream，以及启用 SACK（Selective Acknowledgment，选择确认）时怎样把“gap 后哪些范围已经收到”反馈给 sender。 阅读源码前：建议提前阅读 RFC 9293 — Transmission Control Protocol：用于理解 TCP 怎样给字节编号、为什么确认号表示“下一段连续期望的数据位置...</div></div></div></a><a class="pagination-related" href="/posts/db9c7354/" title="09-tcp-retransmission"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">09-tcp-retransmission</div></div><div class="info-2"><div class="info-item-1">  教程 09：从 tcp_slowtmr() 到 Fast Retransmit——TCP 超时重传与重复 ACK 摘要：沿 lwIP 的 RTO 与 Fast Retransmit 源码路径，映射 RFC 定义的丢包恢复机制到 timer、ACK 判定、发送队列与拥塞控制状态。  [TOC] Stage 8 已经建立了 TCP（Transmission Control Protocol，传输控制协议）正常发送路径：应用写入的字节被组织成 segment，发送后进入 unacked（lwIP 保存“已经发出但尚未被累计确认”的 segment 队列），对端返回累计 ACK（Acknowledgment，确认号）后，已确认 segment 才能释放。Stage 9 研究的是这个正常闭环被“丢包或确认长期不推进”打断后，TCP 怎样判断需要重传，以及 lwIP 用哪些 timer、PCB（Protocol Control Block，协议控制块）字段和队列动作实现恢复。 阅读源码前：建议提前阅读下面资料用于校准协议语义和抓包术语，但不是继续阅读本文的强制前置条件。这里先给出阅读用途...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/b313493/" title="39-rtthread-lwip-port"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">39-rtthread-lwip-port</div></div><div class="info-2"><div class="info-item-1">  教程 39：从 lwip_system_init() 到 tcpip_input()——RT-Thread 如何把 lwIP 接进 RTOS 与 Ethernet Device 摘要：从 RT-Thread 的 lwIP 初始化入口追踪 Kconfig、sys_arch、eth_device、RX&#x2F;TX 线程与 tcpip_input，建立真实 RTOS Port 的完整桥接流程。  [TOC] Stage 38 已经把 lwIP Port Contract 拆成四块：lwipopts.h 配置、源码构建选择、OS&#x2F;Arch Port、Network Port。Stage 39 不再重复这些抽象的原理，而是直接拿 RT-Thread 当前源码回答一个问题：RT-Thread 怎样把这些 contract 一项项落成可运行代码，并把一个 Ethernet Driver 最终接到 tcpip_thread。 RT-Thread 的完整 Device Framework、NetDev、SAL、DFS 并不是本篇目标。它们只在当前调用链真正出现时说明接口位置；So...</div></div></div></a><a class="pagination-related" href="/posts/4b242a34/" title="18-multi-netif-routing"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">18-multi-netif-routing</div></div><div class="info-2"><div class="info-item-1">  教程 18：从 udp_sendto() 到 etharp_output()——Multi-netif IPv4 路由、Default Netif、Gateway 与下一跳 摘要：从 UDP&#x2F;TCP 发送入口追踪 IPv4 multi-netif 出口选择、默认接口、源地址与 Gateway 下一跳，厘清 route 与 ARP 的职责边界。  [TOC] Multi-netif 表示同一个 lwIP 实例同时存在多个 struct netif 网络接口。本文标题中的 Default Netif（默认接口） 是没有更具体匹配时的 fallback outgoing interface；Gateway（网关） 是已经选定某张接口以后，在当前二层链路上需要直接发送给的下一跳 IP。两者不是同一个对象，也不等价于“默认路由 &#x3D; 网关地址”。 Stage 18 只回答 IPv4 发送方向上的一个问题：应用没有显式固定接口时，lwIP 怎样先选择 outgoing netif，然后怎样决定 Ethernet 下一跳是 destination 本身还是该接口的 gat...</div></div></div></a><a class="pagination-related" href="/posts/f66d8c4d/" title="16-ipv4-fragmentation-reassembly"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">16-ipv4-fragmentation-reassembly</div></div><div class="info-2"><div class="info-item-1">  教程 16：从 MTU 到 ip4_frag() &#x2F; ip4_reass()——IPv4 分片、重组、超时与内存压力 摘要：沿 IPv4 发送与接收源码链，理解 MTU 如何触发分片、Offset&#x2F;MF&#x2F;ID 如何组织片段，以及 lwIP 怎样排序、重组、超时清理并限制资源占用。  [TOC] IPv4 fragmentation（IPv4 分片）解决的是“一个 IPv4 datagram 比当前可发送路径允许的 packet 更大时，怎样把它拆成多个 fragment”；reassembly（重组）则在最终目的主机把这些 fragment 恢复成原始 datagram。Fragment 不是新的传输层或 ICMP message，每一片仍然携带自己的 IPv4 Header，并通过 Identification、MF（More Fragments）和 Fragment Offset 表明自己属于哪个原始 datagram、位于什么位置、后面是否还有片段。S4S12 MTU（Maximum Transmission Unit，最大传输单元）表示某...</div></div></div></a><a class="pagination-related" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">02-netif-tap-first-ping</div></div><div class="info-2"><div class="info-item-1">  教程 02：从 main() 到第一次 Ping——netif、TAP、ARP 与 ICMP 的完整源码链 摘要：先建立 IPv4 Ping 的 Ethernet、ARP、IPv4 与 ICMP 交互模型，再从 Unix example_app 入口追到 TAP 接收、协议栈线程、Echo Reply 与二层发送。   [TOC] 这一阶段要回答的不是“Ping 命令怎么用”，而是一个完整的数据路径问题：  Linux Host 执行 ping 198.18.0.200 后，为什么会先出现 ARP，再出现 ICMP；这些 Ethernet frame 又怎样从 Linux TAP 进入 lwIP，经过 netif、tcpip_thread、ARP、IPv4、ICMP 后返回 Host？  先把标题里的四个对象说清楚。netif 是 lwIP 的 network interface（网络接口）抽象对象，把协议栈 **Core（核心协议处理代码与执行上下文）**和具体 **Port（面向操作系统&#x2F;设备的适配层）**连接起来；TAP 是 Linux 提供给 userspa...</div></div></div></a><a class="pagination-related" href="/posts/8c3324b0/" title="00-series-index"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-series-index</div></div><div class="info-2"><div class="info-item-1">lwIP Source Lab 教程索引本系列持续跟踪官方 lwip-tcpip/lwip 的 master。绝大多数源码篇采用 Source-driven 主线：从当前行为的真实入口函数、注册入口或外部 API 开始，沿实际调用、数据与状态变化向下追踪。 Stage 00、15、31、38 与 45 属于 Theory of Operation &#x2F; Application Note 型总览：先建立系统位置和完整数据流，再解释关键机制；它们不会覆盖后续源码篇“从真实入口开始”的硬约束。 Stage 00～45 Stage 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界从 Ethernet Frame、PHY&#x2F;MAC 分层出发，沿 DMA&#x2F;Driver、pbuf、netif 建立完整软硬件边界，并区分链路、接口、IP 与上层就绪状态。 Stage 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图沿 submodule、Host 依赖、Debug build ...</div></div></div></a><a class="pagination-related" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-ethernet-physical-layer-and-network-stack</div></div><div class="info-2"><div class="info-item-1">  教程 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界 摘要：从初学者视角建立 Ethernet 的 PHY、MAC 与 Frame 心智模型，再沿 PHY→MAC→DMA&#x2F;Driver→pbuf→netif 解释 MCU 与 lwIP 的真实边界。   [TOC] Ethernet（以太网）是局域网里最常见的链路技术之一。Ethernet Frame（以太网帧）是 MAC 在链路上传输和接收的基本二层数据单元。对 MCU 网络开发而言，真正需要同时看懂的是两条边界：一条是 网线上的信号怎样经过 PHY、MAC 和 DMA 变成内存里的 Ethernet Frame，另一条是 这些 Frame 怎样通过 Driver、pbuf 和 netif 进入 lwIP。 本文第一次使用几个后面会反复出现的对象：**PHY（Physical Layer transceiver，物理层收发器）**负责把网线侧的模拟&#x2F;符号信号与 MAC 侧的数字接口互相转换；**MAC（Media Access Control，介质访问控制器）**...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E6%95%99%E7%A8%8B-07%EF%BC%9A%E4%BB%8E-tcpecho-raw-init-%E5%88%B0-ESTABLISHED%E2%80%94%E2%80%94TCP-%E4%B8%89%E6%AC%A1%E6%8F%A1%E6%89%8B%E4%B8%8E-PCB-%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.</span> <span class="toc-text">教程 07：从 tcpecho_raw_init() 到 ESTABLISHED——TCP 三次握手与 PCB 状态机</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%98%85%E8%AF%BB%E6%BA%90%E7%A0%81%E5%89%8D%EF%BC%9A%E5%BB%BA%E8%AE%AE%E6%8F%90%E5%89%8D%E9%98%85%E8%AF%BB"><span class="toc-number">1.1.</span> <span class="toc-text">阅读源码前：建议提前阅读</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%BF%9B%E5%85%A5%E6%BA%90%E7%A0%81%E5%89%8D%E5%85%88%E6%8A%8A%E4%B8%89%E6%AC%A1%E6%8F%A1%E6%89%8B%E8%AE%B2%E6%B8%85%E6%A5%9A"><span class="toc-number">1.2.</span> <span class="toc-text">进入源码前先把三次握手讲清楚</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Endpoint%E3%80%81connection%E3%80%81segment-%E4%B8%8E%E5%9B%9B%E5%85%83%E7%BB%84"><span class="toc-number">1.2.1.</span> <span class="toc-text">Endpoint、connection、segment 与四元组</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E6%AC%A1%E6%8F%A1%E6%89%8B%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF%E4%B8%89%E6%AD%A5"><span class="toc-number">1.2.2.</span> <span class="toc-text">三次握手为什么是三步</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%AC%E7%AF%87%E5%8F%AA%E8%B7%9F%E6%9C%8D%E5%8A%A1%E7%AB%AF-passive-open-%E7%8A%B6%E6%80%81"><span class="toc-number">1.2.3.</span> <span class="toc-text">本篇只跟服务端 passive-open 状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8D%8F%E8%AE%AE%E5%8A%A8%E4%BD%9C%E6%80%8E%E6%A0%B7%E6%98%A0%E5%B0%84%E5%88%B0-lwIP-%E6%BA%90%E7%A0%81"><span class="toc-number">1.2.4.</span> <span class="toc-text">协议动作怎样映射到 lwIP 源码</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E7%9C%9F%E6%AD%A3%E5%85%A5%E5%8F%A3%EF%BC%9Atcpecho-raw-init-%E5%85%88%E5%BB%BA%E7%AB%8B%E7%9B%91%E5%90%AC%E7%AB%AF%E7%82%B9"><span class="toc-number">1.3.</span> <span class="toc-text">1. 真正入口：tcpecho_raw_init() 先建立监听端点</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-tcp-listen-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BC%9A%E6%8A%8A%E5%8E%9F%E6%9D%A5%E7%9A%84-PCB-%E6%8D%A2%E6%8E%89"><span class="toc-number">1.4.</span> <span class="toc-text">2. tcp_listen() 为什么会把原来的 PCB 换掉</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-TCP-state-%E5%9C%A8-lwIP-%E9%87%8C%E6%80%8E%E6%A0%B7%E8%90%BD%E5%88%B0-PCB-%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.5.</span> <span class="toc-text">3. TCP state 在 lwIP 里怎样落到 PCB 对象</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E7%AC%AC%E4%B8%80%E4%B8%AA-SYN-%E5%88%B0%E8%BE%BE%E5%89%8D%EF%BC%9A%E5%85%88%E6%8A%8A-TAP-RX-tcpip-thread-IPv4-TCP-%E8%A1%A5%E5%AE%8C%E6%95%B4"><span class="toc-number">1.6.</span> <span class="toc-text">4. 第一个 SYN 到达前：先把 TAP RX -&gt; tcpip_thread -&gt; IPv4 -&gt; TCP 补完整</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-netif-input-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%9C%A8%E5%BD%93%E5%89%8D%E5%AE%9E%E9%AA%8C%E9%87%8C%E5%B0%B1%E6%98%AF-tcpip-input"><span class="toc-number">1.6.1.</span> <span class="toc-text">4.1 netif-&gt;input 为什么在当前实验里就是 tcpip_input()</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-tcpip-input-%E5%A6%82%E4%BD%95%E6%8A%8A-RX-pbuf-%E4%BA%A4%E7%BB%99-tcpip-thread"><span class="toc-number">1.6.2.</span> <span class="toc-text">4.2 tcpip_input() 如何把 RX pbuf 交给 tcpip_thread</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-ethernet-input-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8E%A5%E7%9D%80%E8%BF%9B%E5%85%A5-ip4-input"><span class="toc-number">1.6.3.</span> <span class="toc-text">4.3 ethernet_input() 为什么接着进入 ip4_input()</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-tcp-input-%E4%B8%8D%E6%98%AF%E4%B8%80%E8%BF%9B%E6%9D%A5%E5%B0%B1%E6%9F%A5-PCB%EF%BC%9A%E5%85%88%E9%AA%8C%E8%AF%81-TCP-Header%EF%BC%8C%E5%86%8D%E6%8E%A8%E8%BF%9B%E6%95%B0%E6%8D%AE%E8%A7%86%E5%9B%BE"><span class="toc-number">1.6.4.</span> <span class="toc-text">4.4 tcp_input() 不是一进来就查 PCB：先验证 TCP Header，再推进数据视图</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-Header-%E5%A4%84%E7%90%86%E5%AE%8C%E4%BB%A5%E5%90%8E%EF%BC%8Ctcp-input-%E6%89%8D%E5%81%9A-demultiplex"><span class="toc-number">1.6.5.</span> <span class="toc-text">4.5 Header 处理完以后，tcp_input() 才做 demultiplex</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-SYN-%E5%88%B0%E6%9D%A5%EF%BC%9Atcp-listen-input-%E6%80%8E%E6%A0%B7%E5%88%9B%E5%BB%BA-connection-PCB"><span class="toc-number">1.7.</span> <span class="toc-text">5. SYN 到来：tcp_listen_input() 怎样创建 connection PCB</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%94%B6%E5%88%B0-SYN-%E5%90%8E-rcv-nxt-seqno-1"><span class="toc-number">1.8.</span> <span class="toc-text">6. 为什么收到 SYN 后 rcv_nxt &#x3D; seqno + 1</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-SYN-ACK-%E4%B8%8D%E6%98%AF-tcp-listen-input-%E7%9B%B4%E6%8E%A5%E6%8B%BC%E4%B8%80%E5%9D%97-Ethernet-frame"><span class="toc-number">1.9.</span> <span class="toc-text">7. SYN-ACK 不是 tcp_listen_input() 直接拼一块 Ethernet frame</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E7%AC%AC%E4%B8%89%E4%B8%AA-ACK%EF%BC%9Atcp-process-%E5%A6%82%E4%BD%95%E7%9C%9F%E6%AD%A3%E5%AE%8C%E6%88%90-SYN-RCVD-ESTABLISHED"><span class="toc-number">1.10.</span> <span class="toc-text">8. 第三个 ACK：tcp_process() 如何真正完成 SYN_RCVD -&gt; ESTABLISHED</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-tcpecho-raw-accept-%E7%BB%99-ESTABLISHED-PCB-%E6%8C%82%E4%B8%8A-application-callbacks"><span class="toc-number">1.11.</span> <span class="toc-text">9. tcpecho_raw_accept() 给 ESTABLISHED PCB 挂上 application callbacks</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E4%B8%89%E6%AC%A1%E6%8F%A1%E6%89%8B%E5%AE%8C%E6%95%B4%E8%BF%90%E8%A1%8C%E6%97%B6%E6%B5%81%E7%A8%8B"><span class="toc-number">1.12.</span> <span class="toc-text">10. 三次握手完整运行时流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-passive-open-%E4%B8%8E-active-open-%E5%8F%AA%E5%81%9A%E6%9C%80%E5%B0%8F%E5%AF%B9%E7%85%A7"><span class="toc-number">1.13.</span> <span class="toc-text">11. passive open 与 active open 只做最小对照</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E4%BB%8E%E6%8F%A1%E6%89%8B%E8%BF%87%E6%B8%A1%E5%88%B0%E6%95%B0%E6%8D%AE%E9%9D%A2"><span class="toc-number">1.14.</span> <span class="toc-text">12. 从握手过渡到数据面</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.15.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-upstream-Raw-TCP-Echo-%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.15.1.</span> <span class="toc-text">[S1] upstream Raw TCP Echo 示例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-TCP-PCB-%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84"><span class="toc-number">1.15.2.</span> <span class="toc-text">[S2] TCP PCB 数据结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-TCP-PCB-%E5%88%9B%E5%BB%BA%E3%80%81bind%E3%80%81listen-%E4%B8%8E-active-open"><span class="toc-number">1.15.3.</span> <span class="toc-text">[S3] TCP PCB 创建、bind、listen 与 active open</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-lwIP-TCP-state-%E5%AE%9A%E4%B9%89"><span class="toc-number">1.15.4.</span> <span class="toc-text">[S4] lwIP TCP state 定义</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S5-TCP-RX-%E4%B8%8E%E6%8F%A1%E6%89%8B%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.15.5.</span> <span class="toc-text">[S5] TCP RX 与握手状态机</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S6-RFC-9293-%E2%80%94-TCP"><span class="toc-number">1.15.6.</span> <span class="toc-text">[S6] RFC 9293 — TCP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S7-TCP-%E8%BE%93%E5%87%BA%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.15.7.</span> <span class="toc-text">[S7] TCP 输出实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S8-Unix-TAP-RX-%E4%B8%8E-netif-input-%E7%BB%91%E5%AE%9A"><span class="toc-number">1.15.8.</span> <span class="toc-text">[S8] Unix TAP RX 与 netif input 绑定</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S9-tcpip-input-%E4%B8%8E-tcpip-thread-packet-handoff"><span class="toc-number">1.15.9.</span> <span class="toc-text">[S9] tcpip_input() 与 tcpip_thread packet handoff</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S10-Ethernet-%E5%88%B0-IPv4-TCP-%E7%9A%84%E5%8D%8F%E8%AE%AE%E5%88%86%E5%8F%91"><span class="toc-number">1.15.10.</span> <span class="toc-text">[S10] Ethernet 到 IPv4&#x2F;TCP 的协议分发</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S11-%E5%BD%93%E5%89%8D%E8%BE%93%E5%85%A5%E7%BA%BF%E7%A8%8B%E9%85%8D%E7%BD%AE"><span class="toc-number">1.15.11.</span> <span class="toc-text">[S11] 当前输入线程配置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S12-Wireshark-Wiki-%E2%80%94-TCP-3-way-handshaking"><span class="toc-number">1.15.12.</span> <span class="toc-text">[S12] Wireshark Wiki — TCP 3-way handshaking</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S13-lwIP-%E5%AE%98%E6%96%B9-TCP-Raw-API-%E6%96%87%E6%A1%A3"><span class="toc-number">1.15.13.</span> <span class="toc-text">[S13] lwIP 官方 TCP Raw API 文档</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/d0bd006c/" title="05-udp-raw-api"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="05-udp-raw-api"/></a><div class="content"><a class="title" href="/posts/d0bd006c/" title="05-udp-raw-api">05-udp-raw-api</a><time datetime="2026-10-03T09:16:32.509Z" title="更新于 2026-10-03 17:16:32">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="04-ethernet-arp-ipv4-icmp"/></a><div class="content"><a class="title" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp">04-ethernet-arp-ipv4-icmp</a><time datetime="2026-10-03T09:12:42.697Z" title="更新于 2026-10-03 17:12:42">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/58451296/" title="03-pbuf"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="03-pbuf"/></a><div class="content"><a class="title" href="/posts/58451296/" title="03-pbuf">03-pbuf</a><time datetime="2026-10-03T09:10:58.106Z" title="更新于 2026-10-03 17:10:58">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="02-netif-tap-first-ping"/></a><div class="content"><a class="title" href="/posts/173fa538/" title="02-netif-tap-first-ping">02-netif-tap-first-ping</a><time datetime="2026-10-03T09:05:15.928Z" title="更新于 2026-10-03 17:05:15">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="00-ethernet-physical-layer-and-network-stack"/></a><div class="content"><a class="title" href="/posts/3f0de708/" title="00-ethernet-physical-layer-and-network-stack">00-ethernet-physical-layer-and-network-stack</a><time datetime="2026-10-03T08:47:35.913Z" title="更新于 2026-10-03 16:47:35">2026-10-03</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/04.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '6bc3fa2a5d47cb8707e3a1fb10f59885'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18],["2026-10-03",49]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"LWIP","children":[],"count":49,"path":"LWIP"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    </body></html>
