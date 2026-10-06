@@ -1,0 +1,1355 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>05-udp-raw-api | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="教程 05：从 udpecho_raw_init() 到 Echo Reply——UDP Raw API、PCB 与回调数据通路 摘要：从 UDP 数据报与端口分发模型出发，沿 Raw API 真实入口追踪 PCB 建立、接收匹配、回调、回包与 pbuf ownership。   [TOC] UDP（User Datagram Protocol，用户数据报协议）是 IP 之上的无连接传输协议。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="05-udp-raw-api">
+<meta property="og:url" content="https://wdfk-prog.space/posts/d0bd006c/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="教程 05：从 udpecho_raw_init() 到 Echo Reply——UDP Raw API、PCB 与回调数据通路 摘要：从 UDP 数据报与端口分发模型出发，沿 Raw API 真实入口追踪 PCB 建立、接收匹配、回调、回包与 pbuf ownership。   [TOC] UDP（User Datagram Protocol，用户数据报协议）是 IP 之上的无连接传输协议。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/04.jpg">
+<meta property="article:published_time" content="2026-10-03T08:27:36.000Z">
+<meta property="article:modified_time" content="2026-10-06T07:32:02.570Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="LWIP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/04.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "05-udp-raw-api",
+  "url": "https://wdfk-prog.space/posts/d0bd006c/",
+  "image": "https://wdfk-prog.space/images/covers/04.jpg",
+  "datePublished": "2026-10-03T08:27:36.000Z",
+  "dateModified": "2026-10-06T07:32:02.570Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/d0bd006c/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '05-udp-raw-api',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/04.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">05-udp-raw-api</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">05-udp-raw-api<a class="post-edit-link" href="null_posts/LWIP/05-udp-raw-api.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-03T08:27:36.000Z" title="发表于 2026-10-03 16:27:36">2026-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-06T07:32:02.570Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/LWIP/">LWIP</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">4.6k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>19分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/d0bd006c/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-10-06 15:32:02&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="教程-05：从-udpecho-raw-init-到-Echo-Reply——UDP-Raw-API、PCB-与回调数据通路"><a href="#教程-05：从-udpecho-raw-init-到-Echo-Reply——UDP-Raw-API、PCB-与回调数据通路" class="headerlink" title="教程 05：从 udpecho_raw_init() 到 Echo Reply——UDP Raw API、PCB 与回调数据通路"></a>教程 05：从 <code>udpecho_raw_init()</code> 到 Echo Reply——UDP Raw API、PCB 与回调数据通路</h1><blockquote>
+<p>摘要：从 UDP 数据报与端口分发模型出发，沿 Raw API 真实入口追踪 PCB 建立、接收匹配、回调、回包与 pbuf ownership。</p>
+</blockquote>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/1833c0fbd61049199a794656683268d6.png" alt="在这里插入图片描述"></p>
+<p>[TOC]</p>
+<p>UDP（User Datagram Protocol，用户数据报协议）是 IP 之上的无连接传输协议。它把应用一次提交的一条消息作为一个 **datagram（数据报）**发送，并在接收端保留这条消息的边界；UDP 自身不先建立连接，也不保证可靠到达、顺序或自动重传。<a href="#source-s4">S4</a><a href="#source-s6">S6</a> 本篇从 upstream Raw UDP Echo 的真实入口出发，重点回答：一个发往 UDP port 7 的 datagram，怎样被 <code>udp_pcb</code> 匹配、交给回调，再沿同一 PCB 发回发送端。</p>
+<p>Stage 4 已经走到 <code>ip4_input()</code> 的上层协议分发。本篇只改变一个关键字段：IPv4 Header 的 <code>Protocol</code> 为 <code>17</code> 时，payload 交给 UDP；Ethernet、ARP 与 IPv4 前半段不再重复展开。<a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<h2 id="阅读源码前：建议提前阅读"><a href="#阅读源码前：建议提前阅读" class="headerlink" title="阅读源码前：建议提前阅读"></a>阅读源码前：建议提前阅读</h2><p>下面资料用于提前建立规范和 API 位置感，不是继续阅读正文的强制条件：</p>
+<ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc768.html">RFC 768 — User Datagram Protocol</a>：重点看 UDP Header，以及 Source Port（源端口）、Destination Port（目标端口）、Length（UDP Header + payload 总长度）、Checksum（校验字段）四个字段。<a href="#source-s4">S4</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/group__udp__raw.html">lwIP 2.1.x — UDP Raw API</a>：用于先认识 <code>udp_new()</code>、<code>udp_bind()</code>、<code>udp_recv()</code> 与 <code>udp_sendto()</code> 这些公开 API；本文的源码事实仍以固定 commit 为准。<a href="#source-s8">S8</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.iana.org/assignments/service-names-port-numbers?search=echo">IANA — Service Name and Transport Protocol Port Number Registry</a>：用于确认示例使用的 UDP port 7 注册名为 <code>echo</code>。<a href="#source-s7">S7</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.cloudflare.com/zh-cn/learning/ddos/glossary/user-datagram-protocol-udp/">Cloudflare — 什么是 UDP？</a>：第一次接触 UDP 时，可用于快速理解“无连接、datagram、可靠性由上层决定”的整体边界。<a href="#source-s6">S6</a></li>
+</ol>
+<h2 id="先建立-UDP-Echo-的协议模型"><a href="#先建立-UDP-Echo-的协议模型" class="headerlink" title="先建立 UDP Echo 的协议模型"></a>先建立 UDP Echo 的协议模型</h2><h3 id="Datagram、endpoint-与-port-分别是什么"><a href="#Datagram、endpoint-与-port-分别是什么" class="headerlink" title="Datagram、endpoint 与 port 分别是什么"></a>Datagram、endpoint 与 port 分别是什么</h3><p>UDP 的基本数据单位是 <strong>datagram</strong>。一个 datagram 由 8-byte UDP Header 加应用 payload 组成；<code>Length</code> 表示 UDP Header 与 payload 的总长度，<code>Checksum</code> 用于检测传输中的数据损坏。<a href="#source-s4">S4</a></p>
+<p>UDP **endpoint（端点）**可以理解为“IP 地址 + UDP port”。Port 是 UDP Header 中的 16-bit 端口号，用来把到达同一台主机的 datagram 分发给不同应用端点。对本例最重要的是方向：</p>
+<table>
+<thead>
+<tr>
+<th>UDP Header 字段</th>
+<th>谁填写</th>
+<th>接收端如何使用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Source Port</td>
+<td>发送端</td>
+<td>回包时作为目标 port；若 PCB 绑定了特定远端 endpoint，还会参与远端匹配</td>
+</tr>
+<tr>
+<td>Destination Port</td>
+<td>发送端</td>
+<td>选择本地 UDP endpoint；本例最终匹配 <code>pcb-&gt;local_port == 7</code></td>
+</tr>
+<tr>
+<td>Length</td>
+<td>发送端</td>
+<td>描述当前 UDP datagram 的总长度</td>
+</tr>
+<tr>
+<td>Checksum</td>
+<td>发送端</td>
+<td>校验 UDP 伪首部（由 IP 源&#x2F;目标地址、协议号等组成且不作为额外字节在线上传输）、UDP Header 与 payload；当前正文只关注 lwIP 在 RX&#x2F;TX 路径中的验证与生成位置</td>
+</tr>
+</tbody></table>
+<p>这里的 **PCB（Protocol Control Block，协议控制块）**是 lwIP Core 保存一个协议端点运行时状态的对象。UDP 的 <code>struct udp_pcb</code> 记录 local&#x2F;remote IP、local&#x2F;remote port、flags 和接收 callback；它不是 packet buffer，也不是 Socket API 的整数 fd。<a href="#source-s2">S2</a></p>
+<p>**<code>pbuf</code>（packet buffer）**是 Stage 3 已经建立的 packet 数据与元数据容器；本篇只关心 UDP 如何改变 <code>p-&gt;payload</code> 的数据视图以及 callback 最终由谁释放 RX <code>pbuf</code>。</p>
+<h3 id="为什么-UDP-Echo-不需要三次握手"><a href="#为什么-UDP-Echo-不需要三次握手" class="headerlink" title="为什么 UDP Echo 不需要三次握手"></a>为什么 UDP Echo 不需要三次握手</h3><p>UDP 是无连接协议。Host 不需要先和 lwIP 建立 UDP connection，就可以直接发送 datagram。假设 Host 使用一个临时源端口 <code>53000</code>，目标是 <code>198.18.0.200:7</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Host endpoint              lwIP Echo endpoint</span><br><span class="line">198.18.0.1:53000  ------&gt;  198.18.0.200:7</span><br><span class="line">                    UDP datagram</span><br></pre></td></tr></table></figure>
+
+<p>IPv4 层先根据 <code>Protocol = 17</code> 把 payload 交给 UDP；UDP 再根据 Destination Port、目标 IP 以及 PCB 的连接属性选择接收 PCB。Echo callback 收到 payload 后，以原 packet 的 Source IP&#x2F;Source Port 作为回包目标，因此 Echo Reply 返回 <code>198.18.0.1:53000</code>。<a href="#source-s2">S2</a><a href="#source-s3">S3</a></p>
+<p>这条最小成功交互可以先画成纯协议流程：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant H as Host 198.18.0.1:53000</span><br><span class="line">    participant U as lwIP UDP endpoint 198.18.0.200:7</span><br><span class="line"></span><br><span class="line">    H-&gt;&gt;U: UDP datagram, SrcPort=53000, DstPort=7</span><br><span class="line">    Note over U: 按目标 IP/port 匹配 PCB，移除 UDP Header</span><br><span class="line">    U--&gt;&gt;H: UDP Echo Reply, SrcPort=7, DstPort=53000</span><br></pre></td></tr></table></figure>
+
+<h3 id="协议动作怎样映射到-lwIP-源码"><a href="#协议动作怎样映射到-lwIP-源码" class="headerlink" title="协议动作怎样映射到 lwIP 源码"></a>协议动作怎样映射到 lwIP 源码</h3><table>
+<thead>
+<tr>
+<th>协议阶段</th>
+<th>协议对象&#x2F;动作</th>
+<th>lwIP 实现位置</th>
+<th>关键对象</th>
+<th>完成后的下一步</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>建立本地端点</td>
+<td>绑定本地 UDP port 7</td>
+<td><code>udp_new_ip_type()</code> → <code>udp_bind()</code></td>
+<td><code>struct udp_pcb</code></td>
+<td>注册 RX callback</td>
+</tr>
+<tr>
+<td>等待 datagram</td>
+<td>保存接收处理函数</td>
+<td><code>udp_recv()</code></td>
+<td><code>pcb-&gt;recv</code> &#x2F; <code>recv_arg</code></td>
+<td>packet 到达后由 Core 调用</td>
+</tr>
+<tr>
+<td>IPv4 分发</td>
+<td><code>Protocol = 17</code></td>
+<td><code>ip4_input()</code> → <code>udp_input()</code></td>
+<td>RX <code>pbuf</code></td>
+<td>解析 UDP Header</td>
+</tr>
+<tr>
+<td>UDP 分发</td>
+<td>Destination Port &#x2F; IP &#x2F; connected 条件匹配</td>
+<td><code>udp_input()</code></td>
+<td><code>udp_pcbs</code> 链表</td>
+<td>选出接收 PCB</td>
+</tr>
+<tr>
+<td>应用接收</td>
+<td>payload 交给 Echo callback</td>
+<td><code>pcb-&gt;recv()</code> → <code>udpecho_raw_recv()</code></td>
+<td>RX <code>pbuf</code></td>
+<td>调用 <code>udp_sendto()</code></td>
+</tr>
+<tr>
+<td>Echo TX</td>
+<td>构造新的 UDP Header 并进入 IP output</td>
+<td><code>udp_sendto()</code></td>
+<td>同一 RX payload + TX Header</td>
+<td>返回 Host 后释放 RX pbuf 引用</td>
+</tr>
+</tbody></table>
+<p>下面进入真实入口 <code>udpecho_raw_init()</code>，并按这张表的执行顺序逐步下钻。</p>
+<h2 id="1-Raw-API-的第一个真实入口：udpecho-raw-init"><a href="#1-Raw-API-的第一个真实入口：udpecho-raw-init" class="headerlink" title="1. Raw API 的第一个真实入口：udpecho_raw_init()"></a>1. Raw API 的第一个真实入口：<code>udpecho_raw_init()</code></h2><p>upstream Raw UDP Echo 的初始化代码很短：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">udpecho_raw_pcb = udp_new_ip_type(IPADDR_TYPE_ANY);</span><br><span class="line"><span class="keyword">if</span> (udpecho_raw_pcb != <span class="literal">NULL</span>) &#123;</span><br><span class="line">  err = udp_bind(udpecho_raw_pcb, IP_ANY_TYPE, <span class="number">7</span>);</span><br><span class="line">  <span class="keyword">if</span> (err == ERR_OK) &#123;</span><br><span class="line">    udp_recv(udpecho_raw_pcb, udpecho_raw_recv, <span class="literal">NULL</span>);</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这三步分别建立三类状态：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;udp_new_ip_type()&quot;] --&gt; B[&quot;分配 UDP PCB&quot;]</span><br><span class="line">    B --&gt; C[&quot;udp_bind(..., 7)&quot;]</span><br><span class="line">    C --&gt; D[&quot;PCB 绑定本地 port 7&quot;]</span><br><span class="line">    D --&gt; E[&quot;udp_recv(callback)&quot;]</span><br><span class="line">    E --&gt; F[&quot;保存 RX callback + callback arg&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>前面的协议模型已经定义 PCB。进入实现后，这个抽象具体落在 <code>struct udp_pcb</code>，其中保存 local&#x2F;remote IP、port、flags 和接收 callback 等状态。<a href="#source-s2">S2</a></p>
+<p>再次把三个容易混淆的对象放在一起：</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>生命周期</th>
+<th>主要内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>struct udp_pcb</code></td>
+<td>UDP endpoint 生命周期</td>
+<td>地址、端口、flags、callback</td>
+</tr>
+<tr>
+<td><code>struct pbuf</code></td>
+<td>单个 packet 生命周期</td>
+<td>packet bytes + ownership</td>
+</tr>
+<tr>
+<td>Linux&#x2F;socket fd</td>
+<td>Socket API 才出现</td>
+<td>application-facing descriptor</td>
+</tr>
+</tbody></table>
+<p>Raw API 直接操作 PCB，所以应用代码必须遵守 lwIP Core 的线程上下文和 callback ownership 规则。</p>
+<h2 id="2-udp-new-ip-type-：PCB-从哪里来"><a href="#2-udp-new-ip-type-：PCB-从哪里来" class="headerlink" title="2. udp_new_ip_type()：PCB 从哪里来"></a>2. <code>udp_new_ip_type()</code>：PCB 从哪里来</h2><p><code>udp_new()</code>&#x2F;<code>udp_new_ip_type()</code> 最终从 <code>MEMP_UDP_PCB</code> 固定对象池申请 <code>struct udp_pcb</code>，初始化后挂进 UDP PCB 管理体系。<a href="#source-s2">S2</a></p>
+<p>这和 Stage 3 的 <code>PBUF_POOL</code> 是两种完全不同的 pool：</p>
+<ul>
+<li><code>MEMP_UDP_PCB</code>：固定大小的协议控制对象；</li>
+<li><code>MEMP_PBUF_POOL</code>：固定大小的 packet buffer。</li>
+</ul>
+<p>一个 UDP endpoint 可以连续接收很多 pbuf，但通常只对应一个长期存在的 PCB。</p>
+<h2 id="3-udp-bind-：把标准-UDP-Destination-Port-映射成-PCB-条件"><a href="#3-udp-bind-：把标准-UDP-Destination-Port-映射成-PCB-条件" class="headerlink" title="3. udp_bind()：把标准 UDP Destination Port 映射成 PCB 条件"></a>3. <code>udp_bind()</code>：把标准 UDP Destination Port 映射成 PCB 条件</h2><p><code>udp_bind(pcb, IP_ANY_TYPE, 7)</code> 把 PCB 的 local endpoint 配置成“任意本地地址 + UDP port 7”。<a href="#source-s2">S2</a> IANA 注册表中 port 7 的 UDP service name 是 <code>echo</code>，这正是 upstream 示例选择该端口的背景。<a href="#source-s7">S7</a></p>
+<p>在前面的协议模型里，Destination Port 负责选择接收端点；在 lwIP 中，这个标准语义进一步落实为 <code>udp_input()</code> 对 <code>pcb-&gt;local_port</code> 的匹配条件。</p>
+<h2 id="4-udp-recv-并不收包，它只是注册-callback"><a href="#4-udp-recv-并不收包，它只是注册-callback" class="headerlink" title="4. udp_recv() 并不收包，它只是注册 callback"></a>4. <code>udp_recv()</code> 并不收包，它只是注册 callback</h2><p><code>udp_recv(pcb, udpecho_raw_recv, NULL)</code> 把函数指针和 callback argument 保存到 PCB。<a href="#source-s2">S2</a></p>
+<p>这一点必须和真正的 RX 事件分开：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">初始化阶段</span><br><span class="line">  udp_recv()</span><br><span class="line">  只建立 callback binding</span><br><span class="line"></span><br><span class="line">运行阶段</span><br><span class="line">  packet 到达</span><br><span class="line">  udp_input() 匹配 PCB</span><br><span class="line">  才调用 pcb-&gt;recv(...)</span><br></pre></td></tr></table></figure>
+
+<p>Raw API 是 callback 模型，不是“应用线程阻塞在 recv()”模型。Stage 6 的 Netconn 会专门改变这一点。</p>
+<h2 id="5-一个-UDP-datagram-怎样走到-udp-input"><a href="#5-一个-UDP-datagram-怎样走到-udp-input" class="headerlink" title="5. 一个 UDP datagram 怎样走到 udp_input()"></a>5. 一个 UDP datagram 怎样走到 <code>udp_input()</code></h2><p>到这里完成的是协议总流程中的“本地 endpoint 已建立并注册 callback”。现在协议从初始化阶段转入 RX：Host 真正发送 datagram，下面继续追它怎样进入 UDP Core。</p>
+<p>Host 发送到 <code>198.18.0.200:7</code> 后，前半段仍然是：<a href="#source-s3">S3</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">TAP -&gt; pbuf</span><br><span class="line">    -&gt; tcpip_input()</span><br><span class="line">    -&gt; tcpip_thread</span><br><span class="line">    -&gt; ethernet_input()</span><br><span class="line">    -&gt; ip4_input()</span><br></pre></td></tr></table></figure>
+
+<p><code>ip4_input()</code> 看到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Protocol = 17</span><br></pre></td></tr></table></figure>
+
+<p>于是移除 IPv4 Header 后调用 <code>udp_input()</code>。<a href="#source-s3">S3</a></p>
+<p>进入 <code>udp_input()</code> 时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">p-&gt;payload -&gt; UDP Header</span><br></pre></td></tr></table></figure>
+
+<h2 id="6-udp-input-到底怎样找到应该调用哪个-PCB-callback"><a href="#6-udp-input-到底怎样找到应该调用哪个-PCB-callback" class="headerlink" title="6. udp_input() 到底怎样找到应该调用哪个 PCB callback"></a>6. <code>udp_input()</code> 到底怎样找到应该调用哪个 PCB callback</h2><p>前面的协议模型已经说明 UDP Header 的四个字段。进入 <code>udp_input()</code> 后，当前分发首先依赖 Source Port 与 Destination Port；下面直接看这两个字段怎样进入 PCB 匹配。<a href="#source-s4">S4</a></p>
+<p>这里最容易产生一个实现层误解：<strong>不是 TAP RX thread 自己拿 UDP Destination Port 去找 callback。</strong> 当前 <code>LWIP_TCPIP_CORE_LOCKING_INPUT=0</code> 路径中，TAP&#x2F;driver RX context 只负责把 <code>pbuf</code> 经 <code>tcpip_input()</code> 投递进 <code>tcpip_mbox</code>；真正运行 <code>ethernet_input() -&gt; ip4_input() -&gt; udp_input()</code> 的是 <code>tcpip_thread</code>。<a href="#source-s3">S3</a></p>
+<p>因此本节讨论的 PCB 查找实际发生在：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;TAP RX context&lt;br/&gt;read frame&quot;] --&gt; B[&quot;tcpip_input()&quot;]</span><br><span class="line">    B --&gt; C[&quot;TCPIP_MSG_INPKT -&gt; tcpip_mbox&quot;]</span><br><span class="line">    C --&gt; D[&quot;tcpip_thread&quot;]</span><br><span class="line">    D --&gt; E[&quot;ethernet_input()&quot;]</span><br><span class="line">    E --&gt; F[&quot;ip4_input()&quot;]</span><br><span class="line">    F --&gt;|&quot;Protocol = UDP&quot;| G[&quot;udp_input()&quot;]</span><br><span class="line">    G --&gt; H[&quot;遍历 udp_pcbs&quot;]</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-1-udp-input-先读取-UDP-Source-Destination-Port"><a href="#6-1-udp-input-先读取-UDP-Source-Destination-Port" class="headerlink" title="6.1 udp_input() 先读取 UDP Source&#x2F;Destination Port"></a>6.1 <code>udp_input()</code> 先读取 UDP Source&#x2F;Destination Port</h3><p>进入 <code>udp_input()</code> 时，Stage 4 的 IPv4 Header 已经移除，<code>p-&gt;payload</code> 指向 UDP Header。继续阅读 <code>udp_input()</code> 的上游连续源码片段：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">udphdr = (<span class="keyword">struct</span> udp_hdr *)p-&gt;payload;</span><br><span class="line"></span><br><span class="line"><span class="comment">/* is broadcast packet ? */</span></span><br><span class="line">broadcast = ip_addr_isbroadcast(ip_current_dest_addr(), ip_current_netif());</span><br><span class="line"></span><br><span class="line"><span class="comment">/* convert src and dest ports to host byte order */</span></span><br><span class="line">src = lwip_ntohs(udphdr-&gt;src);</span><br><span class="line">dest = lwip_ntohs(udphdr-&gt;dest);</span><br></pre></td></tr></table></figure>
+
+<p>对接收方来说两个 port 的方向必须分清：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">packet Source Port      -&gt; 远端端口 -&gt; 后面与 pcb-&gt;remote_port 比较</span><br><span class="line">packet Destination Port -&gt; 本地端口 -&gt; 后面与 pcb-&gt;local_port 比较</span><br></pre></td></tr></table></figure>
+
+<p>例如 Host 发往 Raw Echo：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Host      198.18.0.1:53000</span><br><span class="line">              |</span><br><span class="line">              v</span><br><span class="line">lwIP      198.18.0.200:7</span><br></pre></td></tr></table></figure>
+
+<p>进入 lwIP 的 packet 中：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">src  = 53000</span><br><span class="line">dest = 7</span><br></pre></td></tr></table></figure>
+
+<p>所以最先决定“哪个本地 UDP endpoint 有资格接收”的是 <strong>Destination Port 对 <code>pcb-&gt;local_port</code></strong>，不是拿 packet Source Port 去匹配 local port。</p>
+<h3 id="6-2-当前实现就是线性-for-遍历-udp-pcbs-链表"><a href="#6-2-当前实现就是线性-for-遍历-udp-pcbs-链表" class="headerlink" title="6.2 当前实现就是线性 for 遍历 udp_pcbs 链表"></a>6.2 当前实现就是线性 <code>for</code> 遍历 <code>udp_pcbs</code> 链表</h3><p>继续阅读 <code>udp_input()</code>。当前实现没有用 hash table 按 port O(1) 查找，而是从全局 <code>udp_pcbs</code> 链表头开始逐项遍历：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">pcb = <span class="literal">NULL</span>;</span><br><span class="line">prev = <span class="literal">NULL</span>;</span><br><span class="line">uncon_pcb = <span class="literal">NULL</span>;</span><br><span class="line"><span class="comment">/* Iterate through the UDP pcb list for a matching pcb.</span></span><br><span class="line"><span class="comment"> * &#x27;Perfect match&#x27; pcbs (connected to the remote port &amp; ip address) are</span></span><br><span class="line"><span class="comment"> * preferred. If no perfect match is found, the first unconnected pcb that</span></span><br><span class="line"><span class="comment"> * matches the local port and ip address gets the datagram. */</span></span><br><span class="line"><span class="keyword">for</span> (pcb = udp_pcbs; pcb != <span class="literal">NULL</span>; pcb = pcb-&gt;next) &#123;</span><br></pre></td></tr></table></figure>
+
+<p>所以回答“是不是 <code>for</code> 循环遍历 PCB 链表”就是：<strong>是。</strong> 但匹配条件并不只有一个 port。</p>
+<p>继续阅读 <code>udp_input()</code>：第一层先比较本地 endpoint。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* compare PCB local addr+port to UDP destination addr+port */</span></span><br><span class="line"><span class="keyword">if</span> ((pcb-&gt;local_port == dest) &amp;&amp;</span><br><span class="line">    (udp_input_local_match(pcb, inp, broadcast) != <span class="number">0</span>)) &#123;</span><br></pre></td></tr></table></figure>
+
+<p>这里包含：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">packet Destination Port &lt;-&gt; pcb-&gt;local_port</span><br><span class="line">packet Destination IP   &lt;-&gt; pcb-&gt;local_ip / input netif / broadcast 规则</span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>udp_input()</code>：如果 PCB 没有 <code>UDP_FLAGS_CONNECTED</code>，它属于 unconnected PCB。当前实现先记录第一个 local endpoint 匹配的候选。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> ((pcb-&gt;flags &amp; UDP_FLAGS_CONNECTED) == <span class="number">0</span>) &#123;</span><br><span class="line">  <span class="keyword">if</span> (uncon_pcb == <span class="literal">NULL</span>) &#123;</span><br><span class="line">    <span class="comment">/* the first unconnected matching PCB */</span></span><br><span class="line">    uncon_pcb = pcb;</span><br></pre></td></tr></table></figure>
+
+<p>这正对应 Raw Echo 的常见使用方式：<code>udp_bind()</code> 只绑定 local port 7，并没有事先绑定唯一的 remote peer，因此任意远端只要发到正确 local endpoint，都可能进入这个 PCB。</p>
+<h3 id="6-3-Connected-PCB-还会继续比较-packet-的远端-endpoint"><a href="#6-3-Connected-PCB-还会继续比较-packet-的远端-endpoint" class="headerlink" title="6.3 Connected PCB 还会继续比较 packet 的远端 endpoint"></a>6.3 Connected PCB 还会继续比较 packet 的远端 endpoint</h3><p>local endpoint 匹配以后，<code>udp_input()</code> 继续检查 packet source 与 PCB remote endpoint：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* compare PCB remote addr+port to UDP source addr+port */</span></span><br><span class="line"><span class="keyword">if</span> ((pcb-&gt;remote_port == src) &amp;&amp;</span><br><span class="line">    (ip_addr_isany_val(pcb-&gt;remote_ip) ||</span><br><span class="line">     ip_addr_eq(&amp;pcb-&gt;remote_ip, ip_current_src_addr()))) &#123;</span><br></pre></td></tr></table></figure>
+
+<p>对应关系是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">pcb-&gt;local_port  &lt;-&gt; packet Destination Port</span><br><span class="line">pcb-&gt;local_ip    &lt;-&gt; packet Destination IP</span><br><span class="line">pcb-&gt;remote_port &lt;-&gt; packet Source Port</span><br><span class="line">pcb-&gt;remote_ip   &lt;-&gt; packet Source IP</span><br></pre></td></tr></table></figure>
+
+<p>四个方向都满足时，源码称为 <code>Perfect match</code>。这种 fully matched connected PCB 优先级高于只匹配 local endpoint 的 unconnected PCB。</p>
+<p>继续阅读 <code>udp_input()</code>：如果整条链表没有找到 fully matched PCB，遍历结束后才回退到之前记录的 <code>uncon_pcb</code>。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* no fully matching pcb found? then look for an unconnected pcb */</span></span><br><span class="line"><span class="keyword">if</span> (pcb == <span class="literal">NULL</span>) &#123;</span><br><span class="line">  pcb = uncon_pcb;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因此“port 匹配”更准确的心智模型是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;收到 UDP datagram&quot;] --&gt; B[&quot;src = packet Source Port&lt;br/&gt;dest = packet Destination Port&quot;]</span><br><span class="line">    B --&gt; C[&quot;for 遍历 udp_pcbs&quot;]</span><br><span class="line">    C --&gt; D&#123;&quot;pcb local port == dest&lt;br/&gt;local IP/netif 匹配?&quot;&#125;</span><br><span class="line">    D --&gt;|&quot;否&quot;| C</span><br><span class="line">    D --&gt;|&quot;是，unconnected&quot;| E[&quot;记录 uncon_pcb 候选&quot;]</span><br><span class="line">    D --&gt;|&quot;是&quot;| F&#123;&quot;remote port == src&lt;br/&gt;remote IP 匹配?&quot;&#125;</span><br><span class="line">    F --&gt;|&quot;否&quot;| C</span><br><span class="line">    F --&gt;|&quot;是&quot;| G[&quot;Perfect match&quot;]</span><br><span class="line">    C --&gt;|&quot;遍历结束&quot;| H&#123;&quot;有 uncon_pcb?&quot;&#125;</span><br><span class="line">    H --&gt;|&quot;是&quot;| I[&quot;使用 unconnected candidate&quot;]</span><br><span class="line">    G --&gt; J[&quot;选定 pcb&quot;]</span><br><span class="line">    I --&gt; J</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-4-为什么完全匹配后还会把-PCB-移到链表头"><a href="#6-4-为什么完全匹配后还会把-PCB-移到链表头" class="headerlink" title="6.4 为什么完全匹配后还会把 PCB 移到链表头"></a>6.4 为什么完全匹配后还会把 PCB 移到链表头</h3><p>继续阅读 <code>udp_input()</code>：找到 fully matched PCB 后，当前实现还有一个很小但很实用的优化。<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* the first fully matching PCB */</span></span><br><span class="line"><span class="keyword">if</span> (prev != <span class="literal">NULL</span>) &#123;</span><br><span class="line">  <span class="comment">/* move the pcb to the front of udp_pcbs so that is</span></span><br><span class="line"><span class="comment">     found faster next time */</span></span><br><span class="line">  prev-&gt;next = pcb-&gt;next;</span><br><span class="line">  pcb-&gt;next = udp_pcbs;</span><br><span class="line">  udp_pcbs = pcb;</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">  UDP_STATS_INC(udp.cachehit);</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">break</span>;</span><br></pre></td></tr></table></figure>
+
+<p>也就是 <strong>move-to-front</strong>：一个 connected flow 连续收很多 datagram 时，第一次命中的 PCB 会被移到 <code>udp_pcbs</code> 表头；下一个同 flow datagram 从头开始遍历时更可能第一项就命中。</p>
+<p>这没有改变“线性链表匹配”的本质，只是让热点 PCB 更靠前。</p>
+<h3 id="6-5-选出-PCB-后，才验证-checksum、移除-UDP-Header-并调用-callback"><a href="#6-5-选出-PCB-后，才验证-checksum、移除-UDP-Header-并调用-callback" class="headerlink" title="6.5 选出 PCB 后，才验证 checksum、移除 UDP Header 并调用 callback"></a>6.5 选出 PCB 后，才验证 checksum、移除 UDP Header 并调用 callback</h3><p>匹配出 <code>pcb</code> 之后，<code>udp_input()</code> 继续做 UDP checksum 检查。通过后才执行：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (pbuf_remove_header(p, UDP_HLEN)) &#123;</span><br><span class="line">  LWIP_ASSERT(<span class="string">&quot;pbuf_remove_header failed&quot;</span>, <span class="number">0</span>);</span><br><span class="line">  UDP_STATS_INC(udp.drop);</span><br><span class="line">  MIB2_STATS_INC(mib2.udpinerrors);</span><br><span class="line">  pbuf_free(p);</span><br><span class="line">  <span class="keyword">goto</span> end;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>于是 <code>p-&gt;payload</code> 从：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">UDP Header</span><br></pre></td></tr></table></figure>
+
+<p>推进成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">UDP Payload</span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>udp_input()</code> 的 callback dispatch 尾部：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* callback */</span></span><br><span class="line"><span class="keyword">if</span> (pcb-&gt;recv != <span class="literal">NULL</span>) &#123;</span><br><span class="line">  <span class="comment">/* now the recv function is responsible for freeing p */</span></span><br><span class="line">  pcb-&gt;recv(pcb-&gt;recv_arg, pcb, p, ip_current_src_addr(), src);</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">  <span class="comment">/* no recv function registered? then we have to free the pbuf! */</span></span><br><span class="line">  pbuf_free(p);</span><br><span class="line">  <span class="keyword">goto</span> end;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>回到第 1 节的 <code>udpecho_raw_init()</code>：初始化阶段已经执行过 callback 注册：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">udp_recv(pcb, udpecho_raw_recv, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p>与运行阶段的真实链路终于完整对应：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">udp_recv()</span><br><span class="line">  -&gt; 把 udpecho_raw_recv 保存进 pcb-&gt;recv</span><br><span class="line"></span><br><span class="line">packet 到达</span><br><span class="line">  -&gt; tcpip_thread</span><br><span class="line">  -&gt; udp_input()</span><br><span class="line">  -&gt; 遍历 udp_pcbs</span><br><span class="line">  -&gt; local/remote endpoint 匹配</span><br><span class="line">  -&gt; pbuf_remove_header(UDP_HLEN)</span><br><span class="line">  -&gt; pcb-&gt;recv(...)</span><br><span class="line">  -&gt; udpecho_raw_recv(...)</span><br></pre></td></tr></table></figure>
+
+<p>这一步才是 UDP demultiplex 的完整含义：同一条 IP input path 根据 packet endpoint 找到一个 PCB，再由 PCB 中预先注册的 function pointer 把 payload 分发给正确的上层 callback。</p>
+<h2 id="7-callback-看到的-pbuf-已经不是-UDP-Header"><a href="#7-callback-看到的-pbuf-已经不是-UDP-Header" class="headerlink" title="7. callback 看到的 pbuf 已经不是 UDP Header"></a>7. callback 看到的 pbuf 已经不是 UDP Header</h2><p><code>udp_input()</code> 在 callback 前执行 <code>pbuf_remove_header(p, UDP_HLEN)</code>。<a href="#source-s2">S2</a></p>
+<p>所以 callback 收到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">p-&gt;payload -&gt; UDP payload</span><br></pre></td></tr></table></figure>
+
+<p>而不是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">p-&gt;payload -&gt; UDP Header</span><br></pre></td></tr></table></figure>
+
+<p>这和 Stage 4 完全相同：每一层处理完自己的 header 后，把 pbuf 数据视图推进到下一层。</p>
+<p>callback 参数中的 <code>addr</code> 和 <code>port</code> 则保存发送方 endpoint：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">addr = remote IP</span><br><span class="line">port = remote UDP source port</span><br></pre></td></tr></table></figure>
+
+<p>Raw Echo 用它们作为回包目标。</p>
+<h2 id="8-udpecho-raw-recv-的-ownership-为什么必须看清"><a href="#8-udpecho-raw-recv-的-ownership-为什么必须看清" class="headerlink" title="8. udpecho_raw_recv() 的 ownership 为什么必须看清"></a>8. <code>udpecho_raw_recv()</code> 的 ownership 为什么必须看清</h2><p>upstream callback：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (p != <span class="literal">NULL</span>) &#123;</span><br><span class="line">  udp_sendto(upcb, p, addr, port);</span><br><span class="line">  pbuf_free(p);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里能直接推出一个重要 ownership 契约：<strong>callback 收到这个 RX pbuf 后，示例负责最终释放它。</strong></p>
+<p><code>udp_sendto()</code> 并没有把这个 payload pbuf 永久接管走，所以 callback 在发送调用返回后仍然执行 <code>pbuf_free(p)</code>。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>不要把：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">udp_sendto(pcb, p, ...)</span><br></pre></td></tr></table></figure>
+
+<p>理解成“p 的 ownership 自动交给 UDP”。如果调用方后续不再需要 p，仍应按 API 语义释放自己的引用。</p>
+<h2 id="9-Echo-TX：UDP-Header-在哪里加回来"><a href="#9-Echo-TX：UDP-Header-在哪里加回来" class="headerlink" title="9. Echo TX：UDP Header 在哪里加回来"></a>9. Echo TX：UDP Header 在哪里加回来</h2><p>协议总流程已经完成 RX 分发并进入 Echo callback；现在从接收方向切换到回包方向。callback 把原发送端地址和 Source Port 作为目标交给 <code>udp_sendto()</code>，下面继续追 UDP Header 如何重新构造。</p>
+<p><code>udp_sendto()</code> 进入 UDP Core 后，会选择 source address&#x2F;interface、准备 checksum，然后为 UDP Header 腾出空间并填写 source port、destination port、length&#x2F;checksum，最后进入 IP output。<a href="#source-s2">S2</a></p>
+<p>因此 callback 传入时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">p-&gt;payload -&gt; UDP payload</span><br></pre></td></tr></table></figure>
+
+<p>UDP Core 发出时会变成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">UDP Header</span><br><span class="line">+ payload</span><br></pre></td></tr></table></figure>
+
+<p>再往下：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">udp_sendto()</span><br><span class="line">  -&gt; ip4_output_if_src()</span><br><span class="line">  -&gt; netif-&gt;output</span><br><span class="line">  -&gt; etharp_output()</span><br><span class="line">  -&gt; ethernet_output()</span><br><span class="line">  -&gt; low_level_output()</span><br></pre></td></tr></table></figure>
+
+<p>ARP cache 如果已经有 Host MAC，就不需要再次广播 ARP；如果没有，<code>etharp_output()</code> 会重新触发地址解析。</p>
+<h2 id="10-一次-Raw-UDP-Echo-的完整数据与-ownership-流"><a href="#10-一次-Raw-UDP-Echo-的完整数据与-ownership-流" class="headerlink" title="10. 一次 Raw UDP Echo 的完整数据与 ownership 流"></a>10. 一次 Raw UDP Echo 的完整数据与 ownership 流</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;Host UDP datagram&lt;br/&gt;dst port 7&quot;] --&gt; B[&quot;ip4_input(): Protocol 17&quot;]</span><br><span class="line">    B --&gt; C[&quot;udp_input()&quot;]</span><br><span class="line">    C --&gt; D[&quot;匹配 udp_pcbs&quot;]</span><br><span class="line">    D --&gt; E[&quot;remove UDP Header&quot;]</span><br><span class="line">    E --&gt; F[&quot;udpecho_raw_recv(p, addr, port)&quot;]</span><br><span class="line">    F --&gt; G[&quot;udp_sendto(upcb, p, addr, port)&quot;]</span><br><span class="line">    G --&gt; H[&quot;重新添加 UDP/IP/Ethernet headers&quot;]</span><br><span class="line">    H --&gt; I[&quot;Echo datagram 返回 Host&quot;]</span><br><span class="line">    G --&gt; J[&quot;callback 仍持有 RX pbuf 引用&quot;]</span><br><span class="line">    J --&gt; K[&quot;pbuf_free(p)&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>这张图同时回答两个不同问题：</p>
+<ul>
+<li>数据怎样返回；</li>
+<li>RX pbuf 最后是谁释放。</li>
+</ul>
+<p>两者不能混成“发送成功所以自动 free”。</p>
+<h2 id="11-Raw-API-的线程边界"><a href="#11-Raw-API-的线程边界" class="headerlink" title="11. Raw API 的线程边界"></a>11. Raw API 的线程边界</h2><p>当前 <code>example_app</code> 配置 <code>NO_SYS=0</code>，Ethernet RX 通过 <code>tcpip_input()</code> 进入 <code>tcpip_thread</code>，<code>udp_input()</code> 和 Raw recv callback 都在 lwIP Core 上下文里执行。<a href="#source-s3">S3</a><a href="#source-s5">S5</a></p>
+<p>这正是 Raw API 的关键约束：Raw callback 不是普通 application worker thread。回调里直接调用 Core API 很自然，但不能把它当成可以长时间阻塞的业务线程。</p>
+<p>Stage 6 会从同一个 UDP Echo 问题出发，改用 Netconn：application thread 阻塞等待 mailbox，而 Core callback 只负责把数据交到 mailbox。</p>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-upstream-Raw-UDP-Echo-示例"><a href="#S1-upstream-Raw-UDP-Echo-示例" class="headerlink" title="[S1] upstream Raw UDP Echo 示例"></a>[S1] upstream Raw UDP Echo 示例</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/apps/udpecho_raw/udpecho_raw.c"><code>contrib/apps/udpecho_raw/udpecho_raw.c</code></a></li>
+<li>使用位置：初始化、callback、Echo TX 与 pbuf 释放</li>
+<li>支撑内容：<code>udp_new_ip_type()</code>、<code>udp_bind()</code>、<code>udp_recv()</code>、<code>udp_sendto()</code> 和 <code>pbuf_free()</code> 的示例调用顺序</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-UDP-Core-实现"><a href="#S2-UDP-Core-实现" class="headerlink" title="[S2] UDP Core 实现"></a>[S2] UDP Core 实现</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/udp.c"><code>src/core/udp.c</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip/udp.h"><code>src/include/lwip/udp.h</code></a></li>
+<li>使用位置：PCB allocation&#x2F;bind&#x2F;callback、RX demultiplex、TX</li>
+<li>支撑内容：<code>udp_input()</code> 的 PCB 匹配、header removal 和 callback 调用，以及 <code>udp_sendto()</code> 的发送语义</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-IPv4-与-tcpip-thread-输入链"><a href="#S3-IPv4-与-tcpip-thread-输入链" class="headerlink" title="[S3] IPv4 与 tcpip_thread 输入链"></a>[S3] IPv4 与 <code>tcpip_thread</code> 输入链</h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/core/ipv4/ip4.c"><code>src/core/ipv4/ip4.c</code></a>、<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/api/tcpip.c"><code>src/api/tcpip.c</code></a></li>
+<li>使用位置：Protocol 17 分发和 callback 执行上下文</li>
+<li>支撑内容：IPv4 如何进入 <code>udp_input()</code>，以及当前 OS 模式下 packet 如何进入 Core thread</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-RFC-768-—-UDP"><a href="#S4-RFC-768-—-UDP" class="headerlink" title="[S4] RFC 768 — UDP"></a>[S4] RFC 768 — UDP</h3><ul>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc768.html">RFC 768 — User Datagram Protocol</a></li>
+<li>使用位置：UDP Header、port、length、checksum</li>
+<li>支撑内容：UDP datagram 的基本报文格式与 endpoint 字段</li>
+</ul>
+<p><a id="source-s5"></a></p>
+<h3 id="S5-example-lwipopts-h"><a href="#S5-example-lwipopts-h" class="headerlink" title="[S5] example lwipopts.h"></a>[S5] example <code>lwipopts.h</code></h3><ul>
+<li>版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/blob/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/examples/example_app/lwipopts.h"><code>contrib/examples/example_app/lwipopts.h</code></a></li>
+<li>使用位置：当前 <code>NO_SYS</code>、UDP 和 Core threading 配置</li>
+<li>支撑内容：限定本文描述的是当前 Unix <code>example_app</code> 构建，而不是所有 lwIP Port 的唯一线程模型</li>
+</ul>
+<p><a id="source-s6"></a></p>
+<h3 id="S6-Cloudflare-UDP-入门资料"><a href="#S6-Cloudflare-UDP-入门资料" class="headerlink" title="[S6] Cloudflare UDP 入门资料"></a>[S6] Cloudflare UDP 入门资料</h3><ul>
+<li>类型：公开技术学习资料</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.cloudflare.com/zh-cn/learning/ddos/glossary/user-datagram-protocol-udp/">Cloudflare — 什么是 UDP？</a></li>
+<li>使用位置：“阅读源码前”、UDP 协议模型</li>
+<li>支撑内容：提供面向初学者的 UDP 无连接 datagram 与可靠性边界补充说明；正文仍独立建立当前源码所需的协议模型</li>
+</ul>
+<p><a id="source-s7"></a></p>
+<h3 id="S7-IANA-Service-Name-and-Transport-Protocol-Port-Number-Registry"><a href="#S7-IANA-Service-Name-and-Transport-Protocol-Port-Number-Registry" class="headerlink" title="[S7] IANA Service Name and Transport Protocol Port Number Registry"></a>[S7] IANA Service Name and Transport Protocol Port Number Registry</h3><ul>
+<li>类型：IANA 官方注册表</li>
+<li>版本：访问时注册表（2026-09-30 更新）</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.iana.org/assignments/service-names-port-numbers?search=echo">IANA — echo service &#x2F; port 7</a></li>
+<li>使用位置：<code>udp_bind(..., 7)</code></li>
+<li>支撑内容：确认 <code>echo</code> 同时注册于 TCP&#x2F;UDP port 7；本文据此解释 upstream Raw UDP Echo 示例为何绑定本地 UDP port 7</li>
+</ul>
+<p><a id="source-s8"></a></p>
+<h3 id="S8-lwIP-官方-UDP-Raw-API-文档"><a href="#S8-lwIP-官方-UDP-Raw-API-文档" class="headerlink" title="[S8] lwIP 官方 UDP Raw API 文档"></a>[S8] lwIP 官方 UDP Raw API 文档</h3><ul>
+<li>类型：lwIP 官方 Doxygen 文档</li>
+<li>版本：2.1.x 文档；正文源码事实以固定 commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code> 为准</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.nongnu.org/lwip/2_1_x/group__udp__raw.html">lwIP — UDP Raw API</a></li>
+<li>使用位置：“阅读源码前”、公开 API 导航</li>
+<li>支撑内容：说明 <code>udp_new()</code>、<code>udp_bind()</code>、<code>udp_recv()</code>、<code>udp_sendto()</code> 属于 lwIP UDP Raw API；具体执行链由 [S1]～[S3] 的目标源码证明</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/d0bd006c/">https://wdfk-prog.space/posts/d0bd006c/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LWIP/">LWIP</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/04.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/57798616/" title="06-netconn-and-socket-api"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">06-netconn-and-socket-api</div></div><div class="info-2"><div class="info-item-1">  教程 06：从 udpecho_thread() 到 Socket——Netconn、Mailbox 与顺序式 API 摘要：从应用线程与 lwIP Core 的执行边界出发，沿 Netconn UDP Echo 追踪 netconn、netbuf、mailbox、Core Locking，并映射到 Socket API。   [TOC] Netconn 是 lwIP 的 sequential API（顺序式 API）：应用线程可以用 netconn_recv() 这类阻塞调用写普通“open&#x2F;read&#x2F;write&#x2F;close”式逻辑，而协议 Core 仍保持事件驱动。Raw API 则是 lwIP 的 callback-style Core API，应用 callback 直接由协议栈事件驱动，不能把 callback 当成可长期阻塞的业务线程。S8 **Mailbox（消息邮箱）**是线程间传递指针&#x2F;消息的队列抽象；Core Locking 是让非 tcpip_thread 线程先取得 Core mutex（保护协议 Core 的互...</div></div></div></a><a class="pagination-related" href="/posts/49be40b4/" title="04-ethernet-arp-ipv4-icmp"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">04-ethernet-arp-ipv4-icmp</div></div><div class="info-2"><div class="info-item-1">  教程 04：从 ethernet_input() 到 Echo Reply——Ethernet、ARP、IPv4 与 ICMP 的分层数据通路 摘要：用真实四帧 Ping 抓包建立 Ethernet、ARP、IPv4、ICMP 协议流程，再从 tcpip_input 异步入口桥进入协议栈核心，逐帧映射协议字段、函数分发与数据视图。   [TOC] Stage 2 已经把第一次 Ping 从程序启动一直跑到 Echo Reply。本篇保留为独立的协议分发源码篇：不再讲 TAP 创建、Linux 路由配置和 example 启动，而是专门回答：一份已经进入 lwIP Core 的 packet，怎样按照 Ethernet、ARP、IPv4、ICMP 的字段逐层被解释、分发和重新发送？ 为了让本篇可以独立阅读，先恢复必要名词。Ethernet frame 是链路层数据单元；EtherType 是 Ethernet Header 中标识上层 **payload（载荷，即 Header 之后承载的数据）**类型的字段。MAC（Media Access Control）地址是 Ether...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/b313493/" title="39-rtthread-lwip-port"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">39-rtthread-lwip-port</div></div><div class="info-2"><div class="info-item-1">  教程 39：从 lwip_system_init() 到 tcpip_input()——RT-Thread 如何把 lwIP 接进 RTOS 与 Ethernet Device 摘要：从 RT-Thread 的 lwIP 初始化入口追踪 Kconfig、sys_arch、eth_device、RX&#x2F;TX 线程与 tcpip_input，建立真实 RTOS Port 的完整桥接流程。  [TOC] Stage 38 已经把 lwIP Port Contract 拆成四块：lwipopts.h 配置、源码构建选择、OS&#x2F;Arch Port、Network Port。Stage 39 不再重复这些抽象的原理，而是直接拿 RT-Thread 当前源码回答一个问题：RT-Thread 怎样把这些 contract 一项项落成可运行代码，并把一个 Ethernet Driver 最终接到 tcpip_thread。 RT-Thread 的完整 Device Framework、NetDev、SAL、DFS 并不是本篇目标。它们只在当前调用链真正出现时说明接口位置；So...</div></div></div></a><a class="pagination-related" href="/posts/4b242a34/" title="18-multi-netif-routing"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">18-multi-netif-routing</div></div><div class="info-2"><div class="info-item-1">  教程 18：从 udp_sendto() 到 etharp_output()——Multi-netif IPv4 路由、Default Netif、Gateway 与下一跳 摘要：从 UDP&#x2F;TCP 发送入口追踪 IPv4 multi-netif 出口选择、默认接口、源地址与 Gateway 下一跳，厘清 route 与 ARP 的职责边界。  [TOC] Multi-netif 表示同一个 lwIP 实例同时存在多个 struct netif 网络接口。本文标题中的 Default Netif（默认接口） 是没有更具体匹配时的 fallback outgoing interface；Gateway（网关） 是已经选定某张接口以后，在当前二层链路上需要直接发送给的下一跳 IP。两者不是同一个对象，也不等价于“默认路由 &#x3D; 网关地址”。 Stage 18 只回答 IPv4 发送方向上的一个问题：应用没有显式固定接口时，lwIP 怎样先选择 outgoing netif，然后怎样决定 Ethernet 下一跳是 destination 本身还是该接口的 gat...</div></div></div></a><a class="pagination-related" href="/posts/f66d8c4d/" title="16-ipv4-fragmentation-reassembly"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">16-ipv4-fragmentation-reassembly</div></div><div class="info-2"><div class="info-item-1">  教程 16：从 MTU 到 ip4_frag() &#x2F; ip4_reass()——IPv4 分片、重组、超时与内存压力 摘要：沿 IPv4 发送与接收源码链，理解 MTU 如何触发分片、Offset&#x2F;MF&#x2F;ID 如何组织片段，以及 lwIP 怎样排序、重组、超时清理并限制资源占用。  [TOC] IPv4 fragmentation（IPv4 分片）解决的是“一个 IPv4 datagram 比当前可发送路径允许的 packet 更大时，怎样把它拆成多个 fragment”；reassembly（重组）则在最终目的主机把这些 fragment 恢复成原始 datagram。Fragment 不是新的传输层或 ICMP message，每一片仍然携带自己的 IPv4 Header，并通过 Identification、MF（More Fragments）和 Fragment Offset 表明自己属于哪个原始 datagram、位于什么位置、后面是否还有片段。S4S12 MTU（Maximum Transmission Unit，最大传输单元）表示某...</div></div></div></a><a class="pagination-related" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">02-netif-tap-first-ping</div></div><div class="info-2"><div class="info-item-1">  教程 02：从 main() 到第一次 Ping——netif、TAP、ARP 与 ICMP 的完整源码链 摘要：先建立 IPv4 Ping 的 Ethernet、ARP、IPv4 与 ICMP 交互模型，再从 Unix example_app 入口追到 TAP 接收、协议栈线程、Echo Reply 与二层发送。   [TOC] 这一阶段要回答的不是“Ping 命令怎么用”，而是一个完整的数据路径问题：  Linux Host 执行 ping 198.18.0.200 后，为什么会先出现 ARP，再出现 ICMP；这些 Ethernet frame 又怎样从 Linux TAP 进入 lwIP，经过 netif、tcpip_thread、ARP、IPv4、ICMP 后返回 Host？  先把标题里的四个对象说清楚。netif 是 lwIP 的 network interface（网络接口）抽象对象，把协议栈 **Core（核心协议处理代码与执行上下文）**和具体 **Port（面向操作系统&#x2F;设备的适配层）**连接起来；TAP 是 Linux 提供给 userspa...</div></div></div></a><a class="pagination-related" href="/posts/8c3324b0/" title="00-series-index"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-series-index</div></div><div class="info-2"><div class="info-item-1">lwIP Source Lab 教程索引本系列持续跟踪官方 lwip-tcpip/lwip 的 master。绝大多数源码篇采用 Source-driven 主线：从当前行为的真实入口函数、注册入口或外部 API 开始，沿实际调用、数据与状态变化向下追踪。 Stage 00、15、31、38 与 45 属于 Theory of Operation &#x2F; Application Note 型总览：先建立系统位置和完整数据流，再解释关键机制；它们不会覆盖后续源码篇“从真实入口开始”的硬约束。 Stage 00～45 Stage 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界从 Ethernet Frame、PHY&#x2F;MAC 分层出发，沿 DMA&#x2F;Driver、pbuf、netif 建立完整软硬件边界，并区分链路、接口、IP 与上层就绪状态。 Stage 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图沿 submodule、Host 依赖、Debug build ...</div></div></div></a><a class="pagination-related" href="/posts/98b3176e/" title="01-linux-lwip-lab"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">01-linux-lwip-lab</div></div><div class="info-2"><div class="info-item-1">  教程 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图 摘要：沿一条可重复的成功路径建立 lwIP Linux Host 学习环境：锁定 upstream revision、生成 Debug build tree 与 compile database，并把 VS Code 带到真实源码入口。  [TOC] 这一篇不先讲 TCP、UDP 或 pbuf。目标只有一个：把仓库准备到“下一篇可以直接从 main() 开始读源码”的状态。 本文把官方 lwip-tcpip/lwip 仓库称为 upstream（上游仓库）；master 是当前系列持续跟踪的 upstream 分支。HEAD 表示当前 checkout 指向的 Git commit；**Debug build tree（调试构建树）**是 CMake 为 Debug 配置生成的构建目录；**compile database（编译数据库）**则记录每个 C 源文件真实使用的 compiler、include path、宏和编译选项。后文会在第一次操作这些对象时继续展开。...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E6%95%99%E7%A8%8B-05%EF%BC%9A%E4%BB%8E-udpecho-raw-init-%E5%88%B0-Echo-Reply%E2%80%94%E2%80%94UDP-Raw-API%E3%80%81PCB-%E4%B8%8E%E5%9B%9E%E8%B0%83%E6%95%B0%E6%8D%AE%E9%80%9A%E8%B7%AF"><span class="toc-number">1.</span> <span class="toc-text">教程 05：从 udpecho_raw_init() 到 Echo Reply——UDP Raw API、PCB 与回调数据通路</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%98%85%E8%AF%BB%E6%BA%90%E7%A0%81%E5%89%8D%EF%BC%9A%E5%BB%BA%E8%AE%AE%E6%8F%90%E5%89%8D%E9%98%85%E8%AF%BB"><span class="toc-number">1.1.</span> <span class="toc-text">阅读源码前：建议提前阅读</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%88%E5%BB%BA%E7%AB%8B-UDP-Echo-%E7%9A%84%E5%8D%8F%E8%AE%AE%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.2.</span> <span class="toc-text">先建立 UDP Echo 的协议模型</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Datagram%E3%80%81endpoint-%E4%B8%8E-port-%E5%88%86%E5%88%AB%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.1.</span> <span class="toc-text">Datagram、endpoint 与 port 分别是什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88-UDP-Echo-%E4%B8%8D%E9%9C%80%E8%A6%81%E4%B8%89%E6%AC%A1%E6%8F%A1%E6%89%8B"><span class="toc-number">1.2.2.</span> <span class="toc-text">为什么 UDP Echo 不需要三次握手</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8D%8F%E8%AE%AE%E5%8A%A8%E4%BD%9C%E6%80%8E%E6%A0%B7%E6%98%A0%E5%B0%84%E5%88%B0-lwIP-%E6%BA%90%E7%A0%81"><span class="toc-number">1.2.3.</span> <span class="toc-text">协议动作怎样映射到 lwIP 源码</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-Raw-API-%E7%9A%84%E7%AC%AC%E4%B8%80%E4%B8%AA%E7%9C%9F%E5%AE%9E%E5%85%A5%E5%8F%A3%EF%BC%9Audpecho-raw-init"><span class="toc-number">1.3.</span> <span class="toc-text">1. Raw API 的第一个真实入口：udpecho_raw_init()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-udp-new-ip-type-%EF%BC%9APCB-%E4%BB%8E%E5%93%AA%E9%87%8C%E6%9D%A5"><span class="toc-number">1.4.</span> <span class="toc-text">2. udp_new_ip_type()：PCB 从哪里来</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-udp-bind-%EF%BC%9A%E6%8A%8A%E6%A0%87%E5%87%86-UDP-Destination-Port-%E6%98%A0%E5%B0%84%E6%88%90-PCB-%E6%9D%A1%E4%BB%B6"><span class="toc-number">1.5.</span> <span class="toc-text">3. udp_bind()：把标准 UDP Destination Port 映射成 PCB 条件</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-udp-recv-%E5%B9%B6%E4%B8%8D%E6%94%B6%E5%8C%85%EF%BC%8C%E5%AE%83%E5%8F%AA%E6%98%AF%E6%B3%A8%E5%86%8C-callback"><span class="toc-number">1.6.</span> <span class="toc-text">4. udp_recv() 并不收包，它只是注册 callback</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E4%B8%80%E4%B8%AA-UDP-datagram-%E6%80%8E%E6%A0%B7%E8%B5%B0%E5%88%B0-udp-input"><span class="toc-number">1.7.</span> <span class="toc-text">5. 一个 UDP datagram 怎样走到 udp_input()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-udp-input-%E5%88%B0%E5%BA%95%E6%80%8E%E6%A0%B7%E6%89%BE%E5%88%B0%E5%BA%94%E8%AF%A5%E8%B0%83%E7%94%A8%E5%93%AA%E4%B8%AA-PCB-callback"><span class="toc-number">1.8.</span> <span class="toc-text">6. udp_input() 到底怎样找到应该调用哪个 PCB callback</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-udp-input-%E5%85%88%E8%AF%BB%E5%8F%96-UDP-Source-Destination-Port"><span class="toc-number">1.8.1.</span> <span class="toc-text">6.1 udp_input() 先读取 UDP Source&#x2F;Destination Port</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E5%BD%93%E5%89%8D%E5%AE%9E%E7%8E%B0%E5%B0%B1%E6%98%AF%E7%BA%BF%E6%80%A7-for-%E9%81%8D%E5%8E%86-udp-pcbs-%E9%93%BE%E8%A1%A8"><span class="toc-number">1.8.2.</span> <span class="toc-text">6.2 当前实现就是线性 for 遍历 udp_pcbs 链表</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-Connected-PCB-%E8%BF%98%E4%BC%9A%E7%BB%A7%E7%BB%AD%E6%AF%94%E8%BE%83-packet-%E7%9A%84%E8%BF%9C%E7%AB%AF-endpoint"><span class="toc-number">1.8.3.</span> <span class="toc-text">6.3 Connected PCB 还会继续比较 packet 的远端 endpoint</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AE%8C%E5%85%A8%E5%8C%B9%E9%85%8D%E5%90%8E%E8%BF%98%E4%BC%9A%E6%8A%8A-PCB-%E7%A7%BB%E5%88%B0%E9%93%BE%E8%A1%A8%E5%A4%B4"><span class="toc-number">1.8.4.</span> <span class="toc-text">6.4 为什么完全匹配后还会把 PCB 移到链表头</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-%E9%80%89%E5%87%BA-PCB-%E5%90%8E%EF%BC%8C%E6%89%8D%E9%AA%8C%E8%AF%81-checksum%E3%80%81%E7%A7%BB%E9%99%A4-UDP-Header-%E5%B9%B6%E8%B0%83%E7%94%A8-callback"><span class="toc-number">1.8.5.</span> <span class="toc-text">6.5 选出 PCB 后，才验证 checksum、移除 UDP Header 并调用 callback</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-callback-%E7%9C%8B%E5%88%B0%E7%9A%84-pbuf-%E5%B7%B2%E7%BB%8F%E4%B8%8D%E6%98%AF-UDP-Header"><span class="toc-number">1.9.</span> <span class="toc-text">7. callback 看到的 pbuf 已经不是 UDP Header</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-udpecho-raw-recv-%E7%9A%84-ownership-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BF%85%E9%A1%BB%E7%9C%8B%E6%B8%85"><span class="toc-number">1.10.</span> <span class="toc-text">8. udpecho_raw_recv() 的 ownership 为什么必须看清</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-Echo-TX%EF%BC%9AUDP-Header-%E5%9C%A8%E5%93%AA%E9%87%8C%E5%8A%A0%E5%9B%9E%E6%9D%A5"><span class="toc-number">1.11.</span> <span class="toc-text">9. Echo TX：UDP Header 在哪里加回来</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E4%B8%80%E6%AC%A1-Raw-UDP-Echo-%E7%9A%84%E5%AE%8C%E6%95%B4%E6%95%B0%E6%8D%AE%E4%B8%8E-ownership-%E6%B5%81"><span class="toc-number">1.12.</span> <span class="toc-text">10. 一次 Raw UDP Echo 的完整数据与 ownership 流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-Raw-API-%E7%9A%84%E7%BA%BF%E7%A8%8B%E8%BE%B9%E7%95%8C"><span class="toc-number">1.13.</span> <span class="toc-text">11. Raw API 的线程边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.14.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-upstream-Raw-UDP-Echo-%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.14.1.</span> <span class="toc-text">[S1] upstream Raw UDP Echo 示例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-UDP-Core-%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.14.2.</span> <span class="toc-text">[S2] UDP Core 实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-IPv4-%E4%B8%8E-tcpip-thread-%E8%BE%93%E5%85%A5%E9%93%BE"><span class="toc-number">1.14.3.</span> <span class="toc-text">[S3] IPv4 与 tcpip_thread 输入链</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-RFC-768-%E2%80%94-UDP"><span class="toc-number">1.14.4.</span> <span class="toc-text">[S4] RFC 768 — UDP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S5-example-lwipopts-h"><span class="toc-number">1.14.5.</span> <span class="toc-text">[S5] example lwipopts.h</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S6-Cloudflare-UDP-%E5%85%A5%E9%97%A8%E8%B5%84%E6%96%99"><span class="toc-number">1.14.6.</span> <span class="toc-text">[S6] Cloudflare UDP 入门资料</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S7-IANA-Service-Name-and-Transport-Protocol-Port-Number-Registry"><span class="toc-number">1.14.7.</span> <span class="toc-text">[S7] IANA Service Name and Transport Protocol Port Number Registry</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S8-lwIP-%E5%AE%98%E6%96%B9-UDP-Raw-API-%E6%96%87%E6%A1%A3"><span class="toc-number">1.14.8.</span> <span class="toc-text">[S8] lwIP 官方 UDP Raw API 文档</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/4072c3c5/" title="11-sys-arch"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="11-sys-arch"/></a><div class="content"><a class="title" href="/posts/4072c3c5/" title="11-sys-arch">11-sys-arch</a><time datetime="2026-10-06T07:49:26.195Z" title="更新于 2026-10-06 15:49:26">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/1c6cd58/" title="10-tcp-out-of-order"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="10-tcp-out-of-order"/></a><div class="content"><a class="title" href="/posts/1c6cd58/" title="10-tcp-out-of-order">10-tcp-out-of-order</a><time datetime="2026-10-06T07:44:29.632Z" title="更新于 2026-10-06 15:44:29">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873586f3/" title="readme"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="readme"/></a><div class="content"><a class="title" href="/posts/873586f3/" title="readme">readme</a><time datetime="2026-10-06T07:32:02.710Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="WIFI-Direct学习笔记系列"/></a><div class="content"><a class="title" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列">WIFI-Direct学习笔记系列</a><time datetime="2026-10-06T07:32:02.709Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="15-group-data-plane-tx-rx"/></a><div class="content"><a class="title" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx">15-group-data-plane-tx-rx</a><time datetime="2026-10-06T07:32:02.709Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/04.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '7e0d7023a1e06d35ab0865f0728e1a12'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18],["2026-10-03",49]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"LWIP","children":[],"count":49,"path":"LWIP"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

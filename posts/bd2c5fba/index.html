@@ -1,0 +1,1546 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>17-igmp-ipv4-multicast | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="教程 17：从 IP_ADD_MEMBERSHIP 到 igmp_input()——IPv4 Multicast、IGMPv2、MAC Filter 与组成员状态机 摘要：从 RTP multicast example 的 IP_ADD_MEMBERSHIP 入口追踪 IGMPv2 加组、Report&#x2F;Query&#x2F;Leave、定时器与 MAC 映射，并用真实 PCAP 验证">
+<meta property="og:type" content="article">
+<meta property="og:title" content="17-igmp-ipv4-multicast">
+<meta property="og:url" content="https://wdfk-prog.space/posts/bd2c5fba/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="教程 17：从 IP_ADD_MEMBERSHIP 到 igmp_input()——IPv4 Multicast、IGMPv2、MAC Filter 与组成员状态机 摘要：从 RTP multicast example 的 IP_ADD_MEMBERSHIP 入口追踪 IGMPv2 加组、Report&#x2F;Query&#x2F;Leave、定时器与 MAC 映射，并用真实 PCAP 验证">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/06.jpg">
+<meta property="article:published_time" content="2026-10-03T08:27:36.000Z">
+<meta property="article:modified_time" content="2026-10-06T07:32:02.578Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="LWIP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/06.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "17-igmp-ipv4-multicast",
+  "url": "https://wdfk-prog.space/posts/bd2c5fba/",
+  "image": "https://wdfk-prog.space/images/covers/06.jpg",
+  "datePublished": "2026-10-03T08:27:36.000Z",
+  "dateModified": "2026-10-06T07:32:02.578Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/bd2c5fba/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '17-igmp-ipv4-multicast',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/06.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">17-igmp-ipv4-multicast</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">17-igmp-ipv4-multicast<a class="post-edit-link" href="null_posts/LWIP/17-igmp-ipv4-multicast.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-03T08:27:36.000Z" title="发表于 2026-10-03 16:27:36">2026-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-06T07:32:02.578Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/LWIP/">LWIP</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">7.2k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>31分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/bd2c5fba/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-10-06 15:32:02&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="教程-17：从-IP-ADD-MEMBERSHIP-到-igmp-input-——IPv4-Multicast、IGMPv2、MAC-Filter-与组成员状态机"><a href="#教程-17：从-IP-ADD-MEMBERSHIP-到-igmp-input-——IPv4-Multicast、IGMPv2、MAC-Filter-与组成员状态机" class="headerlink" title="教程 17：从 IP_ADD_MEMBERSHIP 到 igmp_input()——IPv4 Multicast、IGMPv2、MAC Filter 与组成员状态机"></a>教程 17：从 <code>IP_ADD_MEMBERSHIP</code> 到 <code>igmp_input()</code>——IPv4 Multicast、IGMPv2、MAC Filter 与组成员状态机</h1><blockquote>
+<p>摘要：从 RTP multicast example 的 IP_ADD_MEMBERSHIP 入口追踪 IGMPv2 加组、Report&#x2F;Query&#x2F;Leave、定时器与 MAC 映射，并用真实 PCAP 验证调用链。</p>
+</blockquote>
+<p>[TOC]</p>
+<p>IPv4 multicast（IPv4 组播）让发送者把一个 IPv4 datagram 发送到 <strong>multicast group address（组播组地址）</strong>，所有已经加入该组、并且链路路径允许该组流量通过的接收者都可以获得同一份数据。IGMP（Internet Group Management Protocol，互联网组管理协议）不是业务数据协议，而是 IPv4 Host 与本地 multicast router 之间维护“哪些组当前有成员”的控制协议。<a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<p>本文标题中的 MAC Filter 指 Ethernet MAC（Media Access Control，媒体访问控制）&#x2F;Driver 的组播地址过滤能力：即使 IP 层已经加入组，如果网卡硬件在更早的二层过滤阶段把对应 multicast MAC frame 丢掉，lwIP 仍然收不到业务数据。组成员状态机则是 lwIP 为每个 <code>netif + group</code> 维护的 membership 状态、定时器和 <code>last_reporter_flag</code>；其中 <code>netif</code> 是 lwIP 的网络接口对象，<code>last_reporter_flag</code> 记录本机是否认为自己是该组最近一次发送 Report 的 Host。这些状态决定收到 Query、其他 Host 的 Report 或本机 leave 时下一步做什么。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>RTP（Real-time Transport Protocol，实时传输协议）在当前 example 中只是 multicast <strong>数据面</strong>样例：<code>rtp_send_thread()</code> 通过 UDP 向 <code>232.0.0.0:4000</code> 发送 RTP packet；<code>rtp_recv_thread()</code> 则通过 <code>IP_ADD_MEMBERSHIP</code> 触发本文真正要追踪的 IGMP <strong>控制面</strong>。<a href="#source-s1">S1</a><a href="#source-s5">S5</a></p>
+<h2 id="0-阅读源码前：建议提前阅读"><a href="#0-阅读源码前：建议提前阅读" class="headerlink" title="0. 阅读源码前：建议提前阅读"></a>0. 阅读源码前：建议提前阅读</h2><p>以下资料用于建立标准语义和继续深入，不是正文的强制前置条件；不打开这些链接，后面的 join、Query&#x2F;Report、suppression、Leave 和源码调用链仍然可以独立理解。</p>
+<ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc2236.html">RFC 2236 — Internet Group Management Protocol, Version 2</a>：用于核对本文目标实现实际采用的 IGMPv2 Query、Membership Report、Leave、timer 与 host membership state machine。<a href="#source-s4">S4</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1112.html">RFC 1112 — Host Extensions for IP Multicasting</a>：用于 IPv4 multicast host model，以及 IPv4 multicast address 到 Ethernet multicast MAC 的映射规则。<a href="#source-s3">S3</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/multicast/multicast-configuration-guide/igmp.html">Cisco Multicast Configuration Guide — IGMP</a>：适合作为工程视角的补充阅读，重点看 host&#x2F;router、Query、Report、Leave，以及 report suppression（本机在等待发送 Report 时听到同组其他 Host 的 Report，于是取消自己的待发 Report）。<a href="#source-s7">S7</a></li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9776.html">RFC 9776 — Internet Group Management Protocol, Version 3</a>：用于确认当前 IGMPv3 标准状态。本文仍以 RFC 2236 为主要协议对照，因为目标 <code>igmp.c</code> 的 host-side 行为是 IGMPv2 模型。<a href="#source-s8">S8</a></li>
+</ol>
+<h3 id="0-1-先建立-IGMPv2-最小协议模型"><a href="#0-1-先建立-IGMPv2-最小协议模型" class="headerlink" title="0.1 先建立 IGMPv2 最小协议模型"></a>0.1 先建立 IGMPv2 最小协议模型</h3><p>本文只需要先掌握四类对象：</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>在当前流程中的职责</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Application</td>
+<td>通过 <code>IP_ADD_MEMBERSHIP</code> &#x2F; <code>IP_DROP_MEMBERSHIP</code> 表达本机是否需要接收某个组</td>
+</tr>
+<tr>
+<td>IPv4 Host &#x2F; lwIP</td>
+<td>为每个 <code>netif + group</code> 维护 membership，并发送&#x2F;接收 IGMP control message</td>
+</tr>
+<tr>
+<td>Multicast Router</td>
+<td>周期或按需发送 Query，并根据 Host Report 维护本链路上的组成员信息</td>
+</tr>
+<tr>
+<td>Multicast Data Sender</td>
+<td>向 group address 发送实际 UDP&#x2F;RTP 等业务 datagram；它不通过 IGMP 发送 payload</td>
+</tr>
+</tbody></table>
+<p>IGMPv2 当前主线会遇到三类 Control Message：</p>
+<ul>
+<li><strong>Membership Query</strong>：由 multicast router 发出，询问 Host 对全部组或某个指定组是否仍有成员。</li>
+<li><strong>Version 2 Membership Report</strong>：Host 用它声明“本接口仍然属于这个 group”。新 join 时会主动发送，收到 Query 后也可能延迟发送。</li>
+<li><strong>Leave Group</strong>：Host 最终离组时可能发送给 router，帮助 router 更快确认该链路是否还有成员。</li>
+</ul>
+<p><code>Max Response Time</code> 是 Query 中约束 Host 最迟何时响应的字段。Host 不会让所有成员同时立即 Report，而是为 group 启动一个随机 delay timer；如果等待期间先听到另一个 Host 对同组的 Report，本机可以取消自己的 Report，这就是 <strong>Report Suppression（报告抑制）</strong>。在 lwIP 中，这些协议行为最终落到 <code>group-&gt;timer</code>、<code>group_state</code> 与 <code>last_reporter_flag</code>。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<h3 id="0-2-一次完整-membership-生命周期先看协议，再看源码"><a href="#0-2-一次完整-membership-生命周期先看协议，再看源码" class="headerlink" title="0.2 一次完整 membership 生命周期先看协议，再看源码"></a>0.2 一次完整 membership 生命周期先看协议，再看源码</h3><p>IGMPv2 的 General Query 通常发送到 <code>224.0.0.1</code> all-systems group，Group-Specific Query 发送到被查询的 group；Membership Report 发送到对应 group address，Leave Group 则发送到 <code>224.0.0.2</code> all-routers group。<a href="#source-s3">S3</a><a href="#source-s4">S4</a> 因此下面箭头表示“该类消息由 router&#x2F;Host 接收”，不是 Host 对某台 router 做单播。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant APP as Application</span><br><span class="line">    participant H as lwIP IPv4 Host</span><br><span class="line">    participant R as Multicast Router</span><br><span class="line"></span><br><span class="line">    APP-&gt;&gt;H: IP_ADD_MEMBERSHIP(group)</span><br><span class="line">    H--&gt;&gt;R: Membership Report to group address, router receives</span><br><span class="line">    R--&gt;&gt;H: Query to all-systems group or target group</span><br><span class="line">    Note over H: start response delay timer</span><br><span class="line">    alt 先听到同组其他 Host 的 Report</span><br><span class="line">        H-&gt;&gt;H: cancel timer, suppress own Report</span><br><span class="line">    else timer 到期</span><br><span class="line">        H--&gt;&gt;R: Membership Report to group address, router receives</span><br><span class="line">    end</span><br><span class="line">    APP-&gt;&gt;H: IP_DROP_MEMBERSHIP(group)</span><br><span class="line">    H--&gt;&gt;R: Leave Group to 224.0.0.2 when current host is last reporter</span><br></pre></td></tr></table></figure>
+
+<p>业务数据走另一条路径：Sender 把 IPv4 destination 设置成 multicast group；在 Ethernet 上，IPv4 multicast destination 会映射成 <code>01:00:5e:xx:xx:xx</code> 一类 multicast MAC。Host 的 IGMP membership 决定 IP 层是否接受该组，同时 Port（平台适配层）可以通过 <code>igmp_mac_filter()</code> 把对应 MAC 加入或移出硬件过滤器。<a href="#source-s1">S1</a><a href="#source-s3">S3</a></p>
+<h3 id="0-3-协议动作与-lwIP-源码先建立双轨映射"><a href="#0-3-协议动作与-lwIP-源码先建立双轨映射" class="headerlink" title="0.3 协议动作与 lwIP 源码先建立双轨映射"></a>0.3 协议动作与 lwIP 源码先建立双轨映射</h3><p>下面表里会提前出现三个源码状态名：<code>NON_MEMBER</code> 表示尚未加入，<code>DELAYING_MEMBER</code> 表示已经是成员且有一个待发送 Report 的 delay timer，<code>IDLE_MEMBER</code> 表示已经是成员但当前没有待发送 Report。后文会沿 <code>igmp_input()</code> 与 timer 代码看这些状态怎样迁移。</p>
+<table>
+<thead>
+<tr>
+<th>协议动作</th>
+<th>lwIP 入口&#x2F;关键函数</th>
+<th>关键对象&#x2F;状态</th>
+<th>下一步</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>应用加入组</td>
+<td><code>lwip_setsockopt(IP_ADD_MEMBERSHIP)</code> → <code>igmp_joingroup()</code></td>
+<td><code>struct igmp_group</code>、<code>group-&gt;use</code> 本机 join 引用计数</td>
+<td>为目标 <code>netif</code> 建立&#x2F;增加 membership</td>
+</tr>
+<tr>
+<td>新加入后主动 Report</td>
+<td><code>igmp_joingroup_netif()</code> → <code>igmp_send()</code></td>
+<td><code>DELAYING_MEMBER</code>、join timer</td>
+<td>等待 Query、peer Report 或 timer</td>
+</tr>
+<tr>
+<td>Router Query 到达</td>
+<td><code>ip4_input()</code> → <code>igmp_input()</code></td>
+<td><code>group-&gt;timer</code>、<code>group_state</code></td>
+<td>延迟响应</td>
+</tr>
+<tr>
+<td>peer Report 到达</td>
+<td><code>igmp_input()</code></td>
+<td>取消 timer、<code>IDLE_MEMBER</code></td>
+<td>suppression 完成</td>
+</tr>
+<tr>
+<td>timer 到期</td>
+<td><code>igmp_tmr()</code> → <code>igmp_timeout()</code></td>
+<td>当前 group</td>
+<td>再发送 Membership Report</td>
+</tr>
+<tr>
+<td>最终离组</td>
+<td><code>igmp_leavegroup_netif()</code></td>
+<td><code>group-&gt;use</code>、<code>last_reporter_flag</code></td>
+<td>可选 Leave、MAC filter 删除、释放 group</td>
+</tr>
+</tbody></table>
+<p>下面开始沿真实应用入口追踪这张表，而不是按 RFC 章节顺序讲协议。</p>
+<h2 id="1-Multicast-的第一层边界：UDP-Port-和-Multicast-Group-是两个不同筛选条件"><a href="#1-Multicast-的第一层边界：UDP-Port-和-Multicast-Group-是两个不同筛选条件" class="headerlink" title="1. Multicast 的第一层边界：UDP Port 和 Multicast Group 是两个不同筛选条件"></a>1. Multicast 的第一层边界：UDP Port 和 Multicast Group 是两个不同筛选条件</h2><p>普通 UDP unicast 常见模型是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Destination IPv4</span><br><span class="line">+ Destination UDP Port</span><br><span class="line">→ 找到本机 UDP PCB（Protocol Control Block，协议控制块）/ Socket</span><br></pre></td></tr></table></figure>
+
+<p>Multicast 又多了一层 group membership：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Destination IPv4 multicast group</span><br><span class="line">        ↓</span><br><span class="line">这个 netif 是否加入该 group？</span><br><span class="line">        ↓</span><br><span class="line">IPv4 packet 是否允许进入本机协议栈</span><br><span class="line">        ↓</span><br><span class="line">UDP destination port</span><br><span class="line">        ↓</span><br><span class="line">Socket / PCB</span><br></pre></td></tr></table></figure>
+
+<p>所以这三个动作不能混为一谈：</p>
+<table>
+<thead>
+<tr>
+<th>动作</th>
+<th>决定什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>bind(..., UDP port)</code></td>
+<td>哪个 UDP endpoint 接收某个 port 的 datagram</td>
+</tr>
+<tr>
+<td><code>IP_ADD_MEMBERSHIP</code></td>
+<td>当前 Host&#x2F;interface 是否加入一个 IPv4 multicast group</td>
+</tr>
+<tr>
+<td>MAC multicast filter</td>
+<td>Ethernet MAC&#x2F;Driver 是否接收映射到该 multicast MAC 的 frame</td>
+</tr>
+</tbody></table>
+<p>只 bind UDP port 并不等于加入 multicast group；加入 group 也不等于自动 bind 某个 UDP port。</p>
+<h2 id="2-当前-example-已经启用-IGMP-Core，但没有默认加入业务组"><a href="#2-当前-example-已经启用-IGMP-Core，但没有默认加入业务组" class="headerlink" title="2. 当前 example 已经启用 IGMP Core，但没有默认加入业务组"></a>2. 当前 example 已经启用 IGMP Core，但没有默认加入业务组</h2><p>当前 <code>example_app/lwipopts.h</code> 定义：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_IGMP                  LWIP_IPV4</span></span><br></pre></td></tr></table></figure>
+
+<p>继续看 Unix TAP Port 的 <code>tapif_init()</code>：它初始化 <code>netif</code> 时还会显式声明 IGMP capability。<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">netif-&gt;flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_IGMP;</span><br></pre></td></tr></table></figure>
+
+<p>因此只要 IPv4 开启，当前 Host example 具备 IGMP Core 能力。但这不代表它自动加入任意业务 multicast group。</p>
+<p>真正加入业务组需要应用发起 join。upstream RTP example 正好提供了这条入口。</p>
+<h2 id="3-真实应用入口：先认识-RTP-example，再进入-rtp-recv-thread-的-multicast-join"><a href="#3-真实应用入口：先认识-RTP-example，再进入-rtp-recv-thread-的-multicast-join" class="headerlink" title="3. 真实应用入口：先认识 RTP example，再进入 rtp_recv_thread() 的 multicast join"></a>3. 真实应用入口：先认识 RTP example，再进入 <code>rtp_recv_thread()</code> 的 multicast join</h2><p><code>contrib/apps/rtp/rtp.c</code> 把 RTP 作为一个很小的 multicast application example。<code>rtp_init()</code> 同时创建发送和接收线程：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span></span><br><span class="line"><span class="title function_">rtp_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  sys_thread_new(<span class="string">&quot;rtp_send_thread&quot;</span>, rtp_send_thread, <span class="literal">NULL</span>, DEFAULT_THREAD_STACKSIZE, DEFAULT_THREAD_PRIO);</span><br><span class="line">  sys_thread_new(<span class="string">&quot;rtp_recv_thread&quot;</span>, rtp_recv_thread, <span class="literal">NULL</span>, DEFAULT_THREAD_STACKSIZE, DEFAULT_THREAD_PRIO);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>两个线程承担不同角色：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>当前 example 做什么</th>
+<th>与 Stage 17 的关系</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>rtp_send_thread()</code></td>
+<td>把 MPEG4 payload 加上 RTP header，经 UDP 发往 <code>232.0.0.0:4000</code></td>
+<td>multicast <strong>数据面</strong>示例</td>
+</tr>
+<tr>
+<td><code>rtp_recv_thread()</code></td>
+<td>bind UDP 4000，并通过 <code>IP_ADD_MEMBERSHIP</code> 加入 <code>232.0.0.0</code></td>
+<td>本文 IGMP <strong>控制面</strong>入口</td>
+</tr>
+</tbody></table>
+<p>RTP 的协议格式、sequence&#x2F;timestamp&#x2F;SSRC 等字段直接参考 RFC 3550。<a href="#source-s5">S5</a> 本篇不展开 RTP header、codec、jitter buffer 或 RTCP；当前 example 只提供两个必要上下文：<code>rtp_send_thread()</code> 产生 multicast UDP 数据，<code>rtp_recv_thread()</code> 通过 <code>IP_ADD_MEMBERSHIP</code> 触发 IGMP 控制链。</p>
+<h3 id="3-1-rtp-recv-thread-的真实顺序里还有一次-SO-RCVTIMEO"><a href="#3-1-rtp-recv-thread-的真实顺序里还有一次-SO-RCVTIMEO" class="headerlink" title="3.1 rtp_recv_thread() 的真实顺序里还有一次 SO_RCVTIMEO"></a>3.1 <code>rtp_recv_thread()</code> 的真实顺序里还有一次 <code>SO_RCVTIMEO</code></h3><p>接收线程并不是 bind 后立刻 join。当前源码的连续路径是：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (lwip_bind(sock, (<span class="keyword">struct</span> sockaddr *)&amp;local, <span class="keyword">sizeof</span>(local)) == <span class="number">0</span>) &#123;</span><br><span class="line">  <span class="comment">/* set recv timeout */</span></span><br><span class="line">  timeout = RTP_RECV_TIMEOUT;</span><br><span class="line">  result = lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (<span class="type">char</span> *)&amp;timeout, <span class="keyword">sizeof</span>(timeout));</span><br><span class="line">  <span class="keyword">if</span> (result) &#123;</span><br><span class="line">    LWIP_DEBUGF(RTP_DEBUG, (<span class="string">&quot;rtp_recv_thread: setsockopt(SO_RCVTIMEO) failed: errno=%d\n&quot;</span>, errno));</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="comment">/* prepare multicast &quot;ip_mreq&quot; struct */</span></span><br><span class="line">  ipmreq.imr_multiaddr.s_addr = rtp_stream_address;</span><br><span class="line">  ipmreq.imr_interface.s_addr = PP_HTONL(INADDR_ANY);</span><br><span class="line"></span><br><span class="line">  <span class="comment">/* join multicast group */</span></span><br><span class="line">  <span class="keyword">if</span> (lwip_setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &amp;ipmreq, <span class="keyword">sizeof</span>(ipmreq)) == <span class="number">0</span>) &#123;</span><br></pre></td></tr></table></figure>
+
+<p>当前 RTP example 默认值为：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> RTP_STREAM_PORT             4000</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> RTP_STREAM_ADDRESS          inet_addr(<span class="string">&quot;232.0.0.0&quot;</span>)</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> RTP_RECV_TIMEOUT            2000</span></span><br></pre></td></tr></table></figure>
+
+<p>所以接收路径实际是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">UDP socket</span><br><span class="line">  ↓</span><br><span class="line">bind 0.0.0.0:4000</span><br><span class="line">  ↓</span><br><span class="line">设置 2000 ms receive timeout</span><br><span class="line">  ↓</span><br><span class="line">构造 ip_mreq</span><br><span class="line">  ↓</span><br><span class="line">IP_ADD_MEMBERSHIP 232.0.0.0</span><br></pre></td></tr></table></figure>
+
+<p>这里 <code>bind()</code> 与 <code>IP_ADD_MEMBERSHIP</code> 仍然是两个独立动作：前者建立 UDP endpoint，后者建立 IPv4 multicast membership。</p>
+<h3 id="3-2-为什么当前-Ubuntu-Host-会打印-SO-RCVTIMEO-errno-22"><a href="#3-2-为什么当前-Ubuntu-Host-会打印-SO-RCVTIMEO-errno-22" class="headerlink" title="3.2 为什么当前 Ubuntu Host 会打印 SO_RCVTIMEO errno=22"></a>3.2 为什么当前 Ubuntu Host 会打印 <code>SO_RCVTIMEO errno=22</code></h3><p>实际运行当前 example 时出现了：<a href="#source-s6">S6</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Starting lwIP, local interface IP is 198.18.0.200</span><br><span class="line">ip6 linklocal address: FE80::12:34FF:FE56:78AB</span><br><span class="line">status_callback==UP, local interface IP is 198.18.0.200</span><br><span class="line">rtp_recv_thread: setsockopt(SO_RCVTIMEO) failed: errno=22</span><br></pre></td></tr></table></figure>
+
+<p><code>errno=22</code> 是 <code>EINVAL</code>。这里不是 TAP、IGMP 或 multicast group 配置失败，而是 RTP example 对 <code>SO_RCVTIMEO</code> 的参数形式与当前 lwIP 默认 Socket 语义不一致。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>当前 <code>example_app/lwipopts.h</code> 打开了：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_SO_RCVTIMEO 1</span></span><br></pre></td></tr></table></figure>
+
+<p>而 <code>opt.h</code> 对下面这个选项的默认值是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_SO_SNDRCVTIMEO_NONSTANDARD 0</span></span><br></pre></td></tr></table></figure>
+
+<p>当它为 <code>0</code> 时，<code>sockets.c</code> 要求 <code>SO_RCVTIMEO</code> 使用 <code>struct timeval</code>；只有显式把它设为 <code>1</code> 时，才采用 lwIP 的非标准 <code>int</code> 毫秒形式：<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_SO_SNDRCVTIMEO_NONSTANDARD</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_SO_SNDRCVTIMEO_OPTTYPE int</span></span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_SO_SNDRCVTIMEO_OPTTYPE struct timeval</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>当前 RTP example 却固定传入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> timeout;</span><br><span class="line">timeout = RTP_RECV_TIMEOUT;</span><br><span class="line">lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,</span><br><span class="line">                (<span class="type">char</span> *)&amp;timeout, <span class="keyword">sizeof</span>(timeout));</span><br></pre></td></tr></table></figure>
+
+<p><code>sockets.c</code> 在处理 <code>SO_RCVTIMEO</code> 时先检查 <code>optlen</code> 是否满足 <code>LWIP_SO_SNDRCVTIMEO_OPTTYPE</code>。当前 Host 使用 <code>struct timeval</code> 语义，而 example 只传 <code>sizeof(int)</code>，因此长度检查返回 <code>EINVAL</code>。<a href="#source-s1">S1</a></p>
+<p>如果需要修正 example，更符合当前默认 Socket 语义的写法是使用 <code>struct timeval</code>。下面是<strong>兼容性修正示意，不是 upstream 原文</strong>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">timeval</span> <span class="title">timeout</span>;</span></span><br><span class="line"></span><br><span class="line">timeout.tv_sec = RTP_RECV_TIMEOUT / <span class="number">1000</span>;</span><br><span class="line">timeout.tv_usec = (RTP_RECV_TIMEOUT % <span class="number">1000</span>) * <span class="number">1000</span>;</span><br><span class="line"></span><br><span class="line">lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,</span><br><span class="line">                &amp;timeout, <span class="keyword">sizeof</span>(timeout));</span><br></pre></td></tr></table></figure>
+
+<p>也可以把 <code>LWIP_SO_SNDRCVTIMEO_NONSTANDARD</code> 设为 <code>1</code> 继续使用 <code>int</code> 毫秒，但这会改变整个 lwIP Socket 层的 <code>SO_SNDTIMEO/SO_RCVTIMEO</code> 参数语义，不应该只为了这个 example 随意切换全局行为。<a href="#source-s2">S2</a></p>
+<p>更重要的是，当前 RTP source 在 timeout 设置失败后<strong>只打印日志，并不会 return</strong>；执行流仍继续构造 <code>ip_mreq</code> 并调用 <code>IP_ADD_MEMBERSHIP</code>。<a href="#source-s1">S1</a> 因此：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">SO_RCVTIMEO errno=22</span><br><span class="line">        ≠</span><br><span class="line">IGMP join failed</span><br></pre></td></tr></table></figure>
+
+<p>这也解释了为什么本次运行虽然打印了 timeout warning，后面的 PCAP 仍然捕获到了正确的 IGMP Membership Report。<a href="#source-s6">S6</a></p>
+<h2 id="4-lwip-setsockopt-不一定直接在-application-thread-修改-IGMP-Core"><a href="#4-lwip-setsockopt-不一定直接在-application-thread-修改-IGMP-Core" class="headerlink" title="4. lwip_setsockopt() 不一定直接在 application thread 修改 IGMP Core"></a>4. <code>lwip_setsockopt()</code> 不一定直接在 application thread 修改 IGMP Core</h2><p>Stage 6 和 Stage 11 已经解释 Socket&#x2F;Netconn 与 <code>tcpip_thread</code> 的线程边界。IGMP join 正好把这套模型重新用一次。</p>
+<p>进入 <code>lwip_setsockopt()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_TCPIP_CORE_LOCKING</span></span><br><span class="line">LOCK_TCPIP_CORE();</span><br><span class="line">err = lwip_setsockopt_impl(s, level, optname, optval, optlen);</span><br><span class="line">UNLOCK_TCPIP_CORE();</span><br><span class="line"><span class="meta">#<span class="keyword">else</span></span></span><br><span class="line">cberr = tcpip_callback(lwip_setsockopt_callback,</span><br><span class="line">                       &amp;LWIP_SETGETSOCKOPT_DATA_VAR_REF(data));</span><br><span class="line"><span class="keyword">if</span> (cberr != ERR_OK) &#123;</span><br><span class="line">  LWIP_SETGETSOCKOPT_DATA_VAR_FREE(data);</span><br><span class="line">  set_errno(err_to_errno(cberr));</span><br><span class="line">  done_socket(sock);</span><br><span class="line">  <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">&#125;</span><br><span class="line">sys_arch_sem_wait((<span class="type">sys_sem_t</span> *)(LWIP_SETGETSOCKOPT_DATA_VAR_REF(data).completed_sem), <span class="number">0</span>);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>当前系列默认关注的 <code>NO_SYS=0</code>、非 Core Locking 模型下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant APP as RTP application thread</span><br><span class="line">    participant MBOX as tcpip_mbox</span><br><span class="line">    participant CORE as tcpip_thread</span><br><span class="line"></span><br><span class="line">    APP-&gt;&gt;MBOX: tcpip_callback(lwip_setsockopt_callback)</span><br><span class="line">    APP-&gt;&gt;APP: wait completed_sem</span><br><span class="line">    MBOX-&gt;&gt;CORE: callback message</span><br><span class="line">    CORE-&gt;&gt;CORE: lwip_setsockopt_impl()</span><br><span class="line">    CORE--&gt;&gt;APP: sys_sem_signal(completed_sem)</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>igmp_joingroup()</code> 最终在 lwIP Core execution context 中执行，不是两个线程同时直接改 <code>netif</code> 的 IGMP linked list。</p>
+<h2 id="5-回调进入-lwip-setsockopt-impl-：IP-ADD-MEMBERSHIP-才映射到-igmp-joingroup"><a href="#5-回调进入-lwip-setsockopt-impl-：IP-ADD-MEMBERSHIP-才映射到-igmp-joingroup" class="headerlink" title="5. 回调进入 lwip_setsockopt_impl()：IP_ADD_MEMBERSHIP 才映射到 igmp_joingroup()"></a>5. 回调进入 <code>lwip_setsockopt_impl()</code>：<code>IP_ADD_MEMBERSHIP</code> 才映射到 <code>igmp_joingroup()</code></h2><p><code>tcpip_thread</code> 执行 <code>lwip_setsockopt_callback()</code> 后进入 <code>lwip_setsockopt_impl()</code>。继续阅读 <code>IPPROTO_IP</code> 的 membership 分支：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">case</span> IP_ADD_MEMBERSHIP:</span><br><span class="line"><span class="keyword">case</span> IP_DROP_MEMBERSHIP: &#123;</span><br><span class="line">  <span class="type">err_t</span> igmp_err;</span><br><span class="line">  <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">ip_mreq</span> *<span class="title">imr</span> =</span> (<span class="type">const</span> <span class="keyword">struct</span> ip_mreq *)optval;</span><br><span class="line">  <span class="type">ip4_addr_t</span> if_addr;</span><br><span class="line">  <span class="type">ip4_addr_t</span> multi_addr;</span><br><span class="line">  LWIP_SOCKOPT_CHECK_OPTLEN_CONN_PCB_TYPE(sock, optlen, <span class="keyword">struct</span> ip_mreq, NETCONN_UDP);</span><br><span class="line">  inet_addr_to_ip4addr(&amp;if_addr, &amp;imr-&gt;imr_interface);</span><br><span class="line">  inet_addr_to_ip4addr(&amp;multi_addr, &amp;imr-&gt;imr_multiaddr);</span><br><span class="line">  <span class="keyword">if</span> (optname == IP_ADD_MEMBERSHIP) &#123;</span><br><span class="line">    <span class="keyword">if</span> (!lwip_socket_register_membership(s, &amp;if_addr, &amp;multi_addr)) &#123;</span><br><span class="line">      err = ENOMEM;</span><br><span class="line">      igmp_err = ERR_OK;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">      igmp_err = igmp_joingroup(&amp;if_addr, &amp;multi_addr);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    igmp_err = igmp_leavegroup(&amp;if_addr, &amp;multi_addr);</span><br><span class="line">    lwip_socket_unregister_membership(s, &amp;if_addr, &amp;multi_addr);</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里出现两个不同的“membership”对象：</p>
+<ol>
+<li>Socket layer 自己记录这只 socket 加入过哪些 group，便于 socket close 时自动清理；</li>
+<li>IGMP Core 的 <code>struct igmp_group</code> 记录某个 <code>netif</code> 对某个 multicast group 的协议状态。</li>
+</ol>
+<p>前者不是 IGMP state machine 本身。</p>
+<h2 id="6-igmp-joingroup-先决定在哪个-netif-上加入"><a href="#6-igmp-joingroup-先决定在哪个-netif-上加入" class="headerlink" title="6. igmp_joingroup() 先决定在哪个 netif 上加入"></a>6. <code>igmp_joingroup()</code> 先决定在哪个 <code>netif</code> 上加入</h2><p><code>lwip_setsockopt_impl()</code> 调用 <code>igmp_joingroup()</code>。它遍历 <code>netif_list</code>，匹配应用指定的 interface address；当 <code>INADDR_ANY</code> 时，可以对符合条件的 IGMP-enabled interface 执行 join。<a href="#source-s1">S1</a></p>
+<p>真正创建 group 对象和发送 report 的函数是：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">igmp_joingroup_netif(netif, groupaddr)</span><br></pre></td></tr></table></figure>
+
+<p>所以主线继续进入 <code>igmp_joingroup_netif()</code>。</p>
+<h2 id="7-但在业务-join-之前，lwip-init-与-netif-add-已经完成两层初始化"><a href="#7-但在业务-join-之前，lwip-init-与-netif-add-已经完成两层初始化" class="headerlink" title="7. 但在业务 join 之前，lwip_init() 与 netif_add() 已经完成两层初始化"></a>7. 但在业务 join 之前，<code>lwip_init()</code> 与 <code>netif_add()</code> 已经完成两层初始化</h2><p>不能把 <code>igmp_joingroup_netif()</code> 当成所有 IGMP 状态的起点。</p>
+<p>第一层发生在 <code>lwip_init()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IGMP</span></span><br><span class="line">igmp_init();</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_IGMP */</span></span></span><br></pre></td></tr></table></figure>
+
+<p><code>igmp_init()</code> 只建立两个特殊地址：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span></span><br><span class="line"><span class="title function_">igmp_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  LWIP_DEBUGF(IGMP_DEBUG, (<span class="string">&quot;igmp_init: initializing\n&quot;</span>));</span><br><span class="line"></span><br><span class="line">  IP4_ADDR(&amp;allsystems, <span class="number">224</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">1</span>);</span><br><span class="line">  IP4_ADDR(&amp;allrouters, <span class="number">224</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">2</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>第二层发生在 <code>netif_add()</code>。只要 Port 设置 <code>NETIF_FLAG_IGMP</code>，加入 <code>netif_list</code> 时会调用：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IGMP</span></span><br><span class="line"><span class="keyword">if</span> (netif-&gt;flags &amp; NETIF_FLAG_IGMP) &#123;</span><br><span class="line">  igmp_start(netif);</span><br><span class="line">&#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_IGMP */</span></span></span><br></pre></td></tr></table></figure>
+
+<p>因此业务应用执行 <code>IP_ADD_MEMBERSHIP</code> 前，IGMP module 和接口级基础状态已经存在。</p>
+<h2 id="8-igmp-start-自动创建-224-0-0-1-all-systems-group"><a href="#8-igmp-start-自动创建-224-0-0-1-all-systems-group" class="headerlink" title="8. igmp_start() 自动创建 224.0.0.1 all-systems group"></a>8. <code>igmp_start()</code> 自动创建 224.0.0.1 all-systems group</h2><p>进入 <code>igmp_start()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">igmp_start</span><span class="params">(<span class="keyword">struct</span> netif *netif)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">igmp_group</span> *<span class="title">group</span>;</span></span><br><span class="line"></span><br><span class="line">  group = igmp_lookup_group(netif, &amp;allsystems);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (group != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    group-&gt;group_state = IGMP_GROUP_IDLE_MEMBER;</span><br><span class="line">    group-&gt;use++;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (netif-&gt;igmp_mac_filter != <span class="literal">NULL</span>) &#123;</span><br><span class="line">      netif-&gt;igmp_mac_filter(netif, &amp;allsystems, NETIF_ADD_MAC_FILTER);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>224.0.0.1</code> 是 all-systems group。当前实现把它固定放在每个 IGMP-enabled <code>netif</code> 的 group list 第一个位置，并在后续 Report 遍历中专门跳过它。<a href="#source-s1">S1</a><a href="#source-s3">S3</a></p>
+<p>所以：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">NETIF_FLAG_IGMP</span><br><span class="line">    ↓ netif_add()</span><br><span class="line">igmp_start()</span><br><span class="line">    ↓</span><br><span class="line">224.0.0.1 group exists</span><br></pre></td></tr></table></figure>
+
+<p>不等于：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">所有 multicast group 都已加入</span><br></pre></td></tr></table></figure>
+
+<h2 id="9-struct-igmp-group：membership-是“每个-netif-一条-linked-list”"><a href="#9-struct-igmp-group：membership-是“每个-netif-一条-linked-list”" class="headerlink" title="9. struct igmp_group：membership 是“每个 netif 一条 linked list”"></a>9. <code>struct igmp_group</code>：membership 是“每个 netif 一条 linked list”</h2><p>当前 IGMP group 对象定义：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">igmp_group</span> &#123;</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">igmp_group</span> *<span class="title">next</span>;</span></span><br><span class="line">  <span class="type">ip4_addr_t</span>         group_address;</span><br><span class="line">  <span class="type">u8_t</span>               last_reporter_flag;</span><br><span class="line">  <span class="type">u8_t</span>               group_state;</span><br><span class="line">  <span class="type">u16_t</span>              timer;</span><br><span class="line">  <span class="type">u8_t</span>               use;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>字段分别承担：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>group_address</code></td>
+<td>当前 IPv4 multicast group</td>
+</tr>
+<tr>
+<td><code>group_state</code></td>
+<td>Non-Member &#x2F; Delaying Member &#x2F; Idle Member</td>
+</tr>
+<tr>
+<td><code>timer</code></td>
+<td>等待发送 Membership Report 的倒计时</td>
+</tr>
+<tr>
+<td><code>last_reporter_flag</code></td>
+<td>当前 Host 是否认为自己是最后一个发送 Report 的成员</td>
+</tr>
+<tr>
+<td><code>use</code></td>
+<td>同一 group 在本机被多少调用者同时使用</td>
+</tr>
+<tr>
+<td><code>next</code></td>
+<td>同一个 <code>netif</code> 上的下一条 group membership</td>
+</tr>
+</tbody></table>
+<p><code>netif_igmp_data(netif)</code> 通过 <code>netif</code> client-data slot 保存 list head。这和 Stage 13 的 DHCP client data、Stage 15 总览中的 IPv6 neighbor state 都体现了同一个设计：运行时协议状态必须绑定到具体接口或具体 destination，而不能只放一个无边界的全局标志。</p>
+<h2 id="10-igmp-lookup-group-：第一次加入业务组时从-MEMP-IGMP-GROUP-分配对象"><a href="#10-igmp-lookup-group-：第一次加入业务组时从-MEMP-IGMP-GROUP-分配对象" class="headerlink" title="10. igmp_lookup_group()：第一次加入业务组时从 MEMP_IGMP_GROUP 分配对象"></a>10. <code>igmp_lookup_group()</code>：第一次加入业务组时从 <code>MEMP_IGMP_GROUP</code> 分配对象</h2><p>进入 <code>igmp_joingroup_netif()</code> 之前，它先调用 <code>igmp_lookup_group()</code>。如果 group 不存在，该函数分配一个新的 <code>struct igmp_group</code>：<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">group = (<span class="keyword">struct</span> igmp_group *)memp_malloc(MEMP_IGMP_GROUP);</span><br><span class="line"><span class="keyword">if</span> (group != <span class="literal">NULL</span>) &#123;</span><br><span class="line">  ip4_addr_set(&amp;(group-&gt;group_address), addr);</span><br><span class="line">  group-&gt;timer              = <span class="number">0</span>;</span><br><span class="line">  group-&gt;group_state        = IGMP_GROUP_NON_MEMBER;</span><br><span class="line">  group-&gt;last_reporter_flag = <span class="number">0</span>;</span><br><span class="line">  group-&gt;use                = <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
+
+<p><code>MEMP_NUM_IGMP_GROUP</code> 默认值为 8，但具体项目可以通过配置覆盖。<a href="#source-s2">S2</a></p>
+<p>这意味着 membership 数量同样是嵌入式资源预算的一部分。第 9 个 group 是否能加入，不能脱离当前 <code>lwipopts.h</code> 的 pool 配置讨论。</p>
+<h2 id="11-进入-igmp-joingroup-netif-：join-同时触发三件事"><a href="#11-进入-igmp-joingroup-netif-：join-同时触发三件事" class="headerlink" title="11. 进入 igmp_joingroup_netif()：join 同时触发三件事"></a>11. 进入 <code>igmp_joingroup_netif()</code>：join 同时触发三件事</h2><p>从 <code>igmp_joingroup()</code> 的 call site 进入 <code>igmp_joingroup_netif()</code>。<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">igmp_joingroup_netif</span><span class="params">(<span class="keyword">struct</span> netif *netif, <span class="type">const</span> <span class="type">ip4_addr_t</span> *groupaddr)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">igmp_group</span> *<span class="title">group</span>;</span></span><br><span class="line"></span><br><span class="line">  LWIP_ASSERT_CORE_LOCKED();</span><br><span class="line"></span><br><span class="line">  LWIP_ERROR(<span class="string">&quot;igmp_joingroup_netif: attempt to join non-multicast address&quot;</span>,</span><br><span class="line">             ip4_addr_ismulticast(groupaddr), <span class="keyword">return</span> ERR_VAL;);</span><br><span class="line">  LWIP_ERROR(<span class="string">&quot;igmp_joingroup_netif: attempt to join on non-IGMP netif&quot;</span>,</span><br><span class="line">             netif-&gt;flags &amp; NETIF_FLAG_IGMP, <span class="keyword">return</span> ERR_VAL;);</span><br><span class="line"></span><br><span class="line">  group = igmp_lookup_group(netif, groupaddr);</span><br></pre></td></tr></table></figure>
+
+<p>找到新 group 后，当前实现依次做：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">1. 必要时更新 MAC multicast filter</span><br><span class="line">2. 立即发送 IGMPv2 Membership Report</span><br><span class="line">3. 启动一个短 report timer，并进入 DELAYING_MEMBER</span><br></pre></td></tr></table></figure>
+
+<p>下面逐步展开。</p>
+<h2 id="12-第一件事：igmp-mac-filter-ADD-是-Core-到-Driver-MAC-的可选边界"><a href="#12-第一件事：igmp-mac-filter-ADD-是-Core-到-Driver-MAC-的可选边界" class="headerlink" title="12. 第一件事：igmp_mac_filter(ADD) 是 Core 到 Driver&#x2F;MAC 的可选边界"></a>12. 第一件事：<code>igmp_mac_filter(ADD)</code> 是 Core 到 Driver&#x2F;MAC 的可选边界</h2><p>继续阅读 <code>igmp_joingroup_netif()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> ((group-&gt;use == <span class="number">0</span>) &amp;&amp; (netif-&gt;igmp_mac_filter != <span class="literal">NULL</span>)) &#123;</span><br><span class="line">  netif-&gt;igmp_mac_filter(netif, groupaddr, NETIF_ADD_MAC_FILTER);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里非常容易产生错误理解：</p>
+<blockquote>
+<p>IGMP join 不是“只发一个网络报文”。</p>
+</blockquote>
+<p>对带硬件 multicast filter 的 Ethernet MAC，Driver 可以通过 <code>netif_set_igmp_mac_filter()</code> 安装 callback，使 lwIP Core 在 join&#x2F;leave 时通知 Driver 添加或删除对应 multicast MAC filter。</p>
+<p>但当前 Unix TAP Port 只设置 <code>NETIF_FLAG_IGMP</code>，并没有安装 <code>igmp_mac_filter</code> callback。因此在本系列 Linux TAP 环境里：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">netif-&gt;igmp_mac_filter == NULL</span><br></pre></td></tr></table></figure>
+
+<p>当前 join 不会执行硬件过滤器编程。<a href="#source-s1">S1</a></p>
+<p>这属于 <strong>Port 实现差异</strong>，不是 IGMP 协议规定“无需 MAC filter”。实际 MCU Ethernet MAC 若默认只接收自身 unicast&#x2F;broadcast，Driver 可能必须实现这个 callback，否则 IGMP 协议状态正确，multicast data frame 仍可能在硬件层就被丢掉。</p>
+<h2 id="13-Join-的网络侧结果：igmp-send-把-membership-变成-IGMPv2-Report"><a href="#13-Join-的网络侧结果：igmp-send-把-membership-变成-IGMPv2-Report" class="headerlink" title="13. Join 的网络侧结果：igmp_send() 把 membership 变成 IGMPv2 Report"></a>13. Join 的网络侧结果：<code>igmp_send()</code> 把 membership 变成 IGMPv2 Report</h2><p>继续阅读 <code>igmp_joingroup_netif()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">IGMP_STATS_INC(igmp.tx_join);</span><br><span class="line">igmp_send(netif, group, IGMP_V2_MEMB_REPORT);</span><br><span class="line"></span><br><span class="line">igmp_start_timer(group, IGMP_JOIN_DELAYING_MEMBER_TMR);</span><br><span class="line"></span><br><span class="line">group-&gt;group_state = IGMP_GROUP_DELAYING_MEMBER;</span><br></pre></td></tr></table></figure>
+
+<p>这里不再重复解释 unsolicited Report 的协议理由；Cisco IGMP 资料与 RFC 2236 已完整说明。<a href="#source-s7">S7</a><a href="#source-s4">S4</a> 对源码只需要确认三件事：立即发送一次 Report、启动延时 timer、把 group 置为 <code>DELAYING_MEMBER</code>。</p>
+<p>进入 <code>igmp_send()</code> 后，当前实现根据 message type 选择目的地址并维护 <code>last_reporter_flag</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (type == IGMP_V2_MEMB_REPORT) &#123;</span><br><span class="line">  dest = &amp;(group-&gt;group_address);</span><br><span class="line">  ip4_addr_copy(igmp-&gt;igmp_group_address, group-&gt;group_address);</span><br><span class="line">  group-&gt;last_reporter_flag = <span class="number">1</span>;</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">  <span class="keyword">if</span> (type == IGMP_LEAVE_GROUP) &#123;</span><br><span class="line">    dest = &amp;allrouters;</span><br><span class="line">    ip4_addr_copy(igmp-&gt;igmp_group_address, group-&gt;group_address);</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>随后构造 8-byte IGMPv2 message、计算 checksum，并通过 <code>ip4_output_if_opt()</code> 以 <code>IP_PROTO_IGMP</code>、<code>IGMP_TTL=1</code> 和 Router Alert 发出。<a href="#source-s1">S1</a><a href="#source-s4">S4</a> 这些 wire-level 规则由 RFC 承担，本文保留它们只是为了把源码字段与抓包对应起来。</p>
+<h2 id="14-Ethernet-输出：IPv4-multicast-地址直接映射-multicast-MAC，不走-ARP"><a href="#14-Ethernet-输出：IPv4-multicast-地址直接映射-multicast-MAC，不走-ARP" class="headerlink" title="14. Ethernet 输出：IPv4 multicast 地址直接映射 multicast MAC，不走 ARP"></a>14. Ethernet 输出：IPv4 multicast 地址直接映射 multicast MAC，不走 ARP</h2><p><code>igmp_send()</code> 产生的 IPv4 multicast packet 最终进入 <code>etharp_output()</code>。对 multicast destination，当前实现直接构造 Ethernet multicast MAC：<a href="#source-s1">S1</a><a href="#source-s3">S3</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">&#125; <span class="keyword">else</span> <span class="keyword">if</span> (ip4_addr_ismulticast(ipaddr)) &#123;</span><br><span class="line">  mcastaddr.addr[<span class="number">0</span>] = LL_IP4_MULTICAST_ADDR_0;</span><br><span class="line">  mcastaddr.addr[<span class="number">1</span>] = LL_IP4_MULTICAST_ADDR_1;</span><br><span class="line">  mcastaddr.addr[<span class="number">2</span>] = LL_IP4_MULTICAST_ADDR_2;</span><br><span class="line">  mcastaddr.addr[<span class="number">3</span>] = ip4_addr2(ipaddr) &amp; <span class="number">0x7f</span>;</span><br><span class="line">  mcastaddr.addr[<span class="number">4</span>] = ip4_addr3(ipaddr);</span><br><span class="line">  mcastaddr.addr[<span class="number">5</span>] = ip4_addr4(ipaddr);</span><br><span class="line">  dest = &amp;mcastaddr;</span><br></pre></td></tr></table></figure>
+
+<p>RFC 1112 已完整定义 <code>01:00:5e</code> 与低 23-bit 映射。<a href="#source-s3">S3</a> 这里的实现结论只有两个：multicast output 不先发 ARP；硬件 MAC filter 命中也只是链路层粗过滤，IPv4 层仍需检查真正的 group membership。</p>
+<h2 id="15-接收路径：ip4-input-先核对-membership，再按-Protocol-2-进入-igmp-input"><a href="#15-接收路径：ip4-input-先核对-membership，再按-Protocol-2-进入-igmp-input" class="headerlink" title="15. 接收路径：ip4_input() 先核对 membership，再按 Protocol&#x3D;2 进入 igmp_input()"></a>15. 接收路径：<code>ip4_input()</code> 先核对 membership，再按 Protocol&#x3D;2 进入 <code>igmp_input()</code></h2><p>Ethernet frame 已进入 lwIP 后，<code>ip4_input()</code> 对 multicast destination 不会无条件放行：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (ip4_addr_ismulticast(ip4_current_dest_addr())) &#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IGMP</span></span><br><span class="line">  <span class="keyword">if</span> ((inp-&gt;flags &amp; NETIF_FLAG_IGMP) &amp;&amp;</span><br><span class="line">      (igmp_lookfor_group(inp, ip4_current_dest_addr()))) &#123;</span><br><span class="line">    netif = inp;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    netif = <span class="literal">NULL</span>;</span><br><span class="line">  &#125;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_IGMP */</span></span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这一步把“MAC 接收了 frame”和“当前 <code>netif</code> 真正加入了 IPv4 group”分开。对于 IGMP control packet，IPv4 Protocol field 为 2。继续阅读 <code>ip4_input()</code> 的 protocol dispatch 分支：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IGMP</span></span><br><span class="line"><span class="keyword">case</span> IP_PROTO_IGMP:</span><br><span class="line">  igmp_input(p, inp, ip4_current_dest_addr());</span><br><span class="line">  <span class="keyword">break</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span> <span class="comment">/* LWIP_IGMP */</span></span></span><br></pre></td></tr></table></figure>
+
+<p><code>igmp_input()</code> 首先检查最小长度、checksum 和当前 interface&#x2F;group context，然后才根据 IGMP message type 推进状态。<a href="#source-s1">S1</a></p>
+<h2 id="16-Query-在-lwIP-中落到“每个-group-一个-delay-timer”"><a href="#16-Query-在-lwIP-中落到“每个-group-一个-delay-timer”" class="headerlink" title="16. Query 在 lwIP 中落到“每个 group 一个 delay timer”"></a>16. Query 在 lwIP 中落到“每个 group 一个 delay timer”</h2><p>General Query &#x2F; Group-Specific Query 的协议语义直接参考 Cisco 文档和 RFC 2236。<a href="#source-s7">S7</a><a href="#source-s4">S4</a> 在实现层，<code>igmp_input()</code> 把需要响应的 membership 交给 <code>igmp_delaying_member()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">igmp_delaying_member</span><span class="params">(<span class="keyword">struct</span> igmp_group *group, <span class="type">u8_t</span> maxresp)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="keyword">if</span> ((group-&gt;group_state == IGMP_GROUP_IDLE_MEMBER) ||</span><br><span class="line">      ((group-&gt;group_state == IGMP_GROUP_DELAYING_MEMBER) &amp;&amp;</span><br><span class="line">       ((group-&gt;timer == <span class="number">0</span>) || (maxresp &lt; group-&gt;timer)))) &#123;</span><br><span class="line">    igmp_start_timer(group, maxresp);</span><br><span class="line">    group-&gt;group_state = IGMP_GROUP_DELAYING_MEMBER;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>igmp_start_timer()</code> 把协议允许的 response window 转成当前 group 的 timer；<code>IGMP_TMR_INTERVAL</code> 为 100 ms。<a href="#source-s1">S1</a><a href="#source-s2">S2</a> timer 并不是独立线程，而是注册在 lwIP cyclic timer 表中的 <code>igmp_tmr()</code>：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">sys_timeouts framework</span><br><span class="line">    ↓ every 100 ms</span><br><span class="line">igmp_tmr()</span><br><span class="line">    ↓ group-&gt;timer--</span><br><span class="line">    ↓ timer == 0</span><br><span class="line">igmp_timeout()</span><br><span class="line">    ↓ igmp_send(IGMP_V2_MEMB_REPORT)</span><br></pre></td></tr></table></figure>
+
+<p>如果 Port 提供 <code>LWIP_RAND</code>，<code>igmp_start_timer()</code> 会在允许范围内随机取 delay；没有随机源时使用当前实现的 fallback。随机等待本身为什么存在由协议资料解释，本文只关注 timer 如何落到 lwIP 对象和 callback 路径。</p>
+<h2 id="17-Report-Suppression-在源码中就是取消-timer，并推进三态-membership"><a href="#17-Report-Suppression-在源码中就是取消-timer，并推进三态-membership" class="headerlink" title="17. Report Suppression 在源码中就是取消 timer，并推进三态 membership"></a>17. Report Suppression 在源码中就是取消 timer，并推进三态 membership</h2><p>当同 group 的 <code>IGMP_V2_MEMB_REPORT</code> 到达，而本机仍处于 <code>DELAYING_MEMBER</code>，<code>igmp_input()</code> 执行：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">case</span> IGMP_V2_MEMB_REPORT:</span><br><span class="line">  IGMP_STATS_INC(igmp.rx_report);</span><br><span class="line">  <span class="keyword">if</span> (group-&gt;group_state == IGMP_GROUP_DELAYING_MEMBER) &#123;</span><br><span class="line">    group-&gt;timer = <span class="number">0</span>;</span><br><span class="line">    group-&gt;group_state = IGMP_GROUP_IDLE_MEMBER;</span><br><span class="line">    group-&gt;last_reporter_flag = <span class="number">0</span>;</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">break</span>;</span><br></pre></td></tr></table></figure>
+
+<p>协议层的 suppression 原理不在这里重复。<a href="#source-s4">S4</a><a href="#source-s7">S7</a> 对 lwIP 来说，它就是“收到他人的 Report → 取消本机 delay → 进入 Idle → 清 last-reporter”。当前三态与触发点可以压缩成：<a href="#source-s1">S1</a></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">stateDiagram-v2</span><br><span class="line">    [*] --&gt; NON_MEMBER</span><br><span class="line">    NON_MEMBER --&gt; DELAYING_MEMBER: join</span><br><span class="line">    DELAYING_MEMBER --&gt; IDLE_MEMBER: timer expires / send Report</span><br><span class="line">    DELAYING_MEMBER --&gt; IDLE_MEMBER: peer Report / suppress</span><br><span class="line">    IDLE_MEMBER --&gt; DELAYING_MEMBER: Query / start timer</span><br><span class="line">    DELAYING_MEMBER --&gt; [*]: final leave</span><br><span class="line">    IDLE_MEMBER --&gt; [*]: final leave</span><br></pre></td></tr></table></figure>
+
+<p><code>NON_MEMBER</code> 是新 group object 的初始状态；最终 leave 时当前实现会删除 object，而不是永久保留一条 Non-Member membership。</p>
+<h2 id="18-Leave-同时受本机引用计数和-last-reporter-flag-控制"><a href="#18-Leave-同时受本机引用计数和-last-reporter-flag-控制" class="headerlink" title="18. Leave 同时受本机引用计数和 last_reporter_flag 控制"></a>18. Leave 同时受本机引用计数和 <code>last_reporter_flag</code> 控制</h2><p><code>group-&gt;use</code> 是<strong>本机</strong>对同一个 membership 的引用计数，不是 LAN 上 Host 数量。多个 Socket&#x2F;模块 join 同一 group 时共享同一个 <code>struct igmp_group</code>；只有最后一个 local user 离开才进入真正 cleanup。<a href="#source-s1">S1</a></p>
+<p><code>igmp_leavegroup_netif()</code> 的关键路径是：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (group-&gt;use &lt;= <span class="number">1</span>) &#123;</span><br><span class="line">  igmp_remove_group(netif, group);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (group-&gt;last_reporter_flag) &#123;</span><br><span class="line">    IGMP_STATS_INC(igmp.tx_leave);</span><br><span class="line">    igmp_send(netif, group, IGMP_LEAVE_GROUP);</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (netif-&gt;igmp_mac_filter != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    netif-&gt;igmp_mac_filter(netif, groupaddr, NETIF_DEL_MAC_FILTER);</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  memp_free(MEMP_IGMP_GROUP, group);</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">  group-&gt;use--;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>RFC 2236 已定义 last-reporter&#x2F;Leave 语义。<a href="#source-s4">S4</a> 当前实现只是在本地记录这个事实：自己发 Report 时置 <code>last_reporter_flag=1</code>，收到别人的同组 Report 时清零。最终 leave 因而形成“从 group list 删除 → 条件发送 Leave → 可选 MAC filter DEL → 释放 <code>MEMP_IGMP_GROUP</code>”的完整生命周期。</p>
+<h2 id="19-当前-igmp-c-的边界：目标实现仍是-IGMPv2-group-membership"><a href="#19-当前-igmp-c-的边界：目标实现仍是-IGMPv2-group-membership" class="headerlink" title="19. 当前 igmp.c 的边界：目标实现仍是 IGMPv2 group membership"></a>19. 当前 <code>igmp.c</code> 的边界：目标实现仍是 IGMPv2 group membership</h2><p>当前 <code>igmp_input()</code> 的主线处理 Membership Query 与 IGMPv2 Membership Report，并发送 IGMPv2 Report&#x2F;Leave；源码没有 IGMPv3 INCLUDE&#x2F;EXCLUDE source-list state machine。<a href="#source-s1">S1</a> 因此 <code>igmp_joingroup*()</code> 表达的是 group membership，而不是完整 IGMPv3 source filtering。</p>
+<p>RFC 9776 已是当前 IGMPv3 标准。<a href="#source-s8">S8</a> 这不改变本篇源码事实：解析当前 lwIP <code>igmp.c</code> 时，RFC 2236 仍是理解其 v2 message&#x2F;state 语义最直接的对照资料。</p>
+<p>upstream RTP example 默认使用 <code>232.0.0.0</code>，本篇只把它视为现成的 <code>IP_ADD_MEMBERSHIP</code> call site；不能由这个地址反推当前 lwIP 已实现完整 SSM&#x2F;IGMPv3 语义。</p>
+<h2 id="20-Unix-TAP-与-MCU-Ethernet-MAC：同一-IGMP-Core，MAC-filter-边界不同"><a href="#20-Unix-TAP-与-MCU-Ethernet-MAC：同一-IGMP-Core，MAC-filter-边界不同" class="headerlink" title="20. Unix TAP 与 MCU Ethernet MAC：同一 IGMP Core，MAC filter 边界不同"></a>20. Unix TAP 与 MCU Ethernet MAC：同一 IGMP Core，MAC filter 边界不同</h2><p>Unix TAP Port 没有安装 <code>igmp_mac_filter</code> callback；真实 MCU Ethernet MAC 则可能需要 Driver 在 join&#x2F;leave 时编程 multicast filter。<a href="#source-s1">S1</a> 因此同一条 IGMP Core 调用链在两类 Port 上的主要差异是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">Linux TAP</span><br><span class="line">IP_ADD_MEMBERSHIP</span><br><span class="line">→ IGMP Core membership</span><br><span class="line">→ TAP/host side 接收 multicast frame</span><br><span class="line"></span><br><span class="line">MCU Ethernet</span><br><span class="line">IP_ADD_MEMBERSHIP</span><br><span class="line">→ IGMP Core membership</span><br><span class="line">→ igmp_mac_filter(ADD)</span><br><span class="line">→ MAC hardware filter</span><br><span class="line">→ frame 才有机会进入 RX DMA / lwIP</span><br></pre></td></tr></table></figure>
+
+<p>这个 callback 是 Core → Driver 的实现边界，不是 IGMP wire protocol 的一部分。</p>
+<h2 id="21-Host-实验：真实运行已经证明-timeout-warning-不阻断-IGMP-join"><a href="#21-Host-实验：真实运行已经证明-timeout-warning-不阻断-IGMP-join" class="headerlink" title="21. Host 实验：真实运行已经证明 timeout warning 不阻断 IGMP join"></a>21. Host 实验：真实运行已经证明 timeout warning 不阻断 IGMP join</h2><p>当前 <code>example_app/lwipcfg.h</code> 默认：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> LWIP_RTP_APP                  0</span></span><br></pre></td></tr></table></figure>
+
+<p>本次实验将 RTP app 打开并重新构建，然后在 Host 上启动：<a href="#source-s6">S6</a></p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">PRECONFIGURED_TAPIF=lwip0 \</span><br><span class="line">  ./build/example/contrib/ports/unix/example_app/example_app</span><br></pre></td></tr></table></figure>
+
+<p>关键输出为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Starting lwIP, local interface IP is 198.18.0.200</span><br><span class="line">ip6 linklocal address: FE80::12:34FF:FE56:78AB</span><br><span class="line">status_callback==UP, local interface IP is 198.18.0.200</span><br><span class="line">rtp_recv_thread: setsockopt(SO_RCVTIMEO) failed: errno=22</span><br></pre></td></tr></table></figure>
+
+<p>前面已经从源码解释了 <code>errno=22</code> 的来源。这个 warning 出现在 join 之前，但 RTP example 不会因此退出。继续阅读 <code>rtp_recv_thread()</code>，下一步仍会执行：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">lwip_setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP,</span><br><span class="line">                &amp;ipmreq, <span class="keyword">sizeof</span>(ipmreq));</span><br></pre></td></tr></table></figure>
+
+<p>抓包使用 IGMP filter：<a href="#source-s6">S6</a></p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> tcpdump -i lwip0 -nn -s 0 -U \</span><br><span class="line">  -w captures/stage17-igmp.pcap igmp</span><br></pre></td></tr></table></figure>
+
+<p>最终实际得到：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">2 packets captured</span><br><span class="line">2 packets received by filter</span><br><span class="line">0 packets dropped by kernel</span><br></pre></td></tr></table></figure>
+
+<p>这里的 <code>igmp</code> 是 BPF filter，所以 PCAP <strong>只包含 IGMP control traffic</strong>。<code>rtp_send_thread()</code> 同时产生的 UDP&#x2F;RTP multicast data 不会进入这个文件。若需要同时观察控制面和数据面，可以使用：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> tcpdump -i lwip0 -nn -vv \</span><br><span class="line">  <span class="string">&#x27;igmp or (udp and host 232.0.0.0 and port 4000)&#x27;</span></span><br></pre></td></tr></table></figure>
+
+<p>这样可以把两条路径明确分开：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">控制面：IP_ADD_MEMBERSHIP → IGMP Report</span><br><span class="line">数据面：RTP → UDP → 232.0.0.0:4000</span><br></pre></td></tr></table></figure>
+
+<h2 id="22-真实-PCAP：两帧-Membership-Report-与源码逐字段互证"><a href="#22-真实-PCAP：两帧-Membership-Report-与源码逐字段互证" class="headerlink" title="22. 真实 PCAP：两帧 Membership Report 与源码逐字段互证"></a>22. 真实 PCAP：两帧 Membership Report 与源码逐字段互证</h2><p>本次抓包文件已保存在 <a href="assets/stage17-igmp.pcap"><code>assets/stage17-igmp.pcap</code></a>。它包含两帧、每帧 46 bytes 的 Ethernet frame。<a href="#source-s6">S6</a></p>
+<p>两帧的关键字段完全一致：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>实际值</th>
+<th>源码&#x2F;协议对应</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Ethernet Source</td>
+<td><code>02:12:34:56:78:ab</code></td>
+<td>当前 TAP&#x2F;netif MAC</td>
+</tr>
+<tr>
+<td>Ethernet Destination</td>
+<td><code>01:00:5e:00:00:00</code></td>
+<td><code>232.0.0.0</code> 的 IPv4 multicast MAC 映射</td>
+</tr>
+<tr>
+<td>EtherType</td>
+<td><code>0x0800</code></td>
+<td>IPv4</td>
+</tr>
+<tr>
+<td>IPv4 Source</td>
+<td><code>198.18.0.200</code></td>
+<td>当前 lwIP interface address</td>
+</tr>
+<tr>
+<td>IPv4 Destination</td>
+<td><code>232.0.0.0</code></td>
+<td><code>group-&gt;group_address</code></td>
+</tr>
+<tr>
+<td>IPv4 IHL</td>
+<td><code>24 bytes</code></td>
+<td>20-byte base header + 4-byte Router Alert</td>
+</tr>
+<tr>
+<td>Router Alert</td>
+<td><code>94 04 00 00</code></td>
+<td><code>igmp_ip_output_if()</code> 添加的 option</td>
+</tr>
+<tr>
+<td>TTL</td>
+<td><code>1</code></td>
+<td><code>IGMP_TTL</code></td>
+</tr>
+<tr>
+<td>IPv4 Protocol</td>
+<td><code>2</code></td>
+<td><code>IP_PROTO_IGMP</code></td>
+</tr>
+<tr>
+<td>IGMP Type</td>
+<td><code>0x16</code></td>
+<td><code>IGMP_V2_MEMB_REPORT</code></td>
+</tr>
+<tr>
+<td>IGMP Max Resp Time</td>
+<td><code>0</code></td>
+<td>unsolicited Membership Report</td>
+</tr>
+<tr>
+<td>IGMP Group Address</td>
+<td><code>232.0.0.0</code></td>
+<td>当前 RTP multicast group</td>
+</tr>
+<tr>
+<td>IGMP Checksum</td>
+<td><code>0x01ff</code></td>
+<td><code>inet_chksum()</code> 生成</td>
+</tr>
+</tbody></table>
+<p>第一帧时间为 <code>2026-10-02 15:15:10.678452 +08:00</code>，第二帧为 <code>15:15:11.077332 +08:00</code>，间隔约 <strong>398.88 ms</strong>。<a href="#source-s6">S6</a></p>
+<p>这个间隔可以直接回到 <code>igmp_joingroup_netif()</code>：第一次 Report 在 join 时立即由 <code>igmp_send()</code> 发出，随后调用：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">igmp_start_timer(group, IGMP_JOIN_DELAYING_MEMBER_TMR);</span><br><span class="line">group-&gt;group_state = IGMP_GROUP_DELAYING_MEMBER;</span><br></pre></td></tr></table></figure>
+
+<p><code>IGMP_JOIN_DELAYING_MEMBER_TMR</code> 定义为 <code>500 / IGMP_TMR_INTERVAL</code>，而 <code>IGMP_TMR_INTERVAL=100 ms</code>，因此传入 <code>igmp_start_timer()</code> 的 <code>max_time</code> 为 5 tick。<a href="#source-s2">S2</a> Unix Port 定义了 <code>LWIP_RAND()</code>；当前 <code>igmp_start_timer()</code> 使用 <code>LWIP_RAND() % max_time</code>，再把 0 修正为 1，所以这一实现实际得到 1～4 tick，也就是约 <strong>100～400 ms</strong> 的第二次 Report delay。<a href="#source-s1">S1</a><a href="#source-s2">S2</a> 本次约 398.88 ms 的间隔与 4 tick 路径直接对应。</p>
+<p>因此，这次实验把前文的 join 发送路径完整闭环：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">sequenceDiagram</span><br><span class="line">    participant APP as rtp_recv_thread()</span><br><span class="line">    participant SOCK as lwip_setsockopt()</span><br><span class="line">    participant IGMP as IGMP Core</span><br><span class="line">    participant WIRE as lwip0 / PCAP</span><br><span class="line"></span><br><span class="line">    APP-&gt;&gt;SOCK: SO_RCVTIMEO(int 2000)</span><br><span class="line">    SOCK--&gt;&gt;APP: EINVAL / errno=22</span><br><span class="line">    APP-&gt;&gt;SOCK: IP_ADD_MEMBERSHIP 232.0.0.0</span><br><span class="line">    SOCK-&gt;&gt;IGMP: igmp_joingroup_netif()</span><br><span class="line">    IGMP-&gt;&gt;WIRE: Report #1 immediately</span><br><span class="line">    IGMP-&gt;&gt;IGMP: start join delay timer</span><br><span class="line">    IGMP-&gt;&gt;WIRE: Report #2 after ~398.88 ms</span><br></pre></td></tr></table></figure>
+
+<p>原来只靠“预期应该看到 Report”的实验，现在已经有真实 packet 证据。尤其可以确认：<code>SO_RCVTIMEO</code> warning 与 IGMP join 是两条不同的语义路径，前者失败没有阻断后者。<a href="#source-s6">S6</a></p>
+<h2 id="23-最终回看：从一个-Socket-join-到链路上的-multicast-membership"><a href="#23-最终回看：从一个-Socket-join-到链路上的-multicast-membership" class="headerlink" title="23. 最终回看：从一个 Socket join 到链路上的 multicast membership"></a>23. 最终回看：从一个 Socket join 到链路上的 multicast membership</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;rtp_recv_thread()&quot;] --&gt; B[&quot;lwip_setsockopt(IP_ADD_MEMBERSHIP)&quot;]</span><br><span class="line">    B --&gt; C[&quot;tcpip_callback / Core Lock&quot;]</span><br><span class="line">    C --&gt; D[&quot;lwip_setsockopt_impl()&quot;]</span><br><span class="line">    D --&gt; E[&quot;igmp_joingroup()&quot;]</span><br><span class="line">    E --&gt; F[&quot;igmp_joingroup_netif()&quot;]</span><br><span class="line">    F --&gt; G[&quot;MEMP_IGMP_GROUP / group state&quot;]</span><br><span class="line">    F --&gt; H[&quot;optional igmp_mac_filter(ADD)&quot;]</span><br><span class="line">    F --&gt; I[&quot;igmp_send(Membership Report)&quot;]</span><br><span class="line">    I --&gt; J[&quot;ip4_output_if_opt()&quot;]</span><br><span class="line">    J --&gt; K[&quot;etharp_output(): 01:00:5e mapping&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>运行过程中：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;Router General/Group Query&quot;] --&gt; B[&quot;ip4_input()&quot;]</span><br><span class="line">    B --&gt; C[&quot;igmp_input()&quot;]</span><br><span class="line">    C --&gt; D[&quot;igmp_delaying_member()&quot;]</span><br><span class="line">    D --&gt; E[&quot;random report timer&quot;]</span><br><span class="line">    E --&gt; F&#123;&quot;先听到别人的 Report?&quot;&#125;</span><br><span class="line">    F --&gt;|是| G[&quot;cancel own timer / IDLE_MEMBER&quot;]</span><br><span class="line">    F --&gt;|否，timer 到期| H[&quot;igmp_timeout()&quot;]</span><br><span class="line">    H --&gt; I[&quot;send Membership Report&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>离开时：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">IP_DROP_MEMBERSHIP</span><br><span class="line">    ↓</span><br><span class="line">igmp_leavegroup_netif()</span><br><span class="line">    ↓</span><br><span class="line">local use count</span><br><span class="line">    ↓</span><br><span class="line">最后一个使用者？</span><br><span class="line">    ├─ 否 → use--</span><br><span class="line">    └─ 是 → optional Leave + MAC filter DEL + memp_free</span><br></pre></td></tr></table></figure>
+
+<p>到这里，IPv4 multicast 的三个层次已经可以分开理解：</p>
+<ol>
+<li><strong>应用&#x2F;Socket</strong>：是否订阅 group，以及 UDP port；</li>
+<li><strong>IGMP&#x2F;IP</strong>：本 interface 是否属于 group、何时 Report&#x2F;Leave；</li>
+<li><strong>Ethernet&#x2F;Driver</strong>：IPv4 group 映射到哪个 multicast MAC，硬件是否放行该 MAC。</li>
+</ol>
+<p>本系列不再把 IPv6 MLD 扩展成连续源码专题；Stage 15 已保留 IPv4&#x2F;IPv6 multicast 的工程入口。后续主线继续转向 multi-netif、Driver 与实际产品集成，本文在 IGMPv2 Host membership 边界停止。</p>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-lwIP-IGMP、Socket、IPv4-Ethernet-与-Unix-TAP-实现"><a href="#S1-lwIP-IGMP、Socket、IPv4-Ethernet-与-Unix-TAP-实现" class="headerlink" title="[S1] lwIP IGMP、Socket、IPv4&#x2F;Ethernet 与 Unix TAP 实现"></a>[S1] lwIP IGMP、Socket、IPv4&#x2F;Ethernet 与 Unix TAP 实现</h3><ul>
+<li>类型：目标版本 upstream 源码；版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>src/core/ipv4/igmp.c</code>、<code>src/core/ipv4/ip4.c</code>、<code>src/core/ipv4/etharp.c</code>、<code>src/core/netif.c</code>、<code>src/api/sockets.c</code>、<code>contrib/apps/rtp/rtp.c</code>、<code>contrib/examples/example_app/lwipopts.h</code>、<code>contrib/ports/unix/port/netif/tapif.c</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9">lwIP upstream @ d08f477</a></li>
+<li>使用位置：RTP Socket join、线程桥接、IGMP init&#x2F;join&#x2F;query&#x2F;report&#x2F;leave、IPv4 multicast receive 与 Ethernet mapping</li>
+<li>支撑内容：当前 revision 的真实应用入口、Core 调用链、group state、MAC filter callback 边界与 multicast output</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-lwIP-IGMP-配置、memp-与-timer"><a href="#S2-lwIP-IGMP-配置、memp-与-timer" class="headerlink" title="[S2] lwIP IGMP 配置、memp 与 timer"></a>[S2] lwIP IGMP 配置、memp 与 timer</h3><ul>
+<li>类型：目标版本 upstream 源码；版本：<code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>src/include/lwip/opt.h</code>、<code>src/include/lwip/igmp.h</code>、<code>src/include/lwip/prot/igmp.h</code>、<code>src/include/lwip/priv/memp_std.h</code>、<code>src/core/timeouts.c</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/include/lwip">lwIP IGMP headers</a></li>
+<li>使用位置：<code>LWIP_IGMP</code>、<code>MEMP_NUM_IGMP_GROUP</code>、三态定义、100 ms cyclic timer</li>
+<li>支撑内容：编译开关、group pool、timer interval 与 message&#x2F;state 常量</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-RFC-1112-—-Host-Extensions-for-IP-Multicasting"><a href="#S3-RFC-1112-—-Host-Extensions-for-IP-Multicasting" class="headerlink" title="[S3] RFC 1112 — Host Extensions for IP Multicasting"></a>[S3] RFC 1112 — Host Extensions for IP Multicasting</h3><ul>
+<li>类型：IETF &#x2F; RFC Editor；版本：RFC 1112，1989-08</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1112.html">RFC 1112</a></li>
+<li>使用位置：IPv4 multicast host model、Ethernet <code>01:00:5e</code> 低 23-bit mapping、all-systems group 背景</li>
+<li>支撑内容：IPv4 multicast host extension 与 Ethernet multicast address mapping</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-RFC-2236-—-Internet-Group-Management-Protocol-Version-2"><a href="#S4-RFC-2236-—-Internet-Group-Management-Protocol-Version-2" class="headerlink" title="[S4] RFC 2236 — Internet Group Management Protocol, Version 2"></a>[S4] RFC 2236 — Internet Group Management Protocol, Version 2</h3><ul>
+<li>类型：IETF &#x2F; RFC Editor；版本：RFC 2236，1997-11</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc2236.html">RFC 2236</a></li>
+<li>使用位置：Query&#x2F;Report&#x2F;Leave、Max Response Time、Report suppression、last reporter、三态 host state machine</li>
+<li>支撑内容：IGMPv2 host membership protocol、message destination 与 timer&#x2F;state 语义</li>
+</ul>
+<p><a id="source-s5"></a></p>
+<h3 id="S5-RFC-3550-—-RTP-A-Transport-Protocol-for-Real-Time-Applications"><a href="#S5-RFC-3550-—-RTP-A-Transport-Protocol-for-Real-Time-Applications" class="headerlink" title="[S5] RFC 3550 — RTP: A Transport Protocol for Real-Time Applications"></a>[S5] RFC 3550 — RTP: A Transport Protocol for Real-Time Applications</h3><ul>
+<li>类型：IETF &#x2F; RFC Editor；版本：RFC 3550，2003-07</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc3550.html">RFC 3550</a></li>
+<li>使用位置：RTP 首次出现处、RTP fixed header 字段说明</li>
+<li>支撑内容：RTP 的实时媒体传输定位，以及 sequence number、timestamp、payload type、SSRC 等 fixed header 语义</li>
+</ul>
+<p><a id="source-s6"></a></p>
+<h3 id="S6-Stage-17-Linux-Host-实验日志与-IGMP-PCAP"><a href="#S6-Stage-17-Linux-Host-实验日志与-IGMP-PCAP" class="headerlink" title="[S6] Stage 17 Linux Host 实验日志与 IGMP PCAP"></a>[S6] Stage 17 Linux Host 实验日志与 IGMP PCAP</h3><ul>
+<li>类型：本地实验</li>
+<li>版本&#x2F;日期：2026-10-02；Ubuntu 24.04；TAP <code>lwip0</code>；lwIP <code>198.18.0.200</code></li>
+<li>定位：终端启动输出与 <code>docs/assets/stage17-igmp.pcap</code></li>
+<li>资源：<a href="assets/stage17-igmp.pcap"><code>assets/stage17-igmp.pcap</code></a></li>
+<li>使用位置：<code>SO_RCVTIMEO errno=22</code> 现象、两帧 IGMPv2 Membership Report、约 398.88 ms 的二次 Report 间隔</li>
+<li>支撑内容：证明 timeout warning 未阻断 <code>IP_ADD_MEMBERSHIP</code>；确认 Ethernet multicast MAC、Router Alert、TTL&#x3D;1、Protocol&#x3D;2、Type&#x3D;0x16、Group&#x3D;<code>232.0.0.0</code> 与 join delay 实际报文</li>
+</ul>
+<p><a id="source-s7"></a></p>
+<h3 id="S7-Cisco-Multicast-Configuration-Guide-—-IGMP"><a href="#S7-Cisco-Multicast-Configuration-Guide-—-IGMP" class="headerlink" title="[S7] Cisco Multicast Configuration Guide — IGMP"></a>[S7] Cisco Multicast Configuration Guide — IGMP</h3><ul>
+<li>类型：厂商官方协议说明；版本：Cisco IOS XE 17 文档，访问日期 2026-10-03</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/multicast/multicast-configuration-guide/igmp.html">Multicast Configuration Guide - IGMP</a></li>
+<li>使用位置：“建议提前阅读”“Query&#x2F;Report&#x2F;Leave”“report suppression”</li>
+<li>支撑内容：作为工程视角的补充材料，用于交叉核对 host&#x2F;router、Query&#x2F;Report&#x2F;Leave 与 report suppression；正文仍独立建立当前主线所需的协议模型</li>
+</ul>
+<p><a id="source-s8"></a></p>
+<h3 id="S8-RFC-9776-—-Internet-Group-Management-Protocol-Version-3"><a href="#S8-RFC-9776-—-Internet-Group-Management-Protocol-Version-3" class="headerlink" title="[S8] RFC 9776 — Internet Group Management Protocol, Version 3"></a>[S8] RFC 9776 — Internet Group Management Protocol, Version 3</h3><ul>
+<li>类型：IETF &#x2F; RFC Editor；版本：RFC 9776，2025-03，STD 100</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc9776.html">RFC 9776</a></li>
+<li>使用位置：“阅读源码前”</li>
+<li>支撑内容：确认当前 IGMPv3 标准状态；RFC 9776 更新 RFC 2236 并取代 RFC 3376，用于解释为什么本文仍把 RFC 2236 仅作为目标 lwIP IGMPv2 实现的对照规范</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/bd2c5fba/">https://wdfk-prog.space/posts/bd2c5fba/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LWIP/">LWIP</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/06.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/65ffa745/" title="13-dhcpv4"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/02.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">13-dhcpv4</div></div><div class="info-2"><div class="info-item-1">  教程 13：从 dhcp_start() 到 DHCP_STATE_BOUND——DHCPv4、ACD、Timer 与真实抓包 摘要：从 example_app 的 DHCP 入口追踪 DORA、UDP 回调、ACD、地址绑定与租约 Timer，并用真实 13 帧 PCAP 验证状态迁移。  [TOC] DHCPv4（Dynamic Host Configuration Protocol for IPv4，IPv4 动态主机配置协议）解决的是“主机刚接入网络、还没有可用 IPv4 配置时，怎样从网络中的 DHCP Server 获得地址、子网掩码、默认网关、DNS Server 与租约生命周期参数”。当前 lwIP 充当 DHCP Client；Client 使用 UDP 68，Server 使用 UDP 67。由于 Client 在第一次请求时可能仍是 0.0.0.0，首次租约阶段允许依赖广播和链路层可达性完成配置交换。S3S6 本文还会遇到 ACD（Address Conflict Detection，IPv4 地址冲突检测）。ACD 不是 DHCP 的另一种报文，而是在...</div></div></div></a><a class="pagination-related" href="/posts/4e7980f2/" title="12-mem-memp-pbuf"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/04.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">12-mem-memp-pbuf</div></div><div class="info-2"><div class="info-item-1">  教程 12：从 pbuf_alloc() &#x2F; tcp_new() 到资源回收——mem、memp 与 pbuf 内存体系 摘要：把 pbuf、UDP&#x2F;TCP PCB、TCP segment、Netconn 与 tcpip message 放回统一资源模型，理解 variable heap、typed pools 与 packet-buffer policy。  [TOC] 前面的文章已经遇到很多“分配失败”入口：pbuf_alloc()、udp_new()、tcp_new()、netconn_new()、tcpip_inpkt()。这里的 **allocator（内存分配器）**泛指“根据某种资源策略取得并回收内存&#x2F;对象”的机制。如果把这些入口全部理解成同一个 malloc()，就会误判资源瓶颈：一个系统可能还有 variable-size heap 空间，却已经耗尽 TCP PCB 这类固定对象池；也可能控制对象充足，却因为 packet buffer pool 不够而无法接收新帧。 阅读源码前：建议提前阅读 lwIP 2.1.x — Pack...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/b313493/" title="39-rtthread-lwip-port"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">39-rtthread-lwip-port</div></div><div class="info-2"><div class="info-item-1">  教程 39：从 lwip_system_init() 到 tcpip_input()——RT-Thread 如何把 lwIP 接进 RTOS 与 Ethernet Device 摘要：从 RT-Thread 的 lwIP 初始化入口追踪 Kconfig、sys_arch、eth_device、RX&#x2F;TX 线程与 tcpip_input，建立真实 RTOS Port 的完整桥接流程。  [TOC] Stage 38 已经把 lwIP Port Contract 拆成四块：lwipopts.h 配置、源码构建选择、OS&#x2F;Arch Port、Network Port。Stage 39 不再重复这些抽象的原理，而是直接拿 RT-Thread 当前源码回答一个问题：RT-Thread 怎样把这些 contract 一项项落成可运行代码，并把一个 Ethernet Driver 最终接到 tcpip_thread。 RT-Thread 的完整 Device Framework、NetDev、SAL、DFS 并不是本篇目标。它们只在当前调用链真正出现时说明接口位置；So...</div></div></div></a><a class="pagination-related" href="/posts/4b242a34/" title="18-multi-netif-routing"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">18-multi-netif-routing</div></div><div class="info-2"><div class="info-item-1">  教程 18：从 udp_sendto() 到 etharp_output()——Multi-netif IPv4 路由、Default Netif、Gateway 与下一跳 摘要：从 UDP&#x2F;TCP 发送入口追踪 IPv4 multi-netif 出口选择、默认接口、源地址与 Gateway 下一跳，厘清 route 与 ARP 的职责边界。  [TOC] Multi-netif 表示同一个 lwIP 实例同时存在多个 struct netif 网络接口。本文标题中的 Default Netif（默认接口） 是没有更具体匹配时的 fallback outgoing interface；Gateway（网关） 是已经选定某张接口以后，在当前二层链路上需要直接发送给的下一跳 IP。两者不是同一个对象，也不等价于“默认路由 &#x3D; 网关地址”。 Stage 18 只回答 IPv4 发送方向上的一个问题：应用没有显式固定接口时，lwIP 怎样先选择 outgoing netif，然后怎样决定 Ethernet 下一跳是 destination 本身还是该接口的 gat...</div></div></div></a><a class="pagination-related" href="/posts/f66d8c4d/" title="16-ipv4-fragmentation-reassembly"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">16-ipv4-fragmentation-reassembly</div></div><div class="info-2"><div class="info-item-1">  教程 16：从 MTU 到 ip4_frag() &#x2F; ip4_reass()——IPv4 分片、重组、超时与内存压力 摘要：沿 IPv4 发送与接收源码链，理解 MTU 如何触发分片、Offset&#x2F;MF&#x2F;ID 如何组织片段，以及 lwIP 怎样排序、重组、超时清理并限制资源占用。  [TOC] IPv4 fragmentation（IPv4 分片）解决的是“一个 IPv4 datagram 比当前可发送路径允许的 packet 更大时，怎样把它拆成多个 fragment”；reassembly（重组）则在最终目的主机把这些 fragment 恢复成原始 datagram。Fragment 不是新的传输层或 ICMP message，每一片仍然携带自己的 IPv4 Header，并通过 Identification、MF（More Fragments）和 Fragment Offset 表明自己属于哪个原始 datagram、位于什么位置、后面是否还有片段。S4S12 MTU（Maximum Transmission Unit，最大传输单元）表示某...</div></div></div></a><a class="pagination-related" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">02-netif-tap-first-ping</div></div><div class="info-2"><div class="info-item-1">  教程 02：从 main() 到第一次 Ping——netif、TAP、ARP 与 ICMP 的完整源码链 摘要：先建立 IPv4 Ping 的 Ethernet、ARP、IPv4 与 ICMP 交互模型，再从 Unix example_app 入口追到 TAP 接收、协议栈线程、Echo Reply 与二层发送。   [TOC] 这一阶段要回答的不是“Ping 命令怎么用”，而是一个完整的数据路径问题：  Linux Host 执行 ping 198.18.0.200 后，为什么会先出现 ARP，再出现 ICMP；这些 Ethernet frame 又怎样从 Linux TAP 进入 lwIP，经过 netif、tcpip_thread、ARP、IPv4、ICMP 后返回 Host？  先把标题里的四个对象说清楚。netif 是 lwIP 的 network interface（网络接口）抽象对象，把协议栈 **Core（核心协议处理代码与执行上下文）**和具体 **Port（面向操作系统&#x2F;设备的适配层）**连接起来；TAP 是 Linux 提供给 userspa...</div></div></div></a><a class="pagination-related" href="/posts/8c3324b0/" title="00-series-index"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-series-index</div></div><div class="info-2"><div class="info-item-1">lwIP Source Lab 教程索引本系列持续跟踪官方 lwip-tcpip/lwip 的 master。绝大多数源码篇采用 Source-driven 主线：从当前行为的真实入口函数、注册入口或外部 API 开始，沿实际调用、数据与状态变化向下追踪。 Stage 00、15、31、38 与 45 属于 Theory of Operation &#x2F; Application Note 型总览：先建立系统位置和完整数据流，再解释关键机制；它们不会覆盖后续源码篇“从真实入口开始”的硬约束。 Stage 00～45 Stage 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界从 Ethernet Frame、PHY&#x2F;MAC 分层出发，沿 DMA&#x2F;Driver、pbuf、netif 建立完整软硬件边界，并区分链路、接口、IP 与上层就绪状态。 Stage 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图沿 submodule、Host 依赖、Debug build ...</div></div></div></a><a class="pagination-related" href="/posts/98b3176e/" title="01-linux-lwip-lab"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">01-linux-lwip-lab</div></div><div class="info-2"><div class="info-item-1">  教程 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图 摘要：沿一条可重复的成功路径建立 lwIP Linux Host 学习环境：锁定 upstream revision、生成 Debug build tree 与 compile database，并把 VS Code 带到真实源码入口。  [TOC] 这一篇不先讲 TCP、UDP 或 pbuf。目标只有一个：把仓库准备到“下一篇可以直接从 main() 开始读源码”的状态。 本文把官方 lwip-tcpip/lwip 仓库称为 upstream（上游仓库）；master 是当前系列持续跟踪的 upstream 分支。HEAD 表示当前 checkout 指向的 Git commit；**Debug build tree（调试构建树）**是 CMake 为 Debug 配置生成的构建目录；**compile database（编译数据库）**则记录每个 C 源文件真实使用的 compiler、include path、宏和编译选项。后文会在第一次操作这些对象时继续展开。...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E6%95%99%E7%A8%8B-17%EF%BC%9A%E4%BB%8E-IP-ADD-MEMBERSHIP-%E5%88%B0-igmp-input-%E2%80%94%E2%80%94IPv4-Multicast%E3%80%81IGMPv2%E3%80%81MAC-Filter-%E4%B8%8E%E7%BB%84%E6%88%90%E5%91%98%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.</span> <span class="toc-text">教程 17：从 IP_ADD_MEMBERSHIP 到 igmp_input()——IPv4 Multicast、IGMPv2、MAC Filter 与组成员状态机</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#0-%E9%98%85%E8%AF%BB%E6%BA%90%E7%A0%81%E5%89%8D%EF%BC%9A%E5%BB%BA%E8%AE%AE%E6%8F%90%E5%89%8D%E9%98%85%E8%AF%BB"><span class="toc-number">1.1.</span> <span class="toc-text">0. 阅读源码前：建议提前阅读</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#0-1-%E5%85%88%E5%BB%BA%E7%AB%8B-IGMPv2-%E6%9C%80%E5%B0%8F%E5%8D%8F%E8%AE%AE%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.1.1.</span> <span class="toc-text">0.1 先建立 IGMPv2 最小协议模型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#0-2-%E4%B8%80%E6%AC%A1%E5%AE%8C%E6%95%B4-membership-%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E5%85%88%E7%9C%8B%E5%8D%8F%E8%AE%AE%EF%BC%8C%E5%86%8D%E7%9C%8B%E6%BA%90%E7%A0%81"><span class="toc-number">1.1.2.</span> <span class="toc-text">0.2 一次完整 membership 生命周期先看协议，再看源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#0-3-%E5%8D%8F%E8%AE%AE%E5%8A%A8%E4%BD%9C%E4%B8%8E-lwIP-%E6%BA%90%E7%A0%81%E5%85%88%E5%BB%BA%E7%AB%8B%E5%8F%8C%E8%BD%A8%E6%98%A0%E5%B0%84"><span class="toc-number">1.1.3.</span> <span class="toc-text">0.3 协议动作与 lwIP 源码先建立双轨映射</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-Multicast-%E7%9A%84%E7%AC%AC%E4%B8%80%E5%B1%82%E8%BE%B9%E7%95%8C%EF%BC%9AUDP-Port-%E5%92%8C-Multicast-Group-%E6%98%AF%E4%B8%A4%E4%B8%AA%E4%B8%8D%E5%90%8C%E7%AD%9B%E9%80%89%E6%9D%A1%E4%BB%B6"><span class="toc-number">1.2.</span> <span class="toc-text">1. Multicast 的第一层边界：UDP Port 和 Multicast Group 是两个不同筛选条件</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E5%BD%93%E5%89%8D-example-%E5%B7%B2%E7%BB%8F%E5%90%AF%E7%94%A8-IGMP-Core%EF%BC%8C%E4%BD%86%E6%B2%A1%E6%9C%89%E9%BB%98%E8%AE%A4%E5%8A%A0%E5%85%A5%E4%B8%9A%E5%8A%A1%E7%BB%84"><span class="toc-number">1.3.</span> <span class="toc-text">2. 当前 example 已经启用 IGMP Core，但没有默认加入业务组</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E7%9C%9F%E5%AE%9E%E5%BA%94%E7%94%A8%E5%85%A5%E5%8F%A3%EF%BC%9A%E5%85%88%E8%AE%A4%E8%AF%86-RTP-example%EF%BC%8C%E5%86%8D%E8%BF%9B%E5%85%A5-rtp-recv-thread-%E7%9A%84-multicast-join"><span class="toc-number">1.4.</span> <span class="toc-text">3. 真实应用入口：先认识 RTP example，再进入 rtp_recv_thread() 的 multicast join</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-rtp-recv-thread-%E7%9A%84%E7%9C%9F%E5%AE%9E%E9%A1%BA%E5%BA%8F%E9%87%8C%E8%BF%98%E6%9C%89%E4%B8%80%E6%AC%A1-SO-RCVTIMEO"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 rtp_recv_thread() 的真实顺序里还有一次 SO_RCVTIMEO</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BD%93%E5%89%8D-Ubuntu-Host-%E4%BC%9A%E6%89%93%E5%8D%B0-SO-RCVTIMEO-errno-22"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 为什么当前 Ubuntu Host 会打印 SO_RCVTIMEO errno&#x3D;22</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-lwip-setsockopt-%E4%B8%8D%E4%B8%80%E5%AE%9A%E7%9B%B4%E6%8E%A5%E5%9C%A8-application-thread-%E4%BF%AE%E6%94%B9-IGMP-Core"><span class="toc-number">1.5.</span> <span class="toc-text">4. lwip_setsockopt() 不一定直接在 application thread 修改 IGMP Core</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E5%9B%9E%E8%B0%83%E8%BF%9B%E5%85%A5-lwip-setsockopt-impl-%EF%BC%9AIP-ADD-MEMBERSHIP-%E6%89%8D%E6%98%A0%E5%B0%84%E5%88%B0-igmp-joingroup"><span class="toc-number">1.6.</span> <span class="toc-text">5. 回调进入 lwip_setsockopt_impl()：IP_ADD_MEMBERSHIP 才映射到 igmp_joingroup()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-igmp-joingroup-%E5%85%88%E5%86%B3%E5%AE%9A%E5%9C%A8%E5%93%AA%E4%B8%AA-netif-%E4%B8%8A%E5%8A%A0%E5%85%A5"><span class="toc-number">1.7.</span> <span class="toc-text">6. igmp_joingroup() 先决定在哪个 netif 上加入</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E4%BD%86%E5%9C%A8%E4%B8%9A%E5%8A%A1-join-%E4%B9%8B%E5%89%8D%EF%BC%8Clwip-init-%E4%B8%8E-netif-add-%E5%B7%B2%E7%BB%8F%E5%AE%8C%E6%88%90%E4%B8%A4%E5%B1%82%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="toc-number">1.8.</span> <span class="toc-text">7. 但在业务 join 之前，lwip_init() 与 netif_add() 已经完成两层初始化</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-igmp-start-%E8%87%AA%E5%8A%A8%E5%88%9B%E5%BB%BA-224-0-0-1-all-systems-group"><span class="toc-number">1.9.</span> <span class="toc-text">8. igmp_start() 自动创建 224.0.0.1 all-systems group</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-struct-igmp-group%EF%BC%9Amembership-%E6%98%AF%E2%80%9C%E6%AF%8F%E4%B8%AA-netif-%E4%B8%80%E6%9D%A1-linked-list%E2%80%9D"><span class="toc-number">1.10.</span> <span class="toc-text">9. struct igmp_group：membership 是“每个 netif 一条 linked list”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-igmp-lookup-group-%EF%BC%9A%E7%AC%AC%E4%B8%80%E6%AC%A1%E5%8A%A0%E5%85%A5%E4%B8%9A%E5%8A%A1%E7%BB%84%E6%97%B6%E4%BB%8E-MEMP-IGMP-GROUP-%E5%88%86%E9%85%8D%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.11.</span> <span class="toc-text">10. igmp_lookup_group()：第一次加入业务组时从 MEMP_IGMP_GROUP 分配对象</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E8%BF%9B%E5%85%A5-igmp-joingroup-netif-%EF%BC%9Ajoin-%E5%90%8C%E6%97%B6%E8%A7%A6%E5%8F%91%E4%B8%89%E4%BB%B6%E4%BA%8B"><span class="toc-number">1.12.</span> <span class="toc-text">11. 进入 igmp_joingroup_netif()：join 同时触发三件事</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E7%AC%AC%E4%B8%80%E4%BB%B6%E4%BA%8B%EF%BC%9Aigmp-mac-filter-ADD-%E6%98%AF-Core-%E5%88%B0-Driver-MAC-%E7%9A%84%E5%8F%AF%E9%80%89%E8%BE%B9%E7%95%8C"><span class="toc-number">1.13.</span> <span class="toc-text">12. 第一件事：igmp_mac_filter(ADD) 是 Core 到 Driver&#x2F;MAC 的可选边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-Join-%E7%9A%84%E7%BD%91%E7%BB%9C%E4%BE%A7%E7%BB%93%E6%9E%9C%EF%BC%9Aigmp-send-%E6%8A%8A-membership-%E5%8F%98%E6%88%90-IGMPv2-Report"><span class="toc-number">1.14.</span> <span class="toc-text">13. Join 的网络侧结果：igmp_send() 把 membership 变成 IGMPv2 Report</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-Ethernet-%E8%BE%93%E5%87%BA%EF%BC%9AIPv4-multicast-%E5%9C%B0%E5%9D%80%E7%9B%B4%E6%8E%A5%E6%98%A0%E5%B0%84-multicast-MAC%EF%BC%8C%E4%B8%8D%E8%B5%B0-ARP"><span class="toc-number">1.15.</span> <span class="toc-text">14. Ethernet 输出：IPv4 multicast 地址直接映射 multicast MAC，不走 ARP</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E6%8E%A5%E6%94%B6%E8%B7%AF%E5%BE%84%EF%BC%9Aip4-input-%E5%85%88%E6%A0%B8%E5%AF%B9-membership%EF%BC%8C%E5%86%8D%E6%8C%89-Protocol-2-%E8%BF%9B%E5%85%A5-igmp-input"><span class="toc-number">1.16.</span> <span class="toc-text">15. 接收路径：ip4_input() 先核对 membership，再按 Protocol&#x3D;2 进入 igmp_input()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-Query-%E5%9C%A8-lwIP-%E4%B8%AD%E8%90%BD%E5%88%B0%E2%80%9C%E6%AF%8F%E4%B8%AA-group-%E4%B8%80%E4%B8%AA-delay-timer%E2%80%9D"><span class="toc-number">1.17.</span> <span class="toc-text">16. Query 在 lwIP 中落到“每个 group 一个 delay timer”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-Report-Suppression-%E5%9C%A8%E6%BA%90%E7%A0%81%E4%B8%AD%E5%B0%B1%E6%98%AF%E5%8F%96%E6%B6%88-timer%EF%BC%8C%E5%B9%B6%E6%8E%A8%E8%BF%9B%E4%B8%89%E6%80%81-membership"><span class="toc-number">1.18.</span> <span class="toc-text">17. Report Suppression 在源码中就是取消 timer，并推进三态 membership</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-Leave-%E5%90%8C%E6%97%B6%E5%8F%97%E6%9C%AC%E6%9C%BA%E5%BC%95%E7%94%A8%E8%AE%A1%E6%95%B0%E5%92%8C-last-reporter-flag-%E6%8E%A7%E5%88%B6"><span class="toc-number">1.19.</span> <span class="toc-text">18. Leave 同时受本机引用计数和 last_reporter_flag 控制</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#19-%E5%BD%93%E5%89%8D-igmp-c-%E7%9A%84%E8%BE%B9%E7%95%8C%EF%BC%9A%E7%9B%AE%E6%A0%87%E5%AE%9E%E7%8E%B0%E4%BB%8D%E6%98%AF-IGMPv2-group-membership"><span class="toc-number">1.20.</span> <span class="toc-text">19. 当前 igmp.c 的边界：目标实现仍是 IGMPv2 group membership</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#20-Unix-TAP-%E4%B8%8E-MCU-Ethernet-MAC%EF%BC%9A%E5%90%8C%E4%B8%80-IGMP-Core%EF%BC%8CMAC-filter-%E8%BE%B9%E7%95%8C%E4%B8%8D%E5%90%8C"><span class="toc-number">1.21.</span> <span class="toc-text">20. Unix TAP 与 MCU Ethernet MAC：同一 IGMP Core，MAC filter 边界不同</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#21-Host-%E5%AE%9E%E9%AA%8C%EF%BC%9A%E7%9C%9F%E5%AE%9E%E8%BF%90%E8%A1%8C%E5%B7%B2%E7%BB%8F%E8%AF%81%E6%98%8E-timeout-warning-%E4%B8%8D%E9%98%BB%E6%96%AD-IGMP-join"><span class="toc-number">1.22.</span> <span class="toc-text">21. Host 实验：真实运行已经证明 timeout warning 不阻断 IGMP join</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-%E7%9C%9F%E5%AE%9E-PCAP%EF%BC%9A%E4%B8%A4%E5%B8%A7-Membership-Report-%E4%B8%8E%E6%BA%90%E7%A0%81%E9%80%90%E5%AD%97%E6%AE%B5%E4%BA%92%E8%AF%81"><span class="toc-number">1.23.</span> <span class="toc-text">22. 真实 PCAP：两帧 Membership Report 与源码逐字段互证</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#23-%E6%9C%80%E7%BB%88%E5%9B%9E%E7%9C%8B%EF%BC%9A%E4%BB%8E%E4%B8%80%E4%B8%AA-Socket-join-%E5%88%B0%E9%93%BE%E8%B7%AF%E4%B8%8A%E7%9A%84-multicast-membership"><span class="toc-number">1.24.</span> <span class="toc-text">23. 最终回看：从一个 Socket join 到链路上的 multicast membership</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.25.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-lwIP-IGMP%E3%80%81Socket%E3%80%81IPv4-Ethernet-%E4%B8%8E-Unix-TAP-%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.25.1.</span> <span class="toc-text">[S1] lwIP IGMP、Socket、IPv4&#x2F;Ethernet 与 Unix TAP 实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-lwIP-IGMP-%E9%85%8D%E7%BD%AE%E3%80%81memp-%E4%B8%8E-timer"><span class="toc-number">1.25.2.</span> <span class="toc-text">[S2] lwIP IGMP 配置、memp 与 timer</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-RFC-1112-%E2%80%94-Host-Extensions-for-IP-Multicasting"><span class="toc-number">1.25.3.</span> <span class="toc-text">[S3] RFC 1112 — Host Extensions for IP Multicasting</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-RFC-2236-%E2%80%94-Internet-Group-Management-Protocol-Version-2"><span class="toc-number">1.25.4.</span> <span class="toc-text">[S4] RFC 2236 — Internet Group Management Protocol, Version 2</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S5-RFC-3550-%E2%80%94-RTP-A-Transport-Protocol-for-Real-Time-Applications"><span class="toc-number">1.25.5.</span> <span class="toc-text">[S5] RFC 3550 — RTP: A Transport Protocol for Real-Time Applications</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S6-Stage-17-Linux-Host-%E5%AE%9E%E9%AA%8C%E6%97%A5%E5%BF%97%E4%B8%8E-IGMP-PCAP"><span class="toc-number">1.25.6.</span> <span class="toc-text">[S6] Stage 17 Linux Host 实验日志与 IGMP PCAP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S7-Cisco-Multicast-Configuration-Guide-%E2%80%94-IGMP"><span class="toc-number">1.25.7.</span> <span class="toc-text">[S7] Cisco Multicast Configuration Guide — IGMP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S8-RFC-9776-%E2%80%94-Internet-Group-Management-Protocol-Version-3"><span class="toc-number">1.25.8.</span> <span class="toc-text">[S8] RFC 9776 — Internet Group Management Protocol, Version 3</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/4072c3c5/" title="11-sys-arch"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="11-sys-arch"/></a><div class="content"><a class="title" href="/posts/4072c3c5/" title="11-sys-arch">11-sys-arch</a><time datetime="2026-10-06T07:49:26.195Z" title="更新于 2026-10-06 15:49:26">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/1c6cd58/" title="10-tcp-out-of-order"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="10-tcp-out-of-order"/></a><div class="content"><a class="title" href="/posts/1c6cd58/" title="10-tcp-out-of-order">10-tcp-out-of-order</a><time datetime="2026-10-06T07:44:29.632Z" title="更新于 2026-10-06 15:44:29">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873586f3/" title="readme"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="readme"/></a><div class="content"><a class="title" href="/posts/873586f3/" title="readme">readme</a><time datetime="2026-10-06T07:32:02.710Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="WIFI-Direct学习笔记系列"/></a><div class="content"><a class="title" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列">WIFI-Direct学习笔记系列</a><time datetime="2026-10-06T07:32:02.709Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="15-group-data-plane-tx-rx"/></a><div class="content"><a class="title" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx">15-group-data-plane-tx-rx</a><time datetime="2026-10-06T07:32:02.709Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/06.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '8ccadc18ecd677887d8d82327523a6da'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18],["2026-10-03",49]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"LWIP","children":[],"count":49,"path":"LWIP"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>

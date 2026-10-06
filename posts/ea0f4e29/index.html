@@ -1,0 +1,1406 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>28-ppp-core-pppos-framing | wdfk-prog的个人博客</title><meta name="author" content="Liya Huang"><meta name="copyright" content="Liya Huang"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="教程 28：从 pppos_create() 到 ppp_input()——PPP Core、PPPoS 串口字节流与 HDLC-like Framing 摘要：从 upstream PPPoS example 追踪 PPP netif 创建、串口 RX 跨线程输入、HDLC-like frame 解码、Protocol 分发，以及 TX 的 ACCM、PFC&#x2F;ACFC 与 FCS">
+<meta property="og:type" content="article">
+<meta property="og:title" content="28-ppp-core-pppos-framing">
+<meta property="og:url" content="https://wdfk-prog.space/posts/ea0f4e29/index.html">
+<meta property="og:site_name" content="wdfk-prog的个人博客">
+<meta property="og:description" content="教程 28：从 pppos_create() 到 ppp_input()——PPP Core、PPPoS 串口字节流与 HDLC-like Framing 摘要：从 upstream PPPoS example 追踪 PPP netif 创建、串口 RX 跨线程输入、HDLC-like frame 解码、Protocol 分发，以及 TX 的 ACCM、PFC&#x2F;ACFC 与 FCS">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://wdfk-prog.space/images/covers/08.jpg">
+<meta property="article:published_time" content="2026-10-03T08:27:36.000Z">
+<meta property="article:modified_time" content="2026-10-06T07:32:02.586Z">
+<meta property="article:author" content="Liya Huang">
+<meta property="article:tag" content="LWIP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://wdfk-prog.space/images/covers/08.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "28-ppp-core-pppos-framing",
+  "url": "https://wdfk-prog.space/posts/ea0f4e29/",
+  "image": "https://wdfk-prog.space/images/covers/08.jpg",
+  "datePublished": "2026-10-03T08:27:36.000Z",
+  "dateModified": "2026-10-06T07:32:02.586Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Liya Huang",
+      "url": "https://github.com/wdfk-prog"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/images/favicon.png"><link rel="canonical" href="https://wdfk-prog.space/posts/ea0f4e29/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//www.google-analytics.com" crossorigin=""/><link rel="preconnect" href="//hm.baidu.com"/><link rel="preconnect" href="//static.cloudflareinsights.com"/><link rel="preconnect" href="//www.clarity.ms"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><meta name="google-site-verification" content="xxxxxx"/><meta name="baidu-site-verification" content="xxxxxxx"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.css" media="print" onload="this.media='all'"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.min.css" media="print" onload="this.media='all'"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script><script>(adsbygoogle = window.adsbygoogle || []).push({
+  google_ad_client: 'ca-pub-3978542742563797',
+  enable_page_level_ads: 'true'
+});</script><script>var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3c49dd4913ab43efb1bfc8d12b1cded9";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+btf.addGlobalFn('pjaxComplete', () => {
+  _hmt.push(['_trackPageview',window.location.pathname])
+}, 'baidu_analytics')
+</script><script async="async" src="https://www.googletagmanager.com/gtag/js?id=G-PF2CVP2PL4"></script><script>window.dataLayer = window.dataLayer || []
+function gtag(){dataLayer.push(arguments)}
+gtag('js', new Date())
+gtag('config', 'G-PF2CVP2PL4')
+btf.addGlobalFn('pjaxComplete', () => {
+  gtag('config', 'G-PF2CVP2PL4', {'page_path': window.location.pathname})
+}, 'google_analytics')
+</script><script defer="defer" data-pjax="data-pjax" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon="{&quot;token&quot;: &quot;17ff914b5e28493597b7dc19f3356022&quot;}"></script><script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "tkaenn1tjv");
+</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+"https://www.googletagmanager.com/gtm.js?id="+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-MF3J339H');
+btf.addGlobalFn('pjaxComplete', () => {
+  dataLayer.push({'event': 'pjaxComplete', 'page_title': document.title, 'page_location': location.href, 'page_path': window.location.pathname})
+}, 'google_tag_manager')</script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.json","preload":false,"top_n_per_article":1,"unescape":false,"pagination":{"enable":false,"hitsPerPage":8},"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":400,"highlightFullpage":true,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: true,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'fancybox',
+  Snackbar: {"chs_to_cht":"已切换为繁体中文","cht_to_chs":"已切换为简体中文","day_to_night":"已切换为深色模式","night_to_day":"已切换为浅色模式","bgLight":"#49b1f5","bgDark":"#1f1f1f","position":"bottom-left"},
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: true,
+  percent: {
+    toc: true,
+    rightside: true,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '28-ppp-core-pppos-framing',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 8.0.0"><link rel="alternate" href="/atom.xml" title="wdfk-prog的个人博客" type="application/atom+xml">
+</head><body><div id="loading-box"><div class="loading-left-bg"></div><div class="loading-right-bg"></div><div class="spinner-box"><div class="configure-border-1"><div class="configure-core"></div></div><div class="configure-border-2"><div class="configure-core"></div></div><div class="loading-word">加载中...</div></div></div><script>(()=>{
+  const $loadingBox = document.getElementById('loading-box')
+  const $body = document.body
+  const preloader = {
+    endLoading: () => {
+      if ($loadingBox.classList.contains('loaded')) return
+      $body.style.overflow = ''
+      $loadingBox.classList.add('loaded')
+    },
+    initLoading: () => {
+      $body.style.overflow = 'hidden'
+      $loadingBox.classList.remove('loaded')
+    }
+  }
+
+  preloader.initLoading()
+
+  if (document.readyState === 'complete') {
+    preloader.endLoading()
+  } else {
+    window.addEventListener('load', preloader.endLoading)
+    document.addEventListener('DOMContentLoaded', preloader.endLoading)
+    // Add timeout protection: force end after 7 seconds
+    setTimeout(preloader.endLoading, 7000)
+  }
+
+  if (true) {
+    btf.addGlobalFn('pjaxSend', preloader.initLoading, 'preloader_init')
+    btf.addGlobalFn('pjaxComplete', preloader.endLoading, 'preloader_end')
+  }
+})()</script><div id="web_bg" style="background-image: url(/images/subtle-texture.png);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/images/covers/08.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><img class="site-icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/my-logo.png" alt="Logo"><span class="site-name">wdfk-prog的个人博客</span></a><a class="nav-page-title" href="/"><span class="site-name">28-ppp-core-pppos-framing</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 首页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-book-open"></i><span> 页面</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 归档</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-folder-open"></i><span> 分类</span></a></li><li><a class="site-page child" href="/gallery/"><i class="fa-fw fas fa-images"></i><span> 图库</span></a></li><li><a class="site-page child" href="/shuoshuo/"><i class="fa-fw fas fa-quote-left"></i><span> 说说</span></a></li><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 示例</span></a></li></ul></div><div class="menus_item"><span class="site-page group hide"><i class="fa-fw fas fa-list"></i><span> 清单</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></li><li><a class="site-page child" href="/movies/"><i class="fa-fw fas fa-video"></i><span> 电影</span></a></li><li><a class="site-page child" href="/books/"><i class="fa-fw fas fa-book"></i><span> 书籍</span></a></li><li><a class="site-page child" href="/games/"><i class="fa-fw fas fa-gamepad"></i><span> 游戏</span></a></li><li><a class="site-page child" href="/songs/"><i class="fa-fw fas fa-music"></i><span> 歌曲</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-comments"></i><span> 留言板</span></a></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">28-ppp-core-pppos-framing<a class="post-edit-link" href="null_posts/LWIP/28-ppp-core-pppos-framing.md" title="编辑" target="_blank"><i class="fas fa-pencil-alt"></i></a></h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-03T08:27:36.000Z" title="发表于 2026-10-03 16:27:36">2026-10-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-06T07:32:02.586Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/LWIP/">LWIP</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">5.4k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>24分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span><span class="post-meta-separator">|</span><span class="post-meta-commentcount"><i class="far fa-comments fa-fw post-meta-icon"></i><span class="post-meta-label">评论数:</span><a href="/posts/ea0f4e29/#post-comment"><span class="gitalk-comment-count"><i class="fa-solid fa-spinner fa-spin"></i></span></a></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;已经过了&quot;,&quot;messageNext&quot;:&quot;自上次更新以来，文章的内容可能已经过时&quot;,&quot;postUpdate&quot;:&quot;2026-10-06 15:32:02&quot;}" hidden></div><meta name="referrer" content="no-referrer" />
+
+<h1 id="教程-28：从-pppos-create-到-ppp-input-——PPP-Core、PPPoS-串口字节流与-HDLC-like-Framing"><a href="#教程-28：从-pppos-create-到-ppp-input-——PPP-Core、PPPoS-串口字节流与-HDLC-like-Framing" class="headerlink" title="教程 28：从 pppos_create() 到 ppp_input()——PPP Core、PPPoS 串口字节流与 HDLC-like Framing"></a>教程 28：从 <code>pppos_create()</code> 到 <code>ppp_input()</code>——PPP Core、PPPoS 串口字节流与 HDLC-like Framing</h1><blockquote>
+<p>摘要：从 upstream PPPoS example 追踪 PPP netif 创建、串口 RX 跨线程输入、HDLC-like frame 解码、Protocol 分发，以及 TX 的 ACCM、PFC&#x2F;ACFC 与 FCS 实现。</p>
+</blockquote>
+<p>[TOC]</p>
+<p>PPP（Point-to-Point Protocol，点对点协议）是用于两端点直接链路的数据链路协议，它不仅给网络层报文提供封装，还定义链路建立、协议类型标识以及后续的链路&#x2F;网络层配置协商。PPPoS（PPP over Serial）是 lwIP 把 PPP 放到 UART&#x2F;串行字节流上的适配方式：串口只负责收发字节，PPPoS 负责按 RFC 1662 定义的 HDLC-like framing（类似 HDLC 的帧定界、转义与校验格式）在异步串行字节流中还原&#x2F;生成 PPP frame，并用 FCS（Frame Check Sequence，帧校验序列）检测串行 frame 传输错误，再把 IPv4&#x2F;IPv6 或控制协议交给 PPP Core。嵌入式设备常在 MCU 通过串口连接蜂窝 modem 或其他点对点通信模块时使用这种结构。<a href="#source-s1">S1</a><a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<p>Stage 27 完成了 Ethernet 路径上的性能闭环。Stage 28 切换到另一种常见嵌入式链路：没有 Ethernet MAC&#x2F;PHY、只有 UART&#x2F;串行字节流时，lwIP 如何通过 PPPoS 建立一个能承载 IPv4&#x2F;IPv6 的 <code>netif</code>。<a href="#source-s1">S1</a><a href="#source-s2">S2</a></p>
+<p>本篇只回答“PPP Core 怎样挂到 serial link、byte stream 怎样变成 PPP frame、frame 怎样进入 IP”的问题。LCP option negotiation、PAP&#x2F;CHAP、IPCP、IPv6CP 放到 Stage 29；地址&#x2F;DNS&#x2F;default route&#x2F;断线重连放到 Stage 30。</p>
+<h2 id="阅读源码前：建议先看这三份资料"><a href="#阅读源码前：建议先看这三份资料" class="headerlink" title="阅读源码前：建议先看这三份资料"></a>阅读源码前：建议先看这三份资料</h2><p>Stage 28 第一次系统进入 PPP&#x2F;PPPoS。下面三份资料适合提前建立背景，但都不是继续阅读正文的强制前置条件：正文会重新解释后续源码真正依赖的协议对象。<a href="#source-s1">S1</a><a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<ol>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1661.html">RFC 1661 — The Point-to-Point Protocol (PPP)</a><ul>
+<li>用途：理解 PPP 为什么不仅是“串口封装”，还包含链路建立、协议类型标识和网络层协议协商。</li>
+<li>建议重点：§1～§3 的 PPP 组成、Encapsulation，以及 Link Control Protocol 与 Network Control Protocol 的关系。</li>
+</ul>
+</li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1662.html">RFC 1662 — PPP in HDLC-like Framing</a><ul>
+<li>用途：理解 PPP 放到异步串行字节流以后，Flag（帧边界标记）、Control Escape（转义前缀）、FCS（帧校验序列）和字节透明传输如何工作。</li>
+<li>建议重点：§3～§4 的 frame format、octet stuffing、transparency 与 FCS。</li>
+</ul>
+</li>
+<li><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/netif/ppp">lwIP PPP&#x2F;PPPoS source</a><ul>
+<li>用途：对照本文中的 <code>ppp.c</code>、<code>pppos.c</code>、<code>lcp.c</code> 等真实实现文件，确认“PPP Core”和“串口 link adapter”分别位于哪里。</li>
+</ul>
+</li>
+</ol>
+<h2 id="先建立-PPP-PPPoS-的初学者模型：串口只是字节通道，PPP-才定义链路语义"><a href="#先建立-PPP-PPPoS-的初学者模型：串口只是字节通道，PPP-才定义链路语义" class="headerlink" title="先建立 PPP&#x2F;PPPoS 的初学者模型：串口只是字节通道，PPP 才定义链路语义"></a>先建立 PPP&#x2F;PPPoS 的初学者模型：串口只是字节通道，PPP 才定义链路语义</h2><p>PPP（Point-to-Point Protocol，点对点协议）工作的对象是<strong>两个直接相连的端点</strong>。在 MCU + 蜂窝 modem 这类场景中，一端通常是运行 lwIP 的设备，另一端是 modem&#x2F;peer；UART 或其他 serial device 只负责搬运字节，本身不知道这些字节属于 IPv4、IPv6 还是控制协议。<a href="#source-s3">S3</a></p>
+<p>PPPoS（PPP over Serial）是 lwIP 在串行字节流上承载 PPP 的 link adapter。它做两类工作：RX 时把连续 serial bytes 重新拼成完整 PPP frame；TX 时把 PPP packet 编码成适合异步串行传输的 HDLC-like frame。完成 framing 后，真正决定“这个 packet 是 IPv4、IPv6、LCP 还是其他协议”的是 PPP Core。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<p>下面这些名称会在源码中反复出现，先建立最小闭环：</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>它是什么</th>
+<th>当前路径为什么需要它</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>PPP frame &#x2F; packet</td>
+<td>PPP 在链路上传递的一次完整数据单元</td>
+<td><code>pppos_input()</code> 必须先知道一帧何时结束，才能交给 PPP Core</td>
+</tr>
+<tr>
+<td><code>Protocol</code> field</td>
+<td>PPP header 中标识 payload 属于哪种上层协议的字段</td>
+<td><code>ppp_input()</code> 读取它后，才能把 packet 分给 IPv4、IPv6、LCP 等 handler</td>
+</tr>
+<tr>
+<td>Flag Sequence <code>0x7E</code></td>
+<td>HDLC-like framing 的帧边界标记</td>
+<td>RX parser 用它判断一帧结束；TX encoder 在边界写出它 <a href="#source-s4">S4</a></td>
+</tr>
+<tr>
+<td>Control Escape <code>0x7D</code></td>
+<td>表示下一个字节经过异或恢复的 escape 字节</td>
+<td>让数据本身即使含有 <code>0x7E</code>&#x2F;<code>0x7D</code> 也不会被误判为帧边界 <a href="#source-s4">S4</a></td>
+</tr>
+<tr>
+<td>FCS（Frame Check Sequence，帧校验序列）</td>
+<td>HDLC-like frame 的错误检测值</td>
+<td>RX 只有在 FCS 正确时才把完整 frame 继续交给 PPP Core <a href="#source-s4">S4</a></td>
+</tr>
+<tr>
+<td>ACCM（Async-Control-Character-Map，异步控制字符映射）</td>
+<td>指定哪些控制字符在异步链路上需要 escape 的位图</td>
+<td>LCP 协商结果最终会改变 <code>pppos.c</code> 的 TX&#x2F;RX escaping 行为</td>
+</tr>
+<tr>
+<td>PFC（Protocol-Field-Compression）</td>
+<td>允许部分 PPP Protocol field 从 2 字节压成 1 字节的协商能力</td>
+<td><code>pppos.c</code> 的 encoder&#x2F;parser 会根据协商结果改变线上格式</td>
+</tr>
+<tr>
+<td>ACFC（Address-and-Control-Field-Compression）</td>
+<td>允许省略 HDLC-like Address&#x2F;Control 字节的协商能力</td>
+<td>同样由 LCP 结果反向改变 framing；具体协商在 Stage 29 展开</td>
+</tr>
+</tbody></table>
+<p>PFC、ACFC、ACCM 都是<strong>PPP&#x2F;LCP 协商影响 framing 的结果</strong>，不是 UART 配置参数。Stage 28 只解释它们如何改变 <code>pppos.c</code> 的字节布局；为什么以及如何协商这些选项留到 Stage 29。<a href="#source-s1">S1</a><a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<h2 id="Stage-28-总流程：serial-byte-stream-怎样变成-PPP-packet，再进入协议分发"><a href="#Stage-28-总流程：serial-byte-stream-怎样变成-PPP-packet，再进入协议分发" class="headerlink" title="Stage 28 总流程：serial byte stream 怎样变成 PPP packet，再进入协议分发"></a>Stage 28 总流程：serial byte stream 怎样变成 PPP packet，再进入协议分发</h2><p>先从协议&#x2F;数据流角度看完整闭环。这里不展开 LCP&#x2F;PAP&#x2F;IPCP 的内部状态机，只把 Stage 28 真正要追踪的边界画出来：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;UART / serial RX bytes&quot;] --&gt; B[&quot;pppos_input_tcpip(): 跨入 tcpip_thread&quot;]</span><br><span class="line">    B --&gt; C[&quot;pppos_input(): HDLC-like byte parser&quot;]</span><br><span class="line">    C --&gt; D[&quot;识别 Flag / Escape，并累计 FCS&quot;]</span><br><span class="line">    D --&gt; E[&quot;完整且 FCS 正确的 PPP frame&quot;]</span><br><span class="line">    E --&gt; F[&quot;ppp_input(): 读取 Protocol field&quot;]</span><br><span class="line">    F --&gt; G[&quot;IPv4 / IPv6 / LCP / 其他 PPP protocol handler&quot;]</span><br><span class="line"></span><br><span class="line">    H[&quot;IPv4/IPv6 或 PPP control packet&quot;] --&gt; I[&quot;PPP Core 选择 protocol&quot;]</span><br><span class="line">    I --&gt; J[&quot;pppos_netif_output() / pppos_write()&quot;]</span><br><span class="line">    J --&gt; K[&quot;加入 Flag / FCS，并按 ACCM escape&quot;]</span><br><span class="line">    K --&gt; L[&quot;ppp_output_cb(): serial TX bytes&quot;]</span><br></pre></td></tr></table></figure>
+
+<p>这张图里有两个不同层次：</p>
+<ul>
+<li><code>pppos_*</code> 负责<strong>字节流 ↔ PPP frame</strong>；</li>
+<li><code>ppp_*</code> 负责<strong>PPP frame ↔ 上层协议&#x2F;控制协议</strong>。</li>
+</ul>
+<p>把二者混成一个“PPP 串口驱动”会导致后面最容易出现的误解：例如把 FCS 当成 IP checksum、把 <code>Protocol</code> field 当成 UART packet type，或者认为 <code>pppos_create()</code> 已经完成 LCP 协商。</p>
+<h2 id="协议动作与-lwIP-源码的第一张映射表"><a href="#协议动作与-lwIP-源码的第一张映射表" class="headerlink" title="协议动作与 lwIP 源码的第一张映射表"></a>协议动作与 lwIP 源码的第一张映射表</h2><table>
+<thead>
+<tr>
+<th>数据&#x2F;协议阶段</th>
+<th>当前发生什么</th>
+<th>lwIP 主要入口</th>
+<th>关键对象&#x2F;状态</th>
+<th>下一步</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>创建 PPPoS adapter</td>
+<td>把 serial output callback 与 PPP Core 连接</td>
+<td><code>pppos_create()</code></td>
+<td><code>pppos_pcb</code>、<code>ppp_pcb</code></td>
+<td>创建 PPP <code>netif</code></td>
+</tr>
+<tr>
+<td>启动 session</td>
+<td>link adapter 准备好，PPP phase 进入 Establish</td>
+<td><code>ppp_connect()</code> → <code>pppos_connect()</code> → <code>ppp_start()</code></td>
+<td><code>pcb-&gt;phase</code></td>
+<td>Stage 29 的 LCP 协商</td>
+</tr>
+<tr>
+<td>Serial RX</td>
+<td>收到一串尚未分帧的 bytes</td>
+<td><code>pppos_input_tcpip()</code></td>
+<td>serial buffer</td>
+<td>切入 Core thread</td>
+</tr>
+<tr>
+<td>HDLC-like 解帧</td>
+<td>处理 Flag、Escape、FCS、压缩字段</td>
+<td><code>pppos_input()</code></td>
+<td>parser state、FCS、ACCM</td>
+<td>得到完整 PPP packet</td>
+</tr>
+<tr>
+<td>PPP 协议分发</td>
+<td>读取 <code>Protocol</code> field</td>
+<td><code>ppp_input()</code></td>
+<td><code>protocol</code>、PPP phase</td>
+<td>交给 IPv4&#x2F;IPv6&#x2F;LCP 等</td>
+</tr>
+<tr>
+<td>PPP TX</td>
+<td>Core 已经知道要发送哪种 protocol</td>
+<td><code>ppp_netif_output()</code> &#x2F; <code>ppp_write()</code></td>
+<td><code>protocol</code> + <code>pbuf</code></td>
+<td>进入 PPPoS encoder</td>
+</tr>
+<tr>
+<td>Serial TX</td>
+<td>构造 framing 并输出 bytes</td>
+<td><code>pppos_netif_output()</code> &#x2F; <code>pppos_output_last()</code></td>
+<td>FCS、ACCM、PFC&#x2F;ACFC</td>
+<td><code>ppp_output_cb()</code> 写串口</td>
+</tr>
+</tbody></table>
+<p>后面的源码按这张表的真实执行顺序展开。每次切换层次，都需要分清当前是在处理 serial byte、PPP frame，还是已经进入某个 PPP Protocol。</p>
+<h2 id="1-当前-example-编译-PPP-PPPoS，但运行时-USE-PPP-0"><a href="#1-当前-example-编译-PPP-PPPoS，但运行时-USE-PPP-0" class="headerlink" title="1. 当前 example 编译 PPP&#x2F;PPPoS，但运行时 USE_PPP=0"></a>1. 当前 example 编译 PPP&#x2F;PPPoS，但运行时 <code>USE_PPP=0</code></h2><p><code>contrib/examples/example_app/lwipopts.h</code> 当前配置：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> PPP_SUPPORT             1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PPPOE_SUPPORT           1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PPPOS_SUPPORT           1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PAP_SUPPORT             1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CHAP_SUPPORT            1</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> MSCHAP_SUPPORT          0</span></span><br></pre></td></tr></table></figure>
+
+<p>但 <code>test.c</code> 当前又明确写着：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> USE_PPP 0</span></span><br></pre></td></tr></table></figure>
+
+<p>所以必须区分：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">PPP Core / PPPoS 被编译</span><br><span class="line">        !=</span><br><span class="line">当前 example_app 运行时真的打开串口并拨起 PPP</span><br></pre></td></tr></table></figure>
+
+<p>本篇解释 pinned 源码，不声称本轮已经连接 modem、建立 PPP session 或获得运营商地址。</p>
+<h2 id="2-真实-example-入口是-pppos-example-init"><a href="#2-真实-example-入口是-pppos-example-init" class="headerlink" title="2. 真实 example 入口是 pppos_example_init()"></a>2. 真实 example 入口是 <code>pppos_example_init()</code></h2><p>upstream PPPoS example 先打开 serial I&#x2F;O，再创建 PPP control block：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span></span><br><span class="line"><span class="title function_">pppos_example_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> PPPOS_SUPPORT</span></span><br><span class="line">  ppp_sio = sio_open(<span class="number">2</span>);</span><br><span class="line">  <span class="keyword">if</span>(!ppp_sio)</span><br><span class="line">  &#123;</span><br><span class="line">      perror(<span class="string">&quot;PPPOS example: Error opening device&quot;</span>);</span><br><span class="line">      <span class="keyword">return</span>;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  ppp = pppos_create(&amp;pppos_netif, ppp_output_cb, ppp_link_status_cb, <span class="literal">NULL</span>);</span><br><span class="line">  <span class="keyword">if</span> (!ppp)</span><br><span class="line">  &#123;</span><br><span class="line">      <span class="built_in">printf</span>(<span class="string">&quot;PPPOS example: Could not create PPP control interface&quot;</span>);</span><br><span class="line">      <span class="keyword">return</span>;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  ppp_connect(ppp, <span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">  sys_thread_new(<span class="string">&quot;pppos_rx_thread&quot;</span>, pppos_rx_thread, <span class="literal">NULL</span>,</span><br><span class="line">                 DEFAULT_THREAD_STACKSIZE, DEFAULT_THREAD_PRIO);</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里同时建立了三条后续链：</p>
+<ol>
+<li><code>ppp_output_cb</code>：PPPoS encoder 最终如何把 bytes 写回串口；</li>
+<li><code>ppp_link_status_cb</code>：PPP 网络协议真正 up&#x2F;down 后怎样通知应用；</li>
+<li><code>pppos_rx_thread</code>：串口 RX 怎样重新进入 lwIP Core。</li>
+</ol>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;pppos_example_init()&quot;] --&gt; B[&quot;sio_open()&quot;]</span><br><span class="line">    B --&gt; C[&quot;pppos_create()&quot;]</span><br><span class="line">    C --&gt; D[&quot;ppp_connect(ppp, 0)&quot;]</span><br><span class="line">    D --&gt; E[&quot;LCP negotiation starts&quot;]</span><br><span class="line">    C --&gt; F[&quot;ppp_output_cb&quot;]</span><br><span class="line">    A --&gt; G[&quot;pppos_rx_thread&quot;]</span><br><span class="line">    G --&gt; H[&quot;pppos_input_tcpip()&quot;]</span><br></pre></td></tr></table></figure>
+
+<h2 id="3-pppos-create-只创建-link-adapter，不开始-LCP"><a href="#3-pppos-create-只创建-link-adapter，不开始-LCP" class="headerlink" title="3. pppos_create() 只创建 link adapter，不开始 LCP"></a>3. <code>pppos_create()</code> 只创建 link adapter，不开始 LCP</h2><p>进入 <code>pppos_create()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">ppp_pcb *<span class="title function_">pppos_create</span><span class="params">(<span class="keyword">struct</span> netif *pppif, pppos_output_cb_fn output_cb,</span></span><br><span class="line"><span class="params">       ppp_link_status_cb_fn link_status_cb, <span class="type">void</span> *ctx_cb)</span></span><br><span class="line">&#123;</span><br><span class="line">  pppos_pcb *pppos;</span><br><span class="line">  ppp_pcb *ppp;</span><br><span class="line">  LWIP_ASSERT_CORE_LOCKED();</span><br><span class="line"></span><br><span class="line">  pppos = (pppos_pcb *)LWIP_MEMPOOL_ALLOC(PPPOS_PCB);</span><br><span class="line">  <span class="keyword">if</span> (pppos == <span class="literal">NULL</span>) &#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">NULL</span>;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  ppp = ppp_new(pppif, &amp;pppos_callbacks, pppos, link_status_cb, ctx_cb);</span><br><span class="line">  <span class="keyword">if</span> (ppp == <span class="literal">NULL</span>) &#123;</span><br><span class="line">    LWIP_MEMPOOL_FREE(PPPOS_PCB, pppos);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">NULL</span>;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  <span class="built_in">memset</span>(pppos, <span class="number">0</span>, <span class="keyword">sizeof</span>(pppos_pcb));</span><br><span class="line">  pppos-&gt;ppp = ppp;</span><br><span class="line">  pppos-&gt;output_cb = output_cb;</span><br><span class="line">  <span class="keyword">return</span> ppp;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>pppos_callbacks</code> 把 PPP Core 与 serial framing adapter 连接起来：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">link_callbacks</span> <span class="title">pppos_callbacks</span> =</span> &#123;</span><br><span class="line">  pppos_connect,</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> PPP_SERVER</span></span><br><span class="line">  pppos_listen,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">  pppos_disconnect,</span><br><span class="line">  pppos_destroy,</span><br><span class="line">  pppos_write,</span><br><span class="line">  pppos_netif_output,</span><br><span class="line">  pppos_send_config,</span><br><span class="line">  pppos_recv_config</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>因此 <code>ppp_pcb</code> 不直接知道 UART API；它只持有一组 link callback。PPPoS、PPPoE、L2TP 等不同承载可以通过这层抽象复用 PPP Core。</p>
+<h2 id="4-ppp-new-创建真正的-PPP-netif"><a href="#4-ppp-new-创建真正的-PPP-netif" class="headerlink" title="4. ppp_new() 创建真正的 PPP netif"></a>4. <code>ppp_new()</code> 创建真正的 PPP <code>netif</code></h2><p><code>pppos_create()</code> 进入 <code>ppp_new()</code> 后，Core 分配 <code>PPP_PCB</code>，设置 LCP&#x2F;FSM&#x2F;auth 默认参数，然后把 caller 提供的 <code>struct netif</code> 注册进 lwIP：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">pcb-&gt;netif = pppif;</span><br><span class="line">MIB2_INIT_NETIF(pppif, snmp_ifType_ppp, <span class="number">0</span>);</span><br><span class="line"><span class="keyword">if</span> (!netif_add(pcb-&gt;netif,</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> LWIP_IPV4</span></span><br><span class="line">               IP4_ADDR_ANY4, IP4_ADDR_BROADCAST, IP4_ADDR_ANY4,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">               (<span class="type">void</span> *)pcb, ppp_netif_init_cb, <span class="literal">NULL</span>)) &#123;</span><br><span class="line">  LWIP_MEMPOOL_FREE(PPP_PCB, pcb);</span><br><span class="line">  <span class="keyword">return</span> <span class="literal">NULL</span>;</span><br><span class="line">&#125;</span><br><span class="line">netif_set_up(pcb-&gt;netif);</span><br><span class="line"></span><br><span class="line">pcb-&gt;link_cb = callbacks;</span><br><span class="line">pcb-&gt;link_ctx_cb = link_ctx_cb;</span><br><span class="line">pcb-&gt;link_status_cb = link_status_cb;</span><br><span class="line">pcb-&gt;ctx_cb = ctx_cb;</span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>ppp_new()</code>：随后逐个初始化编译进来的 PPP protocol handler，最后进入 <code>PPP_PHASE_DEAD</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> (i = <span class="number">0</span>; (protp = protocols[i]) != <span class="literal">NULL</span>; ++i) &#123;</span><br><span class="line">    (*protp-&gt;init)(pcb);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">new_phase(pcb, PPP_PHASE_DEAD);</span><br></pre></td></tr></table></figure>
+
+<p>此时 <code>netif</code> 已存在，但 PPP negotiation 还没有开始。</p>
+<h2 id="5-ppp-netif-init-cb-把-IP-output-接到-PPP-Core"><a href="#5-ppp-netif-init-cb-把-IP-output-接到-PPP-Core" class="headerlink" title="5. ppp_netif_init_cb() 把 IP output 接到 PPP Core"></a>5. <code>ppp_netif_init_cb()</code> 把 IP output 接到 PPP Core</h2><p><code>netif_add()</code> 调用 <code>ppp_netif_init_cb()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span> <span class="title function_">ppp_netif_init_cb</span><span class="params">(<span class="keyword">struct</span> netif *netif)</span> &#123;</span><br><span class="line">  netif-&gt;name[<span class="number">0</span>] = <span class="string">&#x27;p&#x27;</span>;</span><br><span class="line">  netif-&gt;name[<span class="number">1</span>] = <span class="string">&#x27;p&#x27;</span>;</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> PPP_IPV4_SUPPORT</span></span><br><span class="line">  netif-&gt;output = ppp_netif_output_ip4;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> PPP_IPV6_SUPPORT</span></span><br><span class="line">  netif-&gt;output_ip6 = ppp_netif_output_ip6;</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以 PPP <code>netif</code> 没有 <code>linkoutput</code> 这种 Ethernet 二层 callback。IPv4&#x2F;IPv6 直接落入 PPP protocol encapsulation：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">ip4_output / ip6_output</span><br><span class="line">        ↓</span><br><span class="line">ppp netif output callback</span><br><span class="line">        ↓</span><br><span class="line">PPP protocol = PPP_IP / PPP_IPV6</span><br><span class="line">        ↓</span><br><span class="line">link adapter = PPPoS</span><br></pre></td></tr></table></figure>
+
+<p>这和 Stage 20 的 Ethernet Driver 边界完全不同。</p>
+<h2 id="6-ppp-connect-：从-DEAD-phase-启动连接"><a href="#6-ppp-connect-：从-DEAD-phase-启动连接" class="headerlink" title="6. ppp_connect()：从 DEAD phase 启动连接"></a>6. <code>ppp_connect()</code>：从 DEAD phase 启动连接</h2><p>example 调用 <code>ppp_connect(ppp, 0)</code>。<code>holdoff=0</code> 时直接进入 <code>ppp_do_connect()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span> <span class="title function_">ppp_connect</span><span class="params">(ppp_pcb *pcb, <span class="type">u16_t</span> holdoff)</span> &#123;</span><br><span class="line">  LWIP_ASSERT_CORE_LOCKED();</span><br><span class="line">  <span class="keyword">if</span> (pcb-&gt;phase != PPP_PHASE_DEAD) &#123;</span><br><span class="line">    <span class="keyword">return</span> ERR_ALREADY;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  magic_randomize();</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (holdoff == <span class="number">0</span>) &#123;</span><br><span class="line">    ppp_do_connect(pcb);</span><br><span class="line">    <span class="keyword">return</span> ERR_OK;</span><br><span class="line">  &#125;</span><br><span class="line"></span><br><span class="line">  new_phase(pcb, PPP_PHASE_HOLDOFF);</span><br><span class="line">  sys_timeout((<span class="type">u32_t</span>)(holdoff*<span class="number">1000</span>), ppp_do_connect, pcb);</span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>继续进入 <code>ppp_do_connect()</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> <span class="title function_">ppp_do_connect</span><span class="params">(<span class="type">void</span> *arg)</span> &#123;</span><br><span class="line">  ppp_pcb *pcb = (ppp_pcb*)arg;</span><br><span class="line"></span><br><span class="line">  new_phase(pcb, PPP_PHASE_INITIALIZE);</span><br><span class="line">  pcb-&gt;link_cb-&gt;connect(pcb, pcb-&gt;link_ctx_cb);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里通过 <code>link_cb-&gt;connect</code> 从 PPP Core 回到 PPPoS adapter，也就是 <code>pppos_connect()</code>。</p>
+<h2 id="7-pppos-connect-初始化-byte-stream-parser，再调用-ppp-start"><a href="#7-pppos-connect-初始化-byte-stream-parser，再调用-ppp-start" class="headerlink" title="7. pppos_connect() 初始化 byte-stream parser，再调用 ppp_start()"></a>7. <code>pppos_connect()</code> 初始化 byte-stream parser，再调用 <code>ppp_start()</code></h2><p><code>pppos_connect()</code> 清理上一个 session 的 parser 状态，设置默认 ACCM，并把 link 标记 open：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">memset</span>(&amp;pppos-&gt;last_xmit, <span class="number">0</span>,</span><br><span class="line">       <span class="keyword">sizeof</span>(pppos_pcb) - offsetof(pppos_pcb, last_xmit));</span><br><span class="line"></span><br><span class="line">pppos-&gt;in_accm[<span class="number">15</span>] = <span class="number">0x60</span>;</span><br><span class="line">pppos-&gt;out_accm[<span class="number">15</span>] = <span class="number">0x60</span>;</span><br><span class="line">pppos-&gt;open = <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">ppp_start(ppp);</span><br></pre></td></tr></table></figure>
+
+<p><code>ppp_start()</code> 才真正开始 PPP protocol negotiation：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">ppp_start</span><span class="params">(ppp_pcb *pcb)</span> &#123;</span><br><span class="line">  new_phase(pcb, PPP_PHASE_ESTABLISH);</span><br><span class="line">  lcp_open(pcb);</span><br><span class="line">  lcp_lowerup(pcb);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>Stage 28 到这里先停止展开 LCP FSM。Stage 29 会从这两条调用继续下钻。</p>
+<h2 id="8-RX-真实入口：pppos-rx-thread-不逐字节投递-mailbox"><a href="#8-RX-真实入口：pppos-rx-thread-不逐字节投递-mailbox" class="headerlink" title="8. RX 真实入口：pppos_rx_thread() 不逐字节投递 mailbox"></a>8. RX 真实入口：<code>pppos_rx_thread()</code> 不逐字节投递 mailbox</h2><p>example 的 RX thread：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span></span><br><span class="line"><span class="title function_">pppos_rx_thread</span><span class="params">(<span class="type">void</span> *arg)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="type">u32_t</span> len;</span><br><span class="line">  <span class="type">u8_t</span> buffer[<span class="number">128</span>];</span><br><span class="line">  LWIP_UNUSED_ARG(arg);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">while</span> (<span class="number">1</span>) &#123;</span><br><span class="line">    len = sio_read(ppp_sio, buffer, <span class="keyword">sizeof</span>(buffer));</span><br><span class="line">    <span class="keyword">if</span> (len &gt; <span class="number">0</span>) &#123;</span><br><span class="line">      pppos_input_tcpip(ppp, buffer, len);</span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>源码注释明确要求避免一个 byte 一个 byte 地跨线程提交。这里一次最多读 128 bytes，再整块交给 <code>pppos_input_tcpip()</code>。<a href="#source-s2">S2</a></p>
+<h2 id="9-pppos-input-tcpip-：从-serial-thread-切回-tcpip-thread"><a href="#9-pppos-input-tcpip-：从-serial-thread-切回-tcpip-thread" class="headerlink" title="9. pppos_input_tcpip()：从 serial thread 切回 tcpip_thread"></a>9. <code>pppos_input_tcpip()</code>：从 serial thread 切回 <code>tcpip_thread</code></h2><p>这是 PPPoS 非 IRQ-safe 默认路径中少数允许在 Core 外调用的函数：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span></span><br><span class="line"><span class="title function_">pppos_input_tcpip</span><span class="params">(ppp_pcb *ppp, <span class="type">const</span> <span class="type">void</span> *s, <span class="type">int</span> l)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">pbuf</span> *<span class="title">p</span>;</span></span><br><span class="line">  <span class="type">err_t</span> err;</span><br><span class="line"></span><br><span class="line">  p = pbuf_alloc(PBUF_RAW, l, PBUF_POOL);</span><br><span class="line">  <span class="keyword">if</span> (!p) &#123;</span><br><span class="line">    <span class="keyword">return</span> ERR_MEM;</span><br><span class="line">  &#125;</span><br><span class="line">  pbuf_take(p, s, l);</span><br><span class="line"></span><br><span class="line">  err = tcpip_inpkt(p, ppp_netif(ppp), pppos_input_sys);</span><br><span class="line">  <span class="keyword">if</span> (err != ERR_OK) &#123;</span><br><span class="line">     pbuf_free(p);</span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> err;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里发生一次明确 copy：serial buffer → PBUF_POOL。随后 <code>tcpip_inpkt()</code> 把处理提交给 lwIP Core execution context。</p>
+<p>到 <code>tcpip_thread</code> 后，<code>pppos_input_sys()</code> 再逐个 pbuf segment 调用 byte-stream parser：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">err_t</span> <span class="title function_">pppos_input_sys</span><span class="params">(<span class="keyword">struct</span> pbuf *p, <span class="keyword">struct</span> netif *inp)</span> &#123;</span><br><span class="line">  ppp_pcb *ppp = (ppp_pcb*)inp-&gt;state;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">pbuf</span> *<span class="title">n</span>;</span></span><br><span class="line">  LWIP_ASSERT_CORE_LOCKED();</span><br><span class="line"></span><br><span class="line">  <span class="keyword">for</span> (n = p; n; n = n-&gt;next) &#123;</span><br><span class="line">    pppos_input(ppp, n-&gt;payload, n-&gt;len);</span><br><span class="line">  &#125;</span><br><span class="line">  pbuf_free(p);</span><br><span class="line">  <span class="keyword">return</span> ERR_OK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart LR</span><br><span class="line">    A[&quot;UART / sio_read()&quot;] --&gt; B[&quot;pppos_rx_thread&quot;]</span><br><span class="line">    B --&gt; C[&quot;pppos_input_tcpip()&quot;]</span><br><span class="line">    C --&gt; D[&quot;copy into PBUF_POOL&quot;]</span><br><span class="line">    D --&gt; E[&quot;tcpip_inpkt()&quot;]</span><br><span class="line">    E --&gt; F[&quot;tcpip_thread&quot;]</span><br><span class="line">    F --&gt; G[&quot;pppos_input_sys()&quot;]</span><br><span class="line">    G --&gt; H[&quot;pppos_input()&quot;]</span><br></pre></td></tr></table></figure>
+
+<h2 id="10-RFC-1662-的-frame-元素在-pppos-c-中落到哪里"><a href="#10-RFC-1662-的-frame-元素在-pppos-c-中落到哪里" class="headerlink" title="10. RFC 1662 的 frame 元素在 pppos.c 中落到哪里"></a>10. RFC 1662 的 frame 元素在 <code>pppos.c</code> 中落到哪里</h2><p>RFC 1662 已经给出 HDLC-like Frame Format、Flag Sequence 与 octet stuffing，本节不重复协议格式，只把标准元素映射到当前 lwIP 实现。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<table>
+<thead>
+<tr>
+<th>RFC 1662 元素</th>
+<th>lwIP <code>pppos.c</code> 中的实现</th>
+<th>当前源码作用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Flag Sequence <code>0x7E</code></td>
+<td><code>PPP_FLAG</code></td>
+<td>parser 的 frame boundary；TX frame 的结束标记</td>
+</tr>
+<tr>
+<td>Control Escape <code>0x7D</code></td>
+<td><code>PPP_ESCAPE</code></td>
+<td>标记下一 octet 需要反转义</td>
+</tr>
+<tr>
+<td>Transparency XOR <code>0x20</code></td>
+<td><code>PPP_TRANS</code></td>
+<td>RX 恢复原字节、TX 生成 escaped byte</td>
+</tr>
+<tr>
+<td>Protocol field</td>
+<td><code>pppos_input()</code> 恢复后交给 <code>ppp_input()</code></td>
+<td>区分 LCP&#x2F;PAP&#x2F;CHAP&#x2F;IPCP&#x2F;IPv4&#x2F;IPv6 等</td>
+</tr>
+<tr>
+<td>16-bit FCS</td>
+<td><code>PPP_INITFCS</code>、<code>PPP_GOODFCS</code>、<code>PPP_FCS()</code></td>
+<td>RX 验证 frame、TX 生成尾部 FCS</td>
+</tr>
+<tr>
+<td>ACCM</td>
+<td><code>in_accm[]</code> &#x2F; <code>out_accm[]</code></td>
+<td>控制异步链路上哪些字符过滤或转义</td>
+</tr>
+</tbody></table>
+<p>这个映射才是后续源码阅读需要保留的部分：标准负责说明线上格式，<code>pppos.c</code> 负责把连续 serial bytes 实现成该格式。</p>
+<h2 id="11-pppos-input-是-byte-stream-状态机"><a href="#11-pppos-input-是-byte-stream-状态机" class="headerlink" title="11. pppos_input() 是 byte-stream 状态机"></a>11. <code>pppos_input()</code> 是 byte-stream 状态机</h2><p>串口没有天然 packet boundary。<code>pppos_input()</code> 必须逐字节恢复 frame。<a href="#source-s1">S1</a></p>
+<p>函数先检查 session 是否 open，然后逐字节处理：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">while</span> (l-- &gt; <span class="number">0</span>) &#123;</span><br><span class="line">  cur_char = *s_u8++;</span><br><span class="line"></span><br><span class="line">  escaped = ESCAPE_P(pppos-&gt;in_accm, cur_char);</span><br><span class="line"></span><br><span class="line">  <span class="keyword">if</span> (escaped) &#123;</span><br><span class="line">    <span class="keyword">if</span> (cur_char == PPP_ESCAPE) &#123;</span><br><span class="line">      pppos-&gt;in_escaped = <span class="number">1</span>;</span><br><span class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (cur_char == PPP_FLAG) &#123;</span><br><span class="line">      <span class="comment">/* frame boundary / validation */</span></span><br><span class="line">    &#125;</span><br><span class="line">  &#125;</span><br></pre></td></tr></table></figure>
+
+<p>当收到 <code>PPP_ESCAPE</code>，下一个 escaped byte 需要恢复原值；当收到 <code>PPP_FLAG</code>，则意味着当前 frame 到边界，需要检查 header 完整性与 FCS。</p>
+<h2 id="12-pppos-input-怎样落实-RFC-1662-的-FCS-校验"><a href="#12-pppos-input-怎样落实-RFC-1662-的-FCS-校验" class="headerlink" title="12. pppos_input() 怎样落实 RFC 1662 的 FCS 校验"></a>12. <code>pppos_input()</code> 怎样落实 RFC 1662 的 FCS 校验</h2><p>RFC 1662 已经定义 PPP HDLC-like framing 的 FCS 语义；这里只看 lwIP 如何实现它。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<p>当前实现初始化：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> PPP_INITFCS     0xffff</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> PPP_GOODFCS     0xf0b8</span></span><br></pre></td></tr></table></figure>
+
+<p><code>pppos_input()</code> 对接收到的 frame byte 持续推进 FCS。遇到结束 <code>PPP_FLAG</code> 后，如果累计结果不是 <code>PPP_GOODFCS</code>，当前 packet 被丢弃并增加 link&#x2F;drop counters。<a href="#source-s1">S1</a></p>
+<p>这里的工程边界需要保留：PPP FCS 属于串口 link framing；IPv4 header checksum 与 TCP&#x2F;UDP checksum 仍由各自上层处理。lwIP 因而可能在同一 IPv4&#x2F;TCP 数据上依次处理 PPP FCS、IPv4 checksum 与 TCP checksum，但三者不是同一套校验状态。</p>
+<h2 id="13-LCP-协商结果怎样改变-pppos-netif-output-的字节布局"><a href="#13-LCP-协商结果怎样改变-pppos-netif-output-的字节布局" class="headerlink" title="13. LCP 协商结果怎样改变 pppos_netif_output() 的字节布局"></a>13. LCP 协商结果怎样改变 <code>pppos_netif_output()</code> 的字节布局</h2><p>PFC&#x2F;ACFC 的协议语义由 RFC 1661&#x2F;1662 定义；当前文章只追踪协商结果如何进入 PPPoS encoder。<a href="#source-s1">S1</a><a href="#source-s3">S3</a><a href="#source-s4">S4</a></p>
+<p>PPPoS state 中保存：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">accomp = Address-and-Control-Field-Compression</span><br><span class="line">pcomp  = Protocol-Field-Compression</span><br></pre></td></tr></table></figure>
+
+<p>这些值由 LCP negotiation 后的 <code>ppp_send_config()</code> &#x2F; <code>ppp_recv_config()</code> 下发到 <code>pppos_send_config()</code> &#x2F; <code>pppos_recv_config()</code>。<a href="#source-s1">S1</a></p>
+<p>TX 时，<code>pppos_netif_output()</code> 只有在 <code>!accomp</code> 时才输出 Address&#x2F;Control：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!pppos-&gt;accomp) &#123;</span><br><span class="line">  err = pppos_output_append(pppos, err, nb, PPP_ALLSTATIONS, <span class="number">1</span>, &amp;fcs_out);</span><br><span class="line">  err = pppos_output_append(pppos, err, nb, PPP_UI, <span class="number">1</span>, &amp;fcs_out);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>pppos_netif_output()</code>，Protocol field 同样直接读取 <code>pcomp</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (!pppos-&gt;pcomp || protocol &gt; <span class="number">0xFF</span>) &#123;</span><br><span class="line">  err = pppos_output_append(pppos, err, nb,</span><br><span class="line">                            (protocol &gt;&gt; <span class="number">8</span>) &amp; <span class="number">0xFF</span>, <span class="number">1</span>, &amp;fcs_out);</span><br><span class="line">&#125;</span><br><span class="line">err = pppos_output_append(pppos, err, nb, protocol &amp; <span class="number">0xFF</span>, <span class="number">1</span>, &amp;fcs_out);</span><br></pre></td></tr></table></figure>
+
+<p>所以抓取 raw serial bytes 时不能把固定前缀写死；线上布局取决于 LCP 已经写入 <code>pppos_pcb</code> 的 negotiated flags。Stage 29 会继续追 <code>lcp_up()</code> 怎样设置这些值。</p>
+<h2 id="14-RFC-1662-的-ACCM-怎样落到-out-accm"><a href="#14-RFC-1662-的-ACCM-怎样落到-out-accm" class="headerlink" title="14. RFC 1662 的 ACCM 怎样落到 out_accm[]"></a>14. RFC 1662 的 ACCM 怎样落到 <code>out_accm[]</code></h2><p>ACCM 的定义与字符透明传输规则直接见 RFC 1662 §4.2 与 §7.1；本节只保留 encoder mapping。<a href="#source-s1">S1</a><a href="#source-s4">S4</a></p>
+<p><code>pppos_output_append()</code> 的关键逻辑：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (fcs) &#123;</span><br><span class="line">  *fcs = PPP_FCS(*fcs, c);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (accm &amp;&amp; ESCAPE_P(pppos-&gt;out_accm, c)) &#123;</span><br><span class="line">  *((<span class="type">u8_t</span>*)nb-&gt;payload + nb-&gt;len++) = PPP_ESCAPE;</span><br><span class="line">  *((<span class="type">u8_t</span>*)nb-&gt;payload + nb-&gt;len++) = c ^ PPP_TRANS;</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">  *((<span class="type">u8_t</span>*)nb-&gt;payload + nb-&gt;len++) = c;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>源码中最值得注意的是执行顺序：FCS 先对逻辑 octet 计算，随后才根据 <code>out_accm[]</code> 做 serial escaping。也就是说 ACCM 改变线上编码，不改变 PPP 上层看到的 protocol payload。</p>
+<h2 id="15-完整-RX-frame-最终怎样进入-ppp-input"><a href="#15-完整-RX-frame-最终怎样进入-ppp-input" class="headerlink" title="15. 完整 RX frame 最终怎样进入 ppp_input()"></a>15. 完整 RX frame 最终怎样进入 <code>ppp_input()</code></h2><p><code>pppos_input()</code> 完成解码、FCS 验证并组好 pbuf 后，会把 protocol bytes 放在 payload 前部，最终由 PPP input dispatcher 消费。<a href="#source-s1">S1</a></p>
+<p><code>ppp_input()</code> 先取出 16-bit Protocol：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">protocol = (((<span class="type">u8_t</span> *)pb-&gt;payload)[<span class="number">0</span>] &lt;&lt; <span class="number">8</span>) | ((<span class="type">u8_t</span>*)pb-&gt;payload)[<span class="number">1</span>];</span><br><span class="line">pbuf_remove_header(pb, <span class="keyword">sizeof</span>(protocol));</span><br></pre></td></tr></table></figure>
+
+<p>随后有两个大分支：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">PPP_IP / PPP_IPV6</span><br><span class="line">    → 直接进入 ip4_input() / ip6_input()</span><br><span class="line"></span><br><span class="line">LCP / PAP / CHAP / IPCP / IPv6CP / ...</span><br><span class="line">    → protocols[] 查找 protent</span><br><span class="line">    → protent-&gt;input()</span><br></pre></td></tr></table></figure>
+
+<p>继续阅读 <code>ppp_input()</code>，IPv4&#x2F;IPv6 当前直接分发：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">case</span> PPP_IP:</span><br><span class="line">  ip4_input(pb, pcb-&gt;netif);</span><br><span class="line">  <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">case</span> PPP_IPV6:</span><br><span class="line">  ip6_input(pb, pcb-&gt;netif);</span><br><span class="line">  <span class="keyword">return</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这就是 serial byte stream 回到 lwIP IP layer 的最终桥接点。</p>
+<h2 id="16-control-protocol-为什么还要-pbuf-coalesce"><a href="#16-control-protocol-为什么还要-pbuf-coalesce" class="headerlink" title="16. control protocol 为什么还要 pbuf_coalesce()"></a>16. control protocol 为什么还要 <code>pbuf_coalesce()</code></h2><p>对于 LCP、PAP、CHAP、IPCP 等 protocol handler，<code>ppp_input()</code> 会先找到 <code>protocols[]</code> 中匹配的 <code>protent</code>，再确保 control packet 是连续 buffer：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (protp-&gt;protocol == protocol) &#123;</span><br><span class="line">  pb = pbuf_coalesce(pb, PBUF_RAW);</span><br><span class="line">  <span class="keyword">if</span> (pb-&gt;next != <span class="literal">NULL</span>) &#123;</span><br><span class="line">    <span class="keyword">goto</span> drop;</span><br><span class="line">  &#125;</span><br><span class="line">  (*protp-&gt;input)(pcb, (<span class="type">u8_t</span>*)pb-&gt;payload, pb-&gt;len);</span><br><span class="line">  <span class="keyword">goto</span> out;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因此 Stage 29 进入 <code>lcp_input()</code> &#x2F; <code>ipcp_input()</code> 时，不需要再猜 control packet 是否跨多个 pbuf；PPP dispatcher 已经在这里把它整理成连续区间。</p>
+<h2 id="17-TX：IPv4-先变成-PPP-IP"><a href="#17-TX：IPv4-先变成-PPP-IP" class="headerlink" title="17. TX：IPv4 先变成 PPP_IP"></a>17. TX：IPv4 先变成 <code>PPP_IP</code></h2><p>当 IP layer 从 PPP netif 发送 IPv4：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">err_t</span> <span class="title function_">ppp_netif_output_ip4</span><span class="params">(<span class="keyword">struct</span> netif *netif,</span></span><br><span class="line"><span class="params">                                  <span class="keyword">struct</span> pbuf *pb,</span></span><br><span class="line"><span class="params">                                  <span class="type">const</span> <span class="type">ip4_addr_t</span> *ipaddr)</span> &#123;</span><br><span class="line">  LWIP_UNUSED_ARG(ipaddr);</span><br><span class="line">  <span class="keyword">return</span> ppp_netif_output(netif, pb, PPP_IP);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>IPv6 同理使用 <code>PPP_IPV6</code>。</p>
+<p><code>ppp_netif_output()</code> 先检查对应网络协议是否已经 up；如果 IPCP&#x2F;IPv6CP 尚未完成，它不会把普通 IP packet 直接送进 serial framing。<a href="#source-s1">S1</a></p>
+<p>然后通过 link adapter callback：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">ppp_netif_output()</span><br><span class="line">    ↓</span><br><span class="line">pcb-&gt;link_cb-&gt;netif_output(..., protocol)</span><br><span class="line">    ↓</span><br><span class="line">pppos_netif_output()</span><br></pre></td></tr></table></figure>
+
+<h2 id="18-pppos-netif-output-构造完整-serial-frame"><a href="#18-pppos-netif-output-构造完整-serial-frame" class="headerlink" title="18. pppos_netif_output() 构造完整 serial frame"></a>18. <code>pppos_netif_output()</code> 构造完整 serial frame</h2><p>当前 TX 顺序：<a href="#source-s1">S1</a></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;IP pbuf chain&quot;] --&gt; B[&quot;optional Address/Control&quot;]</span><br><span class="line">    B --&gt; C[&quot;PPP Protocol field&quot;]</span><br><span class="line">    C --&gt; D[&quot;copy payload bytes&quot;]</span><br><span class="line">    D --&gt; E[&quot;ACCM escaping&quot;]</span><br><span class="line">    E --&gt; F[&quot;append 16-bit FCS&quot;]</span><br><span class="line">    F --&gt; G[&quot;append PPP_FLAG&quot;]</span><br><span class="line">    G --&gt; H[&quot;ppp_output_cb()&quot;]</span><br><span class="line">    H --&gt; I[&quot;sio_write()&quot;]</span><br></pre></td></tr></table></figure>
+
+<p><code>pppos_netif_output()</code> 遍历整个 input pbuf chain，把每个 byte 交给 <code>pppos_output_append()</code>，因此它当前是一个 serial encoding&#x2F;copy path，而不是 zero-copy 把原 pbuf 直接交 UART DMA。</p>
+<h2 id="19-pppos-output-last-最终调用应用提供的-serial-callback"><a href="#19-pppos-output-last-最终调用应用提供的-serial-callback" class="headerlink" title="19. pppos_output_last() 最终调用应用提供的 serial callback"></a>19. <code>pppos_output_last()</code> 最终调用应用提供的 serial callback</h2><p>frame 尾部由 <code>pppos_output_last()</code> 补齐：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">err = pppos_output_append(pppos, err, nb, ~(*fcs) &amp; <span class="number">0xFF</span>, <span class="number">1</span>, <span class="literal">NULL</span>);</span><br><span class="line">err = pppos_output_append(pppos, err, nb, (~(*fcs) &gt;&gt; <span class="number">8</span>) &amp; <span class="number">0xFF</span>, <span class="number">1</span>, <span class="literal">NULL</span>);</span><br><span class="line">err = pppos_output_append(pppos, err, nb, PPP_FLAG, <span class="number">0</span>, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p>若 output buffer 还有数据，就进入 <code>output_cb</code>：<a href="#source-s1">S1</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">u32_t</span> l = pppos-&gt;output_cb(ppp, nb-&gt;payload, nb-&gt;len, ppp-&gt;ctx_cb);</span><br><span class="line"><span class="keyword">if</span> (l != nb-&gt;len) &#123;</span><br><span class="line">  err = ERR_IF;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>upstream example 的 callback 只是：<a href="#source-s2">S2</a></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">u32_t</span></span><br><span class="line"><span class="title function_">ppp_output_cb</span><span class="params">(ppp_pcb *pcb, <span class="type">const</span> <span class="type">void</span> *data, <span class="type">u32_t</span> len, <span class="type">void</span> *ctx)</span></span><br><span class="line">&#123;</span><br><span class="line">  LWIP_UNUSED_ARG(pcb);</span><br><span class="line">  LWIP_UNUSED_ARG(ctx);</span><br><span class="line">  <span class="keyword">return</span> sio_write(ppp_sio, (<span class="type">const</span> <span class="type">u8_t</span>*)data, len);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这就是 PPP Core 与具体 UART&#x2F;USB-serial&#x2F;TTY driver 的最后边界。</p>
+<h2 id="20-pppos-write-与-pppos-netif-output-为什么是两个-callback"><a href="#20-pppos-write-与-pppos-netif-output-为什么是两个-callback" class="headerlink" title="20. pppos_write() 与 pppos_netif_output() 为什么是两个 callback"></a>20. <code>pppos_write()</code> 与 <code>pppos_netif_output()</code> 为什么是两个 callback</h2><p>两者用途不同：<a href="#source-s1">S1</a></p>
+<ul>
+<li><code>pppos_write()</code>：PPP Core 自己生成的 control protocol packet 已经带 PPP protocol header，用于 LCP&#x2F;PAP&#x2F;CHAP&#x2F;IPCP 等；</li>
+<li><code>pppos_netif_output()</code>：来自 lwIP IP layer 的 IPv4&#x2F;IPv6 packet，需要 adapter 根据参数补 PPP protocol field。</li>
+</ul>
+<p>也就是：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">PPP control protocol</span><br><span class="line">  ppp_write()</span><br><span class="line">      ↓</span><br><span class="line">  pppos_write()</span><br><span class="line"></span><br><span class="line">IPv4 / IPv6 data plane</span><br><span class="line">  ppp_netif_output()</span><br><span class="line">      ↓</span><br><span class="line">  pppos_netif_output(protocol)</span><br></pre></td></tr></table></figure>
+
+<p>把两条路径混在一起，会很难理解为什么一个函数需要额外 <code>protocol</code> 参数而另一个不需要。</p>
+<h2 id="21-PPP-INPROC-IRQ-SAFE-会改变-RX-execution-model"><a href="#21-PPP-INPROC-IRQ-SAFE-会改变-RX-execution-model" class="headerlink" title="21. PPP_INPROC_IRQ_SAFE 会改变 RX execution model"></a>21. <code>PPP_INPROC_IRQ_SAFE</code> 会改变 RX execution model</h2><p>默认 <code>PPP_INPROC_IRQ_SAFE=0</code>。<a href="#source-s1">S1</a></p>
+<p>这种情况下推荐使用 <code>pppos_input_tcpip()</code>，先把 serial bytes 提交到 <code>tcpip_thread</code>，然后在 Core context 中运行 parser。</p>
+<p>如果启用 <code>PPP_INPROC_IRQ_SAFE=1</code>，源码会走另一套可从 IRQ context 输入的保护&#x2F;排队路径。该配置改变并发与内存行为，本篇不把它泛化成默认实现。<a href="#source-s1">S1</a></p>
+<h2 id="22-PPP-phase-和-PPP-FSM-是两层状态，不要混在一起"><a href="#22-PPP-phase-和-PPP-FSM-是两层状态，不要混在一起" class="headerlink" title="22. PPP phase 和 PPP FSM 是两层状态，不要混在一起"></a>22. PPP phase 和 PPP FSM 是两层状态，不要混在一起</h2><p>Stage 28 已经出现 <code>PPP_PHASE_DEAD</code>、<code>INITIALIZE</code>、<code>ESTABLISH</code>。这是整个 PPP session 的高层 phase。</p>
+<p>Stage 29 还会看到 LCP&#x2F;IPCP 各自的 generic FSM：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">INITIAL / STARTING / CLOSED / STOPPED</span><br><span class="line">REQSENT / ACKRCVD / ACKSENT / OPENED</span><br><span class="line">CLOSING / STOPPING</span><br></pre></td></tr></table></figure>
+
+<p>两者不是同一套状态机：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">PPP phase</span><br><span class="line">  = 整个 session 现在处于 establish/auth/network/running/terminate 哪一阶段</span><br><span class="line"></span><br><span class="line">LCP/IPCP FSM state</span><br><span class="line">  = 某一个 control protocol 的 Configure-Request/Ack/Nak/Reject 状态</span><br></pre></td></tr></table></figure>
+
+<p>这个区分是 Stage 29 阅读源码的前置条件。<a href="#source-s1">S1</a><a href="#source-s3">S3</a></p>
+<h2 id="23-Stage-28-完整调用链"><a href="#23-Stage-28-完整调用链" class="headerlink" title="23. Stage 28 完整调用链"></a>23. Stage 28 完整调用链</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    A[&quot;pppos_example_init()&quot;] --&gt; B[&quot;sio_open()&quot;]</span><br><span class="line">    B --&gt; C[&quot;pppos_create()&quot;]</span><br><span class="line">    C --&gt; D[&quot;ppp_new() + netif_add()&quot;]</span><br><span class="line">    D --&gt; E[&quot;ppp_connect()&quot;]</span><br><span class="line">    E --&gt; F[&quot;ppp_do_connect()&quot;]</span><br><span class="line">    F --&gt; G[&quot;pppos_connect()&quot;]</span><br><span class="line">    G --&gt; H[&quot;ppp_start() / LCP&quot;]</span><br><span class="line"></span><br><span class="line">    I[&quot;serial RX&quot;] --&gt; J[&quot;pppos_rx_thread&quot;]</span><br><span class="line">    J --&gt; K[&quot;pppos_input_tcpip()&quot;]</span><br><span class="line">    K --&gt; L[&quot;tcpip_thread&quot;]</span><br><span class="line">    L --&gt; M[&quot;pppos_input() framing/FCS&quot;]</span><br><span class="line">    M --&gt; N[&quot;ppp_input()&quot;]</span><br><span class="line">    N --&gt; O[&quot;IP or control protocol&quot;]</span><br></pre></td></tr></table></figure>
+
+<h2 id="24-当前实现边界"><a href="#24-当前实现边界" class="headerlink" title="24. 当前实现边界"></a>24. 当前实现边界</h2><ol>
+<li>当前 example 编译 <code>PPP_SUPPORT=1</code>、<code>PPPOS_SUPPORT=1</code>，但 <code>USE_PPP=0</code>，因此默认运行不会建立 PPP；<a href="#source-s2">S2</a></li>
+<li>PPPoS serial driver 通过 <code>sio_*</code> 抽象接入，真实 UART&#x2F;DMA 驱动不属于 lwIP Core；</li>
+<li>默认 RX example 使用独立 <code>pppos_rx_thread</code> + <code>pppos_input_tcpip()</code> 跨线程进入 Core；</li>
+<li>current PPPoS TX 会重新编码到中间 <code>PBUF_RAM</code>，逐 byte escaping&#x2F;FCS，不是 zero-copy UART DMA contract；</li>
+<li>FCS 属于 PPP serial framing，不等于 IP&#x2F;TCP checksum；</li>
+<li>ACFC&#x2F;PFC&#x2F;ACCM 是 negotiation 后的 link framing 参数，不能假设抓到的 frame 永远固定 header；</li>
+<li>本篇只建立 Core&#x2F;PPPoS&#x2F;framing，LCP&#x2F;Auth&#x2F;NCP negotiation 留给 Stage 29。</li>
+</ol>
+<h2 id="资料来源"><a href="#资料来源" class="headerlink" title="资料来源"></a>资料来源</h2><p><a id="source-s1"></a></p>
+<h3 id="S1-lwIP-PPP-Core-与-PPPoS-源码"><a href="#S1-lwIP-PPP-Core-与-PPPoS-源码" class="headerlink" title="[S1] lwIP PPP Core 与 PPPoS 源码"></a>[S1] lwIP PPP Core 与 PPPoS 源码</h3><ul>
+<li>类型：目标版本上游源码</li>
+<li>版本：commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>src/netif/ppp/ppp.c</code>：<code>ppp_new()</code>、<code>ppp_connect()</code>、<code>ppp_start()</code>、<code>ppp_input()</code>、<code>ppp_netif_output()</code>、<code>ppp_write()</code>；<code>src/netif/ppp/pppos.c</code>：<code>pppos_create()</code>、<code>pppos_connect()</code>、<code>pppos_input_tcpip()</code>、<code>pppos_input()</code>、<code>pppos_netif_output()</code>、<code>pppos_write()</code>、<code>pppos_output_append()</code>、<code>pppos_output_last()</code>；<code>src/include/netif/ppp/ppp.h</code>、<code>pppos.h</code>、<code>ppp_opts.h</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9/src/netif/ppp">lwIP PPP source</a></li>
+<li>使用位置：“PPP netif 创建”“phase 启动”“RX thread bridge”“serial framing”“FCS&#x2F;ACCM&#x2F;PFC&#x2F;ACFC”“PPP Protocol 分发”</li>
+<li>支撑内容：证明当前 pinned PPPoS 的真实 Core↔link adapter 边界和字节流收发实现</li>
+</ul>
+<p><a id="source-s2"></a></p>
+<h3 id="S2-lwIP-PPPoS-example-与-example-app-配置"><a href="#S2-lwIP-PPPoS-example-与-example-app-配置" class="headerlink" title="[S2] lwIP PPPoS example 与 example_app 配置"></a>[S2] lwIP PPPoS example 与 example_app 配置</h3><ul>
+<li>类型：目标版本上游 example&#x2F;config</li>
+<li>版本：commit <code>d08f4773edd0182b7910fc8f046eed82ffcd67c9</code></li>
+<li>定位：<code>contrib/examples/ppp/pppos_example.c</code>；<code>contrib/examples/example_app/lwipopts.h</code>、<code>test.c</code></li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/lwip-tcpip/lwip/tree/d08f4773edd0182b7910fc8f046eed82ffcd67c9/contrib/examples/ppp">lwIP PPP examples</a></li>
+<li>使用位置：“真实入口”“sio_open”“RX thread”“output callback”“PPP compile&#x2F;runtime flags”</li>
+<li>支撑内容：区分 upstream PPPoS 使用方式、当前编译能力与当前 example_app 默认运行状态</li>
+</ul>
+<p><a id="source-s3"></a></p>
+<h3 id="S3-RFC-1661：The-Point-to-Point-Protocol-PPP"><a href="#S3-RFC-1661：The-Point-to-Point-Protocol-PPP" class="headerlink" title="[S3] RFC 1661：The Point-to-Point Protocol (PPP)"></a>[S3] RFC 1661：The Point-to-Point Protocol (PPP)</h3><ul>
+<li>类型：IETF 标准规范</li>
+<li>版本：RFC 1661，1994</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1661.html">RFC 1661</a></li>
+<li>使用位置：“建议提前阅读”“PPP&#x2F;PPPoS 初学者模型”“Protocol field”“LCP&#x2F;NCP 分层”“phase 与 configuration negotiation”</li>
+<li>支撑内容：提供 PPP link、LCP、Network-Layer Protocol 与 frame protocol demultiplex 的规范语义</li>
+</ul>
+<p><a id="source-s4"></a></p>
+<h3 id="S4-RFC-1662：PPP-in-HDLC-like-Framing"><a href="#S4-RFC-1662：PPP-in-HDLC-like-Framing" class="headerlink" title="[S4] RFC 1662：PPP in HDLC-like Framing"></a>[S4] RFC 1662：PPP in HDLC-like Framing</h3><ul>
+<li>类型：IETF 标准规范</li>
+<li>版本：RFC 1662，1994</li>
+<li>URL&#x2F;文档：<a target="_blank" rel="noopener external nofollow noreferrer" href="https://www.rfc-editor.org/rfc/rfc1662.html">RFC 1662</a></li>
+<li>使用位置：“建议提前阅读”“PPPoS framing 初学者模型”“0x7E Flag”“0x7D escaping”“ACCM”“Address&#x2F;Control compression”“Protocol compression”“16-bit FCS”</li>
+<li>支撑内容：提供异步串行 PPP framing 与 transparency&#x2F;FCS 的标准定义，用于对照 <code>pppos.c</code> 实现</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog">Liya Huang</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://wdfk-prog.space/posts/ea0f4e29/">https://wdfk-prog.space/posts/ea0f4e29/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="external nofollow noreferrer" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://wdfk-prog.space" target="_blank">wdfk-prog的个人博客</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LWIP/">LWIP</a></div><div class="post-share"><div class="social-share" data-image="/images/covers/08.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><div class="post-reward"><div class="reward-button"><i class="fas fa-qrcode"></i>赞助</div><div class="reward-main"><ul class="reward-all"><li class="reward-item"><a href="/images/wechat.jpg" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/wechat.jpg" alt="微信"/></a><div class="post-qr-code-desc">微信</div></li><li class="reward-item"><a href="/images/alipay.png" target="_blank"><img class="post-qr-code-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt="支付寶"/></a><div class="post-qr-code-desc">支付寶</div></li></ul></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/posts/5bd4cd0c/" title="29-ppp-lcp-auth-ipcp-ipv6cp"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">29-ppp-lcp-auth-ipcp-ipv6cp</div></div><div class="info-2"><div class="info-item-1">  教程 29：从 lcp_open() 到 np_up()——LCP、PAP&#x2F;CHAP、IPCP、IPv6CP 与 PPP 协商状态机 摘要：沿 PPP phase 与 generic FSM 追踪 LCP 配置协商、PAP&#x2F;CHAP 认证、Network phase、IPCP&#x2F;IPv6CP 配置与网络协议启用，明确各层职责与 RUNNING 条件。  [TOC] PPP 的控制面不是一个协议一次完成：LCP（Link Control Protocol，链路控制协议）先建立和配置 PPP link；如果双方协商要求认证，再由 PAP（Password Authentication Protocol）或 CHAP（Challenge Handshake Authentication Protocol）确认对端身份；链路进入 Network phase 后，IPCP（Internet Protocol Control Protocol）和 IPv6CP（IPv6 Control Protocol）分别配置 IPv4 与 IPv6 在这条 PPP lin...</div></div></div></a><a class="pagination-related" href="/posts/e7076471/" title="27-lwiperf-performance-bottleneck"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/10.jpg" onerror="onerror=null;src='/images/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">27-lwiperf-performance-bottleneck</div></div><div class="info-2"><div class="info-item-1">  教程 27：从 lwiperf_start_tcp_server_default() 到 TCP ACK——lwIP 吞吐量、窗口、pbuf、线程与 Driver 瓶颈定位 摘要：从 lwiperf Raw TCP 入口追踪收发、ACK 驱动的续传、窗口与发送队列，再把 pbuf&#x2F;memp、tcpip_thread、DMA ring、checksum offload 与 PHY 速率接成一条性能瓶颈证据链。  [TOC] lwiperf 是 lwIP 自带的 TCP 吞吐测试应用模块，不是 TCP Core 本身；官方文档把它定位为可与 PC 端 iPerf2 配合的最小 TCP client&#x2F;server 性能测量实现。S6 当前实现直接使用 Raw TCP API，也就是绕过 Socket&#x2F;Netconn、直接注册 TCP Core callback 的回调式 API，建立连接、累计 application bytes 并按持续时间计算 bandwidth_kbitpsec。S1 进入源码前先区分几个经常被混用的性能量。PHY line ra...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/posts/b313493/" title="39-rtthread-lwip-port"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">39-rtthread-lwip-port</div></div><div class="info-2"><div class="info-item-1">  教程 39：从 lwip_system_init() 到 tcpip_input()——RT-Thread 如何把 lwIP 接进 RTOS 与 Ethernet Device 摘要：从 RT-Thread 的 lwIP 初始化入口追踪 Kconfig、sys_arch、eth_device、RX&#x2F;TX 线程与 tcpip_input，建立真实 RTOS Port 的完整桥接流程。  [TOC] Stage 38 已经把 lwIP Port Contract 拆成四块：lwipopts.h 配置、源码构建选择、OS&#x2F;Arch Port、Network Port。Stage 39 不再重复这些抽象的原理，而是直接拿 RT-Thread 当前源码回答一个问题：RT-Thread 怎样把这些 contract 一项项落成可运行代码，并把一个 Ethernet Driver 最终接到 tcpip_thread。 RT-Thread 的完整 Device Framework、NetDev、SAL、DFS 并不是本篇目标。它们只在当前调用链真正出现时说明接口位置；So...</div></div></div></a><a class="pagination-related" href="/posts/4b242a34/" title="18-multi-netif-routing"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">18-multi-netif-routing</div></div><div class="info-2"><div class="info-item-1">  教程 18：从 udp_sendto() 到 etharp_output()——Multi-netif IPv4 路由、Default Netif、Gateway 与下一跳 摘要：从 UDP&#x2F;TCP 发送入口追踪 IPv4 multi-netif 出口选择、默认接口、源地址与 Gateway 下一跳，厘清 route 与 ARP 的职责边界。  [TOC] Multi-netif 表示同一个 lwIP 实例同时存在多个 struct netif 网络接口。本文标题中的 Default Netif（默认接口） 是没有更具体匹配时的 fallback outgoing interface；Gateway（网关） 是已经选定某张接口以后，在当前二层链路上需要直接发送给的下一跳 IP。两者不是同一个对象，也不等价于“默认路由 &#x3D; 网关地址”。 Stage 18 只回答 IPv4 发送方向上的一个问题：应用没有显式固定接口时，lwIP 怎样先选择 outgoing netif，然后怎样决定 Ethernet 下一跳是 destination 本身还是该接口的 gat...</div></div></div></a><a class="pagination-related" href="/posts/f66d8c4d/" title="16-ipv4-fragmentation-reassembly"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">16-ipv4-fragmentation-reassembly</div></div><div class="info-2"><div class="info-item-1">  教程 16：从 MTU 到 ip4_frag() &#x2F; ip4_reass()——IPv4 分片、重组、超时与内存压力 摘要：沿 IPv4 发送与接收源码链，理解 MTU 如何触发分片、Offset&#x2F;MF&#x2F;ID 如何组织片段，以及 lwIP 怎样排序、重组、超时清理并限制资源占用。  [TOC] IPv4 fragmentation（IPv4 分片）解决的是“一个 IPv4 datagram 比当前可发送路径允许的 packet 更大时，怎样把它拆成多个 fragment”；reassembly（重组）则在最终目的主机把这些 fragment 恢复成原始 datagram。Fragment 不是新的传输层或 ICMP message，每一片仍然携带自己的 IPv4 Header，并通过 Identification、MF（More Fragments）和 Fragment Offset 表明自己属于哪个原始 datagram、位于什么位置、后面是否还有片段。S4S12 MTU（Maximum Transmission Unit，最大传输单元）表示某...</div></div></div></a><a class="pagination-related" href="/posts/173fa538/" title="02-netif-tap-first-ping"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/05.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">02-netif-tap-first-ping</div></div><div class="info-2"><div class="info-item-1">  教程 02：从 main() 到第一次 Ping——netif、TAP、ARP 与 ICMP 的完整源码链 摘要：先建立 IPv4 Ping 的 Ethernet、ARP、IPv4 与 ICMP 交互模型，再从 Unix example_app 入口追到 TAP 接收、协议栈线程、Echo Reply 与二层发送。   [TOC] 这一阶段要回答的不是“Ping 命令怎么用”，而是一个完整的数据路径问题：  Linux Host 执行 ping 198.18.0.200 后，为什么会先出现 ARP，再出现 ICMP；这些 Ethernet frame 又怎样从 Linux TAP 进入 lwIP，经过 netif、tcpip_thread、ARP、IPv4、ICMP 后返回 Host？  先把标题里的四个对象说清楚。netif 是 lwIP 的 network interface（网络接口）抽象对象，把协议栈 **Core（核心协议处理代码与执行上下文）**和具体 **Port（面向操作系统&#x2F;设备的适配层）**连接起来；TAP 是 Linux 提供给 userspa...</div></div></div></a><a class="pagination-related" href="/posts/8c3324b0/" title="00-series-index"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/07.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">00-series-index</div></div><div class="info-2"><div class="info-item-1">lwIP Source Lab 教程索引本系列持续跟踪官方 lwip-tcpip/lwip 的 master。绝大多数源码篇采用 Source-driven 主线：从当前行为的真实入口函数、注册入口或外部 API 开始，沿实际调用、数据与状态变化向下追踪。 Stage 00、15、31、38 与 45 属于 Theory of Operation &#x2F; Application Note 型总览：先建立系统位置和完整数据流，再解释关键机制；它们不会覆盖后续源码篇“从真实入口开始”的硬约束。 Stage 00～45 Stage 00：从网线上的电信号到 lwIP——PHY、MAC、DMA 与 netif 的完整边界从 Ethernet Frame、PHY&#x2F;MAC 分层出发，沿 DMA&#x2F;Driver、pbuf、netif 建立完整软硬件边界，并区分链路、接口、IP 与上层就绪状态。 Stage 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图沿 submodule、Host 依赖、Debug build ...</div></div></div></a><a class="pagination-related" href="/posts/98b3176e/" title="01-linux-lwip-lab"><img class="cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/08.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">01-linux-lwip-lab</div></div><div class="info-2"><div class="info-item-1">  教程 01：从 upstream master 到第一条可读源码链——Linux Host、构建树与源码地图 摘要：沿一条可重复的成功路径建立 lwIP Linux Host 学习环境：锁定 upstream revision、生成 Debug build tree 与 compile database，并把 VS Code 带到真实源码入口。  [TOC] 这一篇不先讲 TCP、UDP 或 pbuf。目标只有一个：把仓库准备到“下一篇可以直接从 main() 开始读源码”的状态。 本文把官方 lwip-tcpip/lwip 仓库称为 upstream（上游仓库）；master 是当前系列持续跟踪的 upstream 分支。HEAD 表示当前 checkout 指向的 Git commit；**Debug build tree（调试构建树）**是 CMake 为 Debug 配置生成的构建目录；**compile database（编译数据库）**则记录每个 C 源文件真实使用的 compiler、include path、宏和编译选项。后文会在第一次操作这些对象时继续展开。...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="gitalk-container"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/avatar.png" onerror="this.onerror=null;this.src='/images/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Liya Huang</div><div class="author-info-description">WORK-LIFE BALANCE</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">675</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">67</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">72</div></a></div><a id="card-info-btn" target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/wdfk-prog"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/wdfk-prog" rel="external nofollow noreferrer" target="_blank" title="GitHub"><i class="fab fa-github" style="color: #181717;"></i></a><a class="social-icon" href="https://wdfk-prog.blog.csdn.net/" rel="external nofollow noreferrer" target="_blank" title="CSDN"><i class="fas fa-blog" style="color: #FC5531;"></i></a><a class="social-icon" href="mailto:1425075683@qq.com" rel="external nofollow noreferrer" target="_blank" title="E-mail"><i class="fas fa-envelope" style="color: #4A4A4A;"></i></a><a class="social-icon" href="/images/wechat-qrcode.jpg" target="_blank" title="微信公众号"><i class="fab fa-weixin" style="color: #07C160;"></i></a><a class="social-icon" href="/atom.xml" target="_blank" title="RSS"><i class="fas fa-rss" style="color: #EE802F;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎光临！有任何问题或想法，欢迎在文章下留言交流，或者通过 <a href='/about/'>关于页面</a> 联系我。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content is-expand"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E6%95%99%E7%A8%8B-28%EF%BC%9A%E4%BB%8E-pppos-create-%E5%88%B0-ppp-input-%E2%80%94%E2%80%94PPP-Core%E3%80%81PPPoS-%E4%B8%B2%E5%8F%A3%E5%AD%97%E8%8A%82%E6%B5%81%E4%B8%8E-HDLC-like-Framing"><span class="toc-number">1.</span> <span class="toc-text">教程 28：从 pppos_create() 到 ppp_input()——PPP Core、PPPoS 串口字节流与 HDLC-like Framing</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%98%85%E8%AF%BB%E6%BA%90%E7%A0%81%E5%89%8D%EF%BC%9A%E5%BB%BA%E8%AE%AE%E5%85%88%E7%9C%8B%E8%BF%99%E4%B8%89%E4%BB%BD%E8%B5%84%E6%96%99"><span class="toc-number">1.1.</span> <span class="toc-text">阅读源码前：建议先看这三份资料</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%88%E5%BB%BA%E7%AB%8B-PPP-PPPoS-%E7%9A%84%E5%88%9D%E5%AD%A6%E8%80%85%E6%A8%A1%E5%9E%8B%EF%BC%9A%E4%B8%B2%E5%8F%A3%E5%8F%AA%E6%98%AF%E5%AD%97%E8%8A%82%E9%80%9A%E9%81%93%EF%BC%8CPPP-%E6%89%8D%E5%AE%9A%E4%B9%89%E9%93%BE%E8%B7%AF%E8%AF%AD%E4%B9%89"><span class="toc-number">1.2.</span> <span class="toc-text">先建立 PPP&#x2F;PPPoS 的初学者模型：串口只是字节通道，PPP 才定义链路语义</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Stage-28-%E6%80%BB%E6%B5%81%E7%A8%8B%EF%BC%9Aserial-byte-stream-%E6%80%8E%E6%A0%B7%E5%8F%98%E6%88%90-PPP-packet%EF%BC%8C%E5%86%8D%E8%BF%9B%E5%85%A5%E5%8D%8F%E8%AE%AE%E5%88%86%E5%8F%91"><span class="toc-number">1.3.</span> <span class="toc-text">Stage 28 总流程：serial byte stream 怎样变成 PPP packet，再进入协议分发</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%8F%E8%AE%AE%E5%8A%A8%E4%BD%9C%E4%B8%8E-lwIP-%E6%BA%90%E7%A0%81%E7%9A%84%E7%AC%AC%E4%B8%80%E5%BC%A0%E6%98%A0%E5%B0%84%E8%A1%A8"><span class="toc-number">1.4.</span> <span class="toc-text">协议动作与 lwIP 源码的第一张映射表</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E5%BD%93%E5%89%8D-example-%E7%BC%96%E8%AF%91-PPP-PPPoS%EF%BC%8C%E4%BD%86%E8%BF%90%E8%A1%8C%E6%97%B6-USE-PPP-0"><span class="toc-number">1.5.</span> <span class="toc-text">1. 当前 example 编译 PPP&#x2F;PPPoS，但运行时 USE_PPP&#x3D;0</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E7%9C%9F%E5%AE%9E-example-%E5%85%A5%E5%8F%A3%E6%98%AF-pppos-example-init"><span class="toc-number">1.6.</span> <span class="toc-text">2. 真实 example 入口是 pppos_example_init()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-pppos-create-%E5%8F%AA%E5%88%9B%E5%BB%BA-link-adapter%EF%BC%8C%E4%B8%8D%E5%BC%80%E5%A7%8B-LCP"><span class="toc-number">1.7.</span> <span class="toc-text">3. pppos_create() 只创建 link adapter，不开始 LCP</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-ppp-new-%E5%88%9B%E5%BB%BA%E7%9C%9F%E6%AD%A3%E7%9A%84-PPP-netif"><span class="toc-number">1.8.</span> <span class="toc-text">4. ppp_new() 创建真正的 PPP netif</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-ppp-netif-init-cb-%E6%8A%8A-IP-output-%E6%8E%A5%E5%88%B0-PPP-Core"><span class="toc-number">1.9.</span> <span class="toc-text">5. ppp_netif_init_cb() 把 IP output 接到 PPP Core</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-ppp-connect-%EF%BC%9A%E4%BB%8E-DEAD-phase-%E5%90%AF%E5%8A%A8%E8%BF%9E%E6%8E%A5"><span class="toc-number">1.10.</span> <span class="toc-text">6. ppp_connect()：从 DEAD phase 启动连接</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-pppos-connect-%E5%88%9D%E5%A7%8B%E5%8C%96-byte-stream-parser%EF%BC%8C%E5%86%8D%E8%B0%83%E7%94%A8-ppp-start"><span class="toc-number">1.11.</span> <span class="toc-text">7. pppos_connect() 初始化 byte-stream parser，再调用 ppp_start()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-RX-%E7%9C%9F%E5%AE%9E%E5%85%A5%E5%8F%A3%EF%BC%9Apppos-rx-thread-%E4%B8%8D%E9%80%90%E5%AD%97%E8%8A%82%E6%8A%95%E9%80%92-mailbox"><span class="toc-number">1.12.</span> <span class="toc-text">8. RX 真实入口：pppos_rx_thread() 不逐字节投递 mailbox</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-pppos-input-tcpip-%EF%BC%9A%E4%BB%8E-serial-thread-%E5%88%87%E5%9B%9E-tcpip-thread"><span class="toc-number">1.13.</span> <span class="toc-text">9. pppos_input_tcpip()：从 serial thread 切回 tcpip_thread</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-RFC-1662-%E7%9A%84-frame-%E5%85%83%E7%B4%A0%E5%9C%A8-pppos-c-%E4%B8%AD%E8%90%BD%E5%88%B0%E5%93%AA%E9%87%8C"><span class="toc-number">1.14.</span> <span class="toc-text">10. RFC 1662 的 frame 元素在 pppos.c 中落到哪里</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-pppos-input-%E6%98%AF-byte-stream-%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">1.15.</span> <span class="toc-text">11. pppos_input() 是 byte-stream 状态机</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-pppos-input-%E6%80%8E%E6%A0%B7%E8%90%BD%E5%AE%9E-RFC-1662-%E7%9A%84-FCS-%E6%A0%A1%E9%AA%8C"><span class="toc-number">1.16.</span> <span class="toc-text">12. pppos_input() 怎样落实 RFC 1662 的 FCS 校验</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#13-LCP-%E5%8D%8F%E5%95%86%E7%BB%93%E6%9E%9C%E6%80%8E%E6%A0%B7%E6%94%B9%E5%8F%98-pppos-netif-output-%E7%9A%84%E5%AD%97%E8%8A%82%E5%B8%83%E5%B1%80"><span class="toc-number">1.17.</span> <span class="toc-text">13. LCP 协商结果怎样改变 pppos_netif_output() 的字节布局</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#14-RFC-1662-%E7%9A%84-ACCM-%E6%80%8E%E6%A0%B7%E8%90%BD%E5%88%B0-out-accm"><span class="toc-number">1.18.</span> <span class="toc-text">14. RFC 1662 的 ACCM 怎样落到 out_accm[]</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#15-%E5%AE%8C%E6%95%B4-RX-frame-%E6%9C%80%E7%BB%88%E6%80%8E%E6%A0%B7%E8%BF%9B%E5%85%A5-ppp-input"><span class="toc-number">1.19.</span> <span class="toc-text">15. 完整 RX frame 最终怎样进入 ppp_input()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#16-control-protocol-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%98%E8%A6%81-pbuf-coalesce"><span class="toc-number">1.20.</span> <span class="toc-text">16. control protocol 为什么还要 pbuf_coalesce()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#17-TX%EF%BC%9AIPv4-%E5%85%88%E5%8F%98%E6%88%90-PPP-IP"><span class="toc-number">1.21.</span> <span class="toc-text">17. TX：IPv4 先变成 PPP_IP</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#18-pppos-netif-output-%E6%9E%84%E9%80%A0%E5%AE%8C%E6%95%B4-serial-frame"><span class="toc-number">1.22.</span> <span class="toc-text">18. pppos_netif_output() 构造完整 serial frame</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#19-pppos-output-last-%E6%9C%80%E7%BB%88%E8%B0%83%E7%94%A8%E5%BA%94%E7%94%A8%E6%8F%90%E4%BE%9B%E7%9A%84-serial-callback"><span class="toc-number">1.23.</span> <span class="toc-text">19. pppos_output_last() 最终调用应用提供的 serial callback</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#20-pppos-write-%E4%B8%8E-pppos-netif-output-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF%E4%B8%A4%E4%B8%AA-callback"><span class="toc-number">1.24.</span> <span class="toc-text">20. pppos_write() 与 pppos_netif_output() 为什么是两个 callback</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#21-PPP-INPROC-IRQ-SAFE-%E4%BC%9A%E6%94%B9%E5%8F%98-RX-execution-model"><span class="toc-number">1.25.</span> <span class="toc-text">21. PPP_INPROC_IRQ_SAFE 会改变 RX execution model</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#22-PPP-phase-%E5%92%8C-PPP-FSM-%E6%98%AF%E4%B8%A4%E5%B1%82%E7%8A%B6%E6%80%81%EF%BC%8C%E4%B8%8D%E8%A6%81%E6%B7%B7%E5%9C%A8%E4%B8%80%E8%B5%B7"><span class="toc-number">1.26.</span> <span class="toc-text">22. PPP phase 和 PPP FSM 是两层状态，不要混在一起</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#23-Stage-28-%E5%AE%8C%E6%95%B4%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-number">1.27.</span> <span class="toc-text">23. Stage 28 完整调用链</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#24-%E5%BD%93%E5%89%8D%E5%AE%9E%E7%8E%B0%E8%BE%B9%E7%95%8C"><span class="toc-number">1.28.</span> <span class="toc-text">24. 当前实现边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B5%84%E6%96%99%E6%9D%A5%E6%BA%90"><span class="toc-number">1.29.</span> <span class="toc-text">资料来源</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#S1-lwIP-PPP-Core-%E4%B8%8E-PPPoS-%E6%BA%90%E7%A0%81"><span class="toc-number">1.29.1.</span> <span class="toc-text">[S1] lwIP PPP Core 与 PPPoS 源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S2-lwIP-PPPoS-example-%E4%B8%8E-example-app-%E9%85%8D%E7%BD%AE"><span class="toc-number">1.29.2.</span> <span class="toc-text">[S2] lwIP PPPoS example 与 example_app 配置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S3-RFC-1661%EF%BC%9AThe-Point-to-Point-Protocol-PPP"><span class="toc-number">1.29.3.</span> <span class="toc-text">[S3] RFC 1661：The Point-to-Point Protocol (PPP)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#S4-RFC-1662%EF%BC%9APPP-in-HDLC-like-Framing"><span class="toc-number">1.29.4.</span> <span class="toc-text">[S4] RFC 1662：PPP in HDLC-like Framing</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/posts/4072c3c5/" title="11-sys-arch"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="11-sys-arch"/></a><div class="content"><a class="title" href="/posts/4072c3c5/" title="11-sys-arch">11-sys-arch</a><time datetime="2026-10-06T07:49:26.195Z" title="更新于 2026-10-06 15:49:26">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/1c6cd58/" title="10-tcp-out-of-order"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/03.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="10-tcp-out-of-order"/></a><div class="content"><a class="title" href="/posts/1c6cd58/" title="10-tcp-out-of-order">10-tcp-out-of-order</a><time datetime="2026-10-06T07:44:29.632Z" title="更新于 2026-10-06 15:44:29">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/873586f3/" title="readme"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/09.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="readme"/></a><div class="content"><a class="title" href="/posts/873586f3/" title="readme">readme</a><time datetime="2026-10-06T07:32:02.710Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/06.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="WIFI-Direct学习笔记系列"/></a><div class="content"><a class="title" href="/posts/bee0c14a/" title="WIFI-Direct学习笔记系列">WIFI-Direct学习笔记系列</a><time datetime="2026-10-06T07:32:02.709Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/covers/01.jpg" onerror="this.onerror=null;this.src='/images/404.jpg'" alt="15-group-data-plane-tx-rx"/></a><div class="content"><a class="title" href="/posts/e71173fd/" title="15-group-data-plane-tx-rx">15-group-data-plane-tx-rx</a><time datetime="2026-10-06T07:32:02.709Z" title="更新于 2026-10-06 15:32:02">2026-10-06</time></div></div></div></div></div></div></main><footer id="footer" style="background-image: url(/images/covers/08.jpg);"><div class="footer-flex"><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">文档</div><div class="footer-flex-content"><a href="/categories/linux/" target="_blank" title="🚀 linux">🚀 linux</a><a href="/categories/rt-thread/" target="_blank" title="📑 rt-thread">📑 rt-thread</a><a href="/categories/uboot/" target="_blank" title="📌 uboot">📌 uboot</a><a href="/categories/LoraWan/" target="_blank" title="⚔️ LoraWan">⚔️ LoraWan</a><a href="/categories/hpatch/" target="_blank" title="❓ hpatch">❓ hpatch</a><a href="/categories/git/" target="_blank" title="⚡️ git">⚡️ git</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">其他</div><div class="footer-flex-content"><a href="/gallery/" target="_blank" title="图库">图库</a><a href="/messageboard/" target="_blank" title="留言板">留言板</a><a href="/shuoshuo/" target="_blank" title="说说">说说</a><a href="/link/" target="_blank" title="示例">示例</a><a href="/link/" target="_blank" title="友链">友链</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">框架</div><div class="footer-flex-content"><a href="https://hexo.io/zh-cn/" rel="external nofollow noreferrer" target="_blank" title="Hexo">Hexo</a><a href="https://butterfly.js.org/" rel="external nofollow noreferrer" target="_blank" title="Butterfly">Butterfly</a></div></div></div><div class="footer-flex-items"><div class="footer-flex-item"><div class="footer-flex-title">贊助</div><div class="footer-flex-content"><div><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/images/alipay.png" alt='wdfk_prog' width='100px' height='100px'></div></div></div></div></div><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By Liya Huang</span><span class="framework-info"><span class="footer-separator">|</span><span>框架 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://hexo.io">Hexo 8.0.0</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener external nofollow noreferrer" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.1</a></span></div><div class="footer_custom_text">你好，欢迎来到我的 <a href="/about/">数字花园</a>!</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="chat-btn" type="button" title="聊天" style="display:none"><i class="fas fa-message"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/@fancyapps/ui/dist/fancybox/fancybox.umd.min.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload/dist/lazyload.iife.min.js"></script><script src="https://cdn.jsdelivr.net/npm/node-snackbar/dist/snackbar.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const applyThemeDefaultsConfig = theme => {
+    if (theme === 'dark-mode') {
+      Chart.defaults.color = "rgba(255, 255, 255, 0.8)"
+      Chart.defaults.borderColor = "rgba(255, 255, 255, 0.2)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    } else {
+      Chart.defaults.color = "rgba(0, 0, 0, 0.8)"
+      Chart.defaults.borderColor = "rgba(0, 0, 0, 0.1)"
+      Chart.defaults.scale.ticks.backdropColor = "transparent"
+    }
+  }
+
+  // Recursively traverse the config object and automatically apply theme-specific color schemes
+  const applyThemeConfig = (obj, theme) => {
+    if (typeof obj !== 'object' || obj === null) return
+
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      // If the property is an object and has theme-specific options, apply them
+      if (typeof value === 'object' && value !== null) {
+        if (value[theme]) {
+          obj[key] = value[theme] // Apply the value for the current theme
+        } else {
+          // Recursively process child objects
+          applyThemeConfig(value, theme)
+        }
+      }
+    })
+  }
+
+  const runChartJS = ele => {
+    window.loadChartJS = true
+
+    Array.from(ele).forEach((item, index) => {
+      const chartSrc = item.firstElementChild
+      const chartID = item.getAttribute('data-chartjs-id') || ('chartjs-' + index) // Use custom ID or default ID
+      const width = item.getAttribute('data-width')
+      const existingCanvas = document.getElementById(chartID)
+
+      // If a canvas already exists, remove it to avoid rendering duplicates
+      if (existingCanvas) {
+          existingCanvas.parentNode.remove()
+      }
+
+      const chartDefinition = chartSrc.textContent
+      const canvas = document.createElement('canvas')
+      canvas.id = chartID
+
+      const div = document.createElement('div')
+      div.className = 'chartjs-wrap'
+
+      if (width) {
+        div.style.width = width
+      }
+
+      div.appendChild(canvas)
+      chartSrc.insertAdjacentElement('afterend', div)
+
+      const ctx = document.getElementById(chartID).getContext('2d')
+
+      const config = JSON.parse(chartDefinition)
+
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark-mode' : 'light-mode'
+
+      // Set default styles (initial setup)
+      applyThemeDefaultsConfig(theme)
+
+      // Automatically traverse the config and apply dual-mode color schemes
+      applyThemeConfig(config, theme)
+
+      new Chart(ctx, config)
+    })
+  }
+
+  const loadChartJS = () => {
+    const chartJSEle = document.querySelectorAll('#article-container .chartjs-container')
+    if (chartJSEle.length === 0) return
+
+    window.loadChartJS ? runChartJS(chartJSEle) : btf.getScript('https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js').then(() => runChartJS(chartJSEle))
+  }
+
+  // Listen for theme change events
+  btf.addGlobalFn('themeChange', loadChartJS, 'chartjs')
+  btf.addGlobalFn('encrypt', loadChartJS, 'chartjs')
+
+  window.pjax ? loadChartJS() : document.addEventListener('DOMContentLoaded', loadChartJS)
+})()</script><script>(() => {
+  const abcjsInit = () => {
+    const abcjsFn = () => {
+      setTimeout(() => {
+        const sheets = document.querySelectorAll(".abc-music-sheet")
+        for (let i = 0; i < sheets.length; i++) {
+          const ele = sheets[i]
+          if (ele.children.length > 0) continue
+
+          // Parse parameters from data-params attribute
+          let params = {}
+          const dp = ele.getAttribute("data-params")
+          if (dp) {
+            try {
+              params = JSON.parse(dp)
+            } catch (e) {
+              console.error("Failed to parse data-params:", e)
+            }
+          }
+
+          // Merge parsed parameters with the responsive option
+          // Ensures params content appears before responsive
+          const options = { ...params, responsive: "resize" }
+
+          // Render the music score using ABCJS.renderAbc
+          ABCJS.renderAbc(ele, ele.innerHTML, options)
+        }
+      }, 100)
+    }
+
+    if (typeof ABCJS === "object") {
+      abcjsFn()
+    } else {
+      btf.getScript("https://cdn.jsdelivr.net/npm/abcjs/dist/abcjs-basic-min.min.js").then(abcjsFn)
+    }
+  }
+
+  if (window.pjax) {
+    abcjsInit()
+  } else {
+    window.addEventListener("load", abcjsInit)
+  }
+
+  btf.addGlobalFn("encrypt", abcjsInit, "abcjs")
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const commentCount = n => {
+    const isCommentCount = document.querySelector('#post-meta .gitalk-comment-count')
+    if (isCommentCount) {
+      isCommentCount.textContent= n
+    }
+  }
+
+  const initGitalk = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyGitalk = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const gitalk = new Gitalk({
+      clientID: 'Ov23livBmwx65h3XIdfT',
+      clientSecret: '9f23bdaa2ea11322f9f405d77bcdc27166077a7d',
+      repo: 'wdfk-prog.github.io',
+      owner: 'wdfk-prog',
+      admin: ['wdfk-prog'],
+      updateCountCallback: commentCount,
+      ...option,
+      id: isShuoshuo ? path : (option && option.id) || '62b58a96b630527992bc8a6d29bd6b34'
+    })
+
+    gitalk.render('gitalk-container')
+  }
+
+  const loadGitalk = async(el, path) => {
+    if (typeof Gitalk === 'function') initGitalk(el, path)
+    else {
+      await btf.getCSS('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.css')
+      await btf.getScript('https://cdn.jsdelivr.net/npm/gitalk/dist/gitalk.min.js')
+      initGitalk(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Gitalk' === 'Gitalk'
+      ? window.shuoshuoComment = { loadComment: loadGitalk }
+      : window.loadOtherComment = loadGitalk
+    return
+  }
+
+  if ('Gitalk' === 'Gitalk' || !false) {
+    if (false) btf.loadComment(document.getElementById('gitalk-container'), loadGitalk)
+    else loadGitalk()
+  } else {
+    window.loadOtherComment = loadGitalk
+  }
+})()</script></div><script>window.newestComments = {
+  changeContent: content => {
+    if (content === '') return content
+
+    content = content.replace(/<img.*?src="(.*?)"?[^\>]+>/ig, '[图片]') // replace image link
+    content = content.replace(/<a[^>]+?href=["']?([^"']+)["']?[^>]*>([^<]+)<\/a>/gi, '[链接]') // replace url
+    content = content.replace(/<pre><code>.*?<\/pre>/gi, '[代码]') // replace code
+    content = content.replace(/<code>.*?<\/code>/gi, '[代码]') // replace code
+    content = content.replace(/<[^>]+>/g, "") // remove html tag
+
+    if (content.length > 150) {
+      content = content.substring(0, 150) + '...'
+    }
+    return content
+  },
+
+  generateHtml: (array, ele) => {
+    let result = ''
+
+    if (array.length) {
+      for (let i = 0; i < array.length; i++) {
+        result += '<div class="aside-list-item">'
+
+        if (true && array[i].avatar) {
+          const imgAttr = 'data-lazy-src'
+          const lazyloadNative = ''
+          result += `<a href="${array[i].url}" class="thumbnail"><img ${imgAttr}="${array[i].avatar}" alt="${array[i].nick}" ${lazyloadNative}></a>`
+        }
+
+        result += `<div class="content">
+        <a class="comment" href="${array[i].url}" title="${array[i].content}">${array[i].content}</a>
+        <div class="name"><span>${array[i].nick} / </span><time datetime="${array[i].date}">${btf.diffDate(array[i].date, true)}</time></div>
+        </div></div>`
+      }
+    } else {
+      result += '暂无评论'
+    }
+
+    ele.innerHTML = result
+    window.lazyLoadInstance && window.lazyLoadInstance.update()
+    window.pjax && window.pjax.refresh(ele)
+  },
+
+  newestCommentInit: (name, getComment) => {
+    const $dom = document.querySelector('#card-newest-comments .aside-list')
+    if ($dom) {
+      const data = btf.saveToLocal.get(name)
+      if (data) {
+        newestComments.generateHtml(JSON.parse(data), $dom)
+      } else {
+        getComment($dom)
+      }
+    }
+  },
+
+  run: (name, getComment) => {
+    newestComments.newestCommentInit(name, getComment)
+    btf.addGlobalFn('pjaxComplete', () => newestComments.newestCommentInit(name, getComment), name)
+  }
+}</script><script>window.addEventListener('load', () => {
+  const keyName = 'github-newest-comments'
+  const { changeContent, generateHtml, run } = window.newestComments
+
+  const findTrueUrl = (array, ele) => {
+    Promise.all(array.map(item =>
+      fetch(item.url).then(resp => resp.json()).then(data => {
+        let urlArray = data.body ? data.body.match(/(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?/ig) : []
+        if (!Array.isArray(urlArray) || urlArray.length === 0) {
+          urlArray = [`${data.html_url}`]
+        }
+        if (data.user.login === 'utterances-bot') {
+          return urlArray.pop()
+        } else {
+          return urlArray.shift()
+        }
+      })
+    )).then(res => {
+        array = array.map((i,index)=> {
+          return {
+            ...i,
+            url: res[index]
+          }
+        })
+
+        btf.saveToLocal.set(keyName, JSON.stringify(array), 10/(60*24))
+        generateHtml(array, ele)
+    });
+  }
+
+  const getComment = ele => {
+    fetch('https://api.github.com/repos/wdfk-prog/wdfk-prog.github.io/issues/comments?sort=updated&direction=desc&per_page=6&page=1',{
+      "headers": {
+        Accept: 'application/vnd.github.v3.html+json'
+      }
+    })
+      .then(response => response.json())
+      .then(data => {
+        const githubArray = data.map(item => {
+          return {
+            'avatar': item.user.avatar_url,
+            'content': changeContent(item.body_html || item.body),
+            'nick': item.user.login,
+            'url': item.issue_url,
+            'date': item.updated_at
+          }
+        })
+        findTrueUrl(githubArray, ele)
+      }).catch(e => {
+        console.error(e)
+        ele.textContent= "无法获取评论，请确认相关配置是否正确"
+      })
+  }
+  run(keyName, getComment)
+})</script><div class="aplayer no-destroy" data-id="60198" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="false" data-volume="0.5"></div><script>
+  var titleTime, OriginTitile = document.title;
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      titleTime = setTimeout(function() {
+        document.title = "w(ﾟДﾟ)w 不要走！再看看嘛！";
+      }, 300);
+    } else {
+      document.title = "♪(^∇^*)欢迎回来！" + OriginTitile;
+      titleTime = setTimeout(function() {
+        document.title = OriginTitile;
+      }, 2000);
+    }
+  });
+</script>
+<script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = true;
+POWERMODE.mobile = false;
+document.body.addEventListener('input', POWERMODE);
+</script><script id="click-heart" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/dist/click-heart.min.js" async="async" mobile="false"></script><script>(() => {
+  window.ChatraID = '5cPWcnA8HKGzg5hoc'
+  window.Chatra = window.Chatra || function() {
+    (window.Chatra.q = window.Chatra.q || []).push(arguments)
+  }
+
+  btf.getScript('https://call.chatra.io/chatra.js').then(() => {
+    const isChatBtn = true
+    const isChatHideShow = true
+
+    if (isChatBtn) {
+      const close = () => {
+        Chatra('minimizeWidget')
+        Chatra('hide')
+      }
+
+      const open = () => {
+        Chatra('openChat', true)
+        Chatra('show')
+      }
+
+      window.ChatraSetup = { startHidden: true }
+    
+      window.chatBtnFn = () => document.getElementById('chatra').classList.contains('chatra--expanded') ? close() : open()
+
+      document.getElementById('chat-btn').style.display = 'block'
+    } else if (isChatHideShow) {
+      window.chatBtn = {
+        hide: () => Chatra('hide'),
+        show: () => Chatra('show')
+      }
+    }
+  })
+})()</script><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: true,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => {
+      try {
+        fn()
+      } catch (err) {
+        console.debug('Pjax callback failed:', err)
+      }
+    })
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><i class="fas fa-spinner fa-pulse" id="loading-status" hidden="hidden"></i><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="local-search-input"><input placeholder="搜索文章" type="text"/></div><hr/><div id="local-search-results"></div><div class="ais-Pagination" id="local-search-pagination" style="display:none;"><ul class="ais-Pagination-list"></ul></div><div id="local-search-stats"></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MF3J339H" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript></div><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const heatmapChartDom = document.getElementById('heatmapChart');
+                if(heatmapChartDom){
+                    const heatmapChart = echarts.init(heatmapChartDom, 'dark');
+                    const cellSize = [18, 18];
+                    
+                    const groupByYear = (data) => {
+                        const result = {};
+                        data.forEach(([date, value]) => {
+                            const [year] = date.split('-').map(Number);
+                            if (!result[year]) {
+                                result[year] = [];
+                            }
+                            result[year].push([date, value]);
+                        });
+                        return result;
+                    };
+                    
+                    const groupedData = groupByYear([["2025-10-03",397],["2025-10-04",4],["2025-10-06",8],["2025-10-07",8],["2025-10-10",3],["2025-10-14",1],["2025-10-15",4],["2025-10-16",1],["2025-10-18",1],["2025-10-21",6],["2025-10-22",1],["2025-10-23",1],["2025-10-24",1],["2025-10-25",1],["2025-11-01",10],["2025-11-02",2],["2025-11-11",2],["2025-11-14",1],["2025-11-17",1],["2025-12-18",2],["2025-12-29",2],["2025-12-30",1],["2025-12-31",1],["2026-01-07",1],["2026-01-08",1],["2026-01-12",3],["2026-01-16",2],["2026-01-18",2],["2026-01-24",1],["2026-02-01",2],["2026-02-10",2],["2026-02-11",1],["2026-02-12",1],["2026-02-13",3],["2026-03-02",1],["2026-03-11",1],["2026-03-12",1],["2026-03-13",1],["2026-03-17",1],["2026-03-19",2],["2026-03-21",1],["2026-03-30",1],["2026-04-01",1],["2026-04-05",1],["2026-04-07",1],["2026-04-25",2],["2026-05-07",1],["2026-05-20",1],["2026-06-17",2],["2026-06-23",1],["2026-06-24",1],["2026-06-25",4],["2026-06-26",1],["2026-06-28",8],["2026-06-29",2],["2026-06-30",2],["2026-07-04",1],["2026-07-06",2],["2026-07-07",1],["2026-07-10",2],["2026-07-13",3],["2026-07-14",1],["2026-07-15",3],["2026-07-16",2],["2026-07-21",3],["2026-07-22",1],["2026-07-24",2],["2026-07-25",2],["2026-07-27",2],["2026-07-28",4],["2026-07-29",5],["2026-07-30",2],["2026-07-31",12],["2026-08-01",2],["2026-08-03",4],["2026-08-28",2],["2026-09-01",1],["2026-09-03",4],["2026-09-04",5],["2026-09-11",2],["2026-09-14",1],["2026-09-15",3],["2026-09-16",9],["2026-09-17",2],["2026-09-18",4],["2026-09-19",6],["2026-09-29",18],["2026-10-03",49]]);
+                    const years = Object.keys(groupedData).reverse();
+                    
+                    var initYear = parseInt(heatmapChartDom.getAttribute('year')) || new Date().getFullYear();
+                    const minYear = years[years.length - 1];
+                    const maxYear = years[0];
+                    if (initYear < minYear || initYear > maxYear) {
+                        initYear = maxYear;
+                    }
+                    console.log('[hexo-graph]generateHeatmapChart|initYear:', initYear, 'minYear:', minYear, 'maxYear:', maxYear);
+                    
+                    heatmapChart.setOption({
+                        grid: {},
+                        tooltip: { 
+                            position: 'top', 
+                            formatter: params => `${params.value[0]}: ${params.value[1]} Articles` 
+                        },
+                        calendar: { 
+                            top: '10%',
+                            left: 'left', 
+                            right: '8%',
+                            range: initYear,
+                            cellSize: cellSize, 
+                            splitLine: { lineStyle: { color: '#E0E0E0', width: 1 } }, 
+                            itemStyle: { borderWidth: 1, borderColor: '#E0E0E0' }, 
+                            dayLabel: { show: false },
+                            monthLabel: { show: true },
+                            yearLabel: { show: false },
+                        },
+                        visualMap: { 
+                            show: true,
+                            right: '8%',
+                            bottom: '5%',
+                            type: 'piecewise',
+                            orient: 'horizontal',
+                            text: ['More', 'Less'],
+                            min: 0,
+                            max: Math.max(...groupedData[initYear].map(item => item[1])),
+                            inRange: { color: ["#ACE7AE","#69C16D","#549F57"] }
+                        },
+                        legend: {
+                            type: 'scroll',
+                            icon: 'none',
+                            data: years,
+                            orient: 'vertical',
+                            top: '5%',
+                            right: 'right',
+                            itemWidth: 20,
+                            itemHeight: 20,
+                            itemGap: 10,
+                            pageIconSize: 10,
+                            pageTextStyle: { fontSize: 14 },
+                            selectedMode: 'single',
+                        },
+                        series: years.map(year => ({
+                            type: 'heatmap',
+                            coordinateSystem: 'calendar',
+                            data: groupedData[year],
+                            name: year,
+                            emphasis: {
+                                disabled: true,
+                            },
+                            silent: year !== initYear,
+                        })),
+                    });
+                    
+                    // init selected year
+                    heatmapChart.dispatchAction({
+                        type: 'legendSelect',
+                        name: initYear,
+                    });
+                    
+                    heatmapChart.on('legendselectchanged', function(params) {
+                        console.log('[hexo-graph]generateHeatmapChart|legendselectchanged:', params);
+                        const selectedYear = Object.keys(params.selected).find(key => params.selected[key]);
+                        if (selectedYear && groupedData[selectedYear]) {
+                            heatmapChart.setOption({
+                                calendar: {
+                                    range: selectedYear,
+                                },
+                                visualMap: {
+                                    max: Math.max(...groupedData[selectedYear].map(item => item[1])),
+                                },
+                                series: years.map(year => ({
+                                    type: 'heatmap',
+                                    coordinateSystem: 'calendar',
+                                    data: groupedData[year],
+                                    name: year,
+                                    emphasis: {
+                                        disabled: true,
+                                    },
+                                    silent: year !== selectedYear,
+                                })),
+                            });
+                        }
+                    });
+                    
+                    heatmapChart.on('click', function (params) {
+                        if (params.componentType === 'series') {
+                            const [year, month] = params.value[0].split('-');
+                            window.location.href = '/archives/' + year + '/' + month;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const monthlyChartDom = document.getElementById('monthlyChart');
+                if(monthlyChartDom){
+                    const monthlyChart = echarts.init(monthlyChartDom, 'dark');
+                    monthlyChart.setOption({
+                        xAxis: { 
+                            type: 'category', 
+                            data: ["2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"], 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        series: [{
+                            name: 'Articles',
+                            type: 'line',
+                            data: [437,16,6,10,9,9,5,2,21,48,8,55,49],
+                            smooth: true,
+                            lineStyle: { color: '#5470C6', width: 2 },
+                            itemStyle: { color: '#5470C6' },
+                            areaStyle: { color: 'rgba(84, 112, 198, 0.4)' },
+                            symbolSize: 10,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            }
+                        }]
+                    });
+
+                    monthlyChart.on('click', function (params) {
+                        const [year, month] = params.name.split('-');
+                        window.location.href = '/archives/' + year + '/' + month;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const tagsChartDom = document.getElementById('tagsChart');
+                if(tagsChartDom){
+                    const tagsChart = echarts.init(tagsChartDom, 'dark');
+                    tagsChart.setOption({
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                        series: [{
+                            type: 'pie',
+                            radius: '60%',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}],
+                            label: {
+                                position: 'outside',
+                                formatter: '{b} {c} ({d}%)',
+                                fontSize: 14,
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            color: ["#5470C6","#91CC75","#FAC858","#EE6666","#73C0DE","#3BA272","#FC8452","#9A60B4"],
+                            labelLine: { show: true }
+                        }],
+                        legend: {
+                            bottom: '0',
+                            left: 'center',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":64},{"name":"drivers","value":59},{"name":"LWIP","value":49},{"name":"rt-thread","value":47},{"name":"u-boot分类","value":44},{"name":"canopen","value":43}].map(tag => tag.name),
+                            textStyle: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        }
+                    });
+
+                    tagsChart.on('click', function (params) {
+                        window.location.href = '/tags/' + params.name;
+                    });
+                }
+            })
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesChartDom = document.getElementById('categoriesChart');
+                if(categoriesChartDom){
+                    const categoriesChart = echarts.init(categoriesChartDom, 'dark');
+                    categoriesChart.setOption({
+                        xAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed', color: '#ccc' } } },
+                        yAxis: { 
+                            type: 'category', 
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.name).reverse(), 
+                            axisLabel: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Microsoft YaHei, SimSun, serif' }
+                        },
+                        series: [{
+                            name: 'Category Count',
+                            type: 'bar',
+                            data: [{"name":"linux","value":265},{"name":"uboot","value":69},{"name":"kernel","value":63},{"name":"drivers","value":60},{"name":"LWIP","value":49}].map(category => category.value).reverse(),
+                            label: {
+                                show: true,
+                                position: 'right',
+                                formatter: params => params.value,
+                                fontSize: 14,
+                                color: '#000',
+                                fontWeight: 'bold',
+                                fontFamily: 'Microsoft YaHei, SimSun, serif'
+                            },
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: '#91CC75' },
+                                    { offset: 1, color: '#73C0DE' }
+                                ])
+                            }
+                        }]
+                    });
+
+                    categoriesChart.on('click', function (params) {
+                        window.location.href = '/categories/' + params.name;
+                    });
+                }
+            });
+        </script>
+    
+        
+        <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                const categoriesTreeChartDom = document.getElementById('categoriesTreeChart');
+                if(categoriesTreeChartDom){
+                    const treeChart = echarts.init(categoriesTreeChartDom, 'dark');
+                    treeChart.setOption({
+                        title: {
+                            text: '操作提示：单击展开分类，双击进入具体分类页面',
+                            textStyle: {
+                                fontSize: 12,
+                                color: '#999',
+                                fontWeight: 'normal'
+                            },
+                            bottom: 0,
+                            left: 'center'
+                        },
+                        tooltip: {
+                            trigger: 'item',
+                            triggerOn: 'mousemove'
+                        },
+                        series: [{
+                            type: 'tree',
+                            data: [{"name":"Categories","children":[{"name":"uboot","children":[{"name":"other","children":[],"count":12,"path":"uboot/other"},{"name":"子目录","children":[],"count":10,"path":"uboot/子目录"},{"name":"u-boot分类","children":[{"name":"arch","children":[{"name":"arm","children":[],"count":2,"path":"uboot/u-boot分类/arch/arm"}],"count":3,"path":"uboot/u-boot分类/arch"},{"name":"api","children":[],"count":1,"path":"uboot/u-boot分类/api"},{"name":"boot","children":[],"count":4,"path":"uboot/u-boot分类/boot"},{"name":"cmd","children":[],"count":1,"path":"uboot/u-boot分类/cmd"},{"name":"dm","children":[],"count":15,"path":"uboot/u-boot分类/dm"},{"name":"common","children":[],"count":10,"path":"uboot/u-boot分类/common"},{"name":"include","children":[],"count":3,"path":"uboot/u-boot分类/include"},{"name":"fdt","children":[],"count":1,"path":"uboot/u-boot分类/fdt"},{"name":"env","children":[],"count":1,"path":"uboot/u-boot分类/env"},{"name":"lib","children":[],"count":4,"path":"uboot/u-boot分类/lib"},{"name":"test","children":[],"count":1,"path":"uboot/u-boot分类/test"}],"count":44,"path":"uboot/u-boot分类"}],"count":69,"path":"uboot"},{"name":"LWIP","children":[],"count":49,"path":"LWIP"},{"name":"WIFI-Direct","children":[],"count":17,"path":"WIFI-Direct"},{"name":"ROS","children":[],"count":19,"path":"ROS"},{"name":"rt-thread","children":[{"name":"其他资料","children":[{"name":"fatfs","children":[],"count":1,"path":"rt-thread/其他资料/fatfs"}],"count":1,"path":"rt-thread/其他资料"}],"count":47,"path":"rt-thread"},{"name":"VSCode","children":[],"count":5,"path":"VSCode"},{"name":"MCU","children":[],"count":44,"path":"MCU"},{"name":"虚拟机","children":[],"count":5,"path":"虚拟机"},{"name":"杂谈","children":[],"count":25,"path":"杂谈"},{"name":"docker","children":[],"count":10,"path":"docker"},{"name":"git","children":[],"count":14,"path":"git"},{"name":"canopen","children":[],"count":43,"path":"canopen"},{"name":"linux","children":[{"name":"user","children":[],"count":2,"path":"linux/user"},{"name":"drivers","children":[{"name":"hid","children":[],"count":1,"path":"linux/drivers/hid"},{"name":"mmc","children":[],"count":4,"path":"linux/drivers/mmc"},{"name":"I2C","children":[],"count":4,"path":"linux/drivers/I2C"},{"name":"input","children":[],"count":2,"path":"linux/drivers/input"},{"name":"base","children":[],"count":16,"path":"linux/drivers/base"},{"name":"tty","children":[],"count":5,"path":"linux/drivers/tty"},{"name":"dma","children":[],"count":6,"path":"linux/drivers/dma"},{"name":"gpio","children":[],"count":2,"path":"linux/drivers/gpio"},{"name":"bus","children":[],"count":2,"path":"linux/drivers/bus"},{"name":"clk","children":[],"count":2,"path":"linux/drivers/clk"}],"count":60,"path":"linux/drivers"},{"name":"lib","children":[],"count":25,"path":"linux/lib"},{"name":"kernel","children":[{"name":"irq","children":[],"count":6,"path":"linux/kernel/irq"},{"name":"time","children":[],"count":10,"path":"linux/kernel/time"},{"name":"rcu","children":[],"count":3,"path":"linux/kernel/rcu"},{"name":"lock","children":[],"count":7,"path":"linux/kernel/lock"},{"name":"sched","children":[],"count":7,"path":"linux/kernel/sched"}],"count":63,"path":"linux/kernel"},{"name":"block","children":[],"count":12,"path":"linux/block"},{"name":"fs","children":[],"count":37,"path":"linux/fs"},{"name":"mm","children":[],"count":19,"path":"linux/mm"},{"name":"other","children":[],"count":17,"path":"linux/other"},{"name":"scripts","children":[],"count":2,"path":"linux/scripts"},{"name":"security","children":[],"count":1,"path":"linux/security"},{"name":"include","children":[],"count":10,"path":"linux/include"},{"name":"arch","children":[{"name":"arm","children":[],"count":10,"path":"linux/arch/arm"}],"count":10,"path":"linux/arch"}],"count":265,"path":"linux"},{"name":"hpatch","children":[{"name":"SA-IS","children":[],"count":1,"path":"hpatch/SA-IS"},{"name":"libdivsufsort","children":[],"count":3,"path":"hpatch/libdivsufsort"}],"count":10,"path":"hpatch"},{"name":"嵌入式面试真题","children":[],"count":18,"path":"嵌入式面试真题"},{"name":"过滤算法","children":[],"count":3,"path":"过滤算法"},{"name":"低功耗管理","children":[],"count":2,"path":"低功耗管理"},{"name":"LoraWan","children":[{"name":"LoRaWAN标准","children":[{"name":"LoRaWAN-Specification_ZH_CN","children":[{"name":"LoRaWAN-Specification_ZH_CN-190102","children":[{"name":"chapter","children":[],"count":20,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102/chapter"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN/LoRaWAN-Specification_ZH_CN-190102"}],"count":22,"path":"LoraWan/LoRaWAN标准/LoRaWAN-Specification_ZH_CN"}],"count":22,"path":"LoraWan/LoRaWAN标准"}],"count":23,"path":"LoraWan"},{"name":"freertos","children":[],"count":1,"path":"freertos"},{"name":"other","children":[],"count":1,"path":"other"},{"name":"tmc5160","children":[],"count":1,"path":"tmc5160"}],"count":0,"path":""}],
+                            initialTreeDepth: -1,
+                            top: '5%',
+                            bottom: '10%',
+                            left: '0%',
+                            right: '0%',
+                            symbolSize: 15,
+                            layout: 'orthogonal',
+                            orient: 'TB',
+                            itemStyle: {
+                                color: '#91CC75',
+                                borderColor: '#73C0DE'
+                            },
+                            label: {
+                                position: 'bottom',
+                                verticalAlign: 'middle',
+                                align: 'center',
+                                fontSize: 14,
+                                distance: 28,
+                                formatter: function(params) {
+                                    return params.data.name + (params.data.count ? ' (' + params.data.count + ')' : '');
+                                }
+                            },
+                            leaves: {
+                                label: {
+                                    position: 'top',
+                                    verticalAlign: 'middle',
+                                    align: 'center'
+                                }
+                            },
+                            emphasis: {
+                                focus: 'descendant'
+                            },
+                            expandAndCollapse: true
+                        }]
+                    });
+
+                    treeChart.on('dblclick', function (params) {
+                        if (params.data && params.data.path) {
+                            window.location.href = '/categories/' + params.data.path;
+                        }
+                    });
+                }
+            });
+        </script>
+    
+    <script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/hijiki.model.json"},"display":{"position":"right","width":150,"height":300},"mobile":{"show":false},"react":{"opacity":0.7},"log":false});</script></body></html>
